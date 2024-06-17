@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Layer
 
+
 class LayerRepository:
     @staticmethod
     def find_all(db: Session) -> list[Layer]:
