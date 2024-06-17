@@ -1,0 +1,3 @@
+[default]
+GEE_SERVICE_ACCOUNT_FILE='.service-accounts/blissful-axiom-314717-845a6f8c6805.json'
+ASSETS_PATH='projects/mapbiomas-territories/assets/'
