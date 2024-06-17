@@ -1,5 +1,6 @@
 import typing
 
+from app.capabilities import CAPABILITIES
 import ee
 import orjson
 from fastapi import FastAPI, HTTPException
@@ -42,6 +43,13 @@ def initialize_gee():
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the GEE FastAPI"}
+
+
+@app.get('/api/capabilities')
+def get_capabilities():
+    return CAPABILITIES
+    
+
 
 
 app = created_routes(app)

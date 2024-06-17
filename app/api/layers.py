@@ -4,6 +4,7 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+from app.capabilities import CAPABILITIES
 import ee
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -25,20 +26,34 @@ class Period(str, Enum):
     DRY = "DRY"
 
 
-@router.get("/sentinel/{period}/{year}/{x}/{y}/{z}")
-def get_sentinel(
+
+@router.get("/s2_harmonized/{period}/{year}/{x}/{y}/{z}")
+def get_s2_harmonized(
     period: Period,
     year: int,
     x: int,
     y: int,
     z: int,
     visparam="tvi-green",
+    month: int = 0,
     db: Session = Depends(get_db),
 ):
+
+    CAPABILITIES['collections']
+    metadata = list(filter(lambda x: x['name'] == 's2_harmonized',CAPABILITIES['collections']))[0]
+    
+    if not year in metadata['year']:
+        raise HTTPException(404,f'Invalid year, please try valid year {metadata["year"]}')
+    if not period in metadata['period']:
+        raise HTTPException(404,f'Invalid period, please try valid period {metadata["period"]}')
+    if not visparam in metadata['visparam']:
+        raise HTTPException(404,f'Invalid visparam, please try valid visparam {metadata["visparam"]}')
 
     PERIODS = {
         "WET": {"name": "WET", "dtStart": f"{year}-01-01", "dtEnd": f"{year}-04-30"},
         "DRY": {"name": "DRY", "dtStart": f"{year}-06-01", "dtEnd": f"{year}-10-30"},
+        #TODO fazer volta o primeo e ultimo dia do mes
+        "MONTH": {"name": "MONTH", "dtStart": f"{year}-{month:02}-01","dtEnd": f"{year}-{month:02}-28"}
     }
     
     if not (z > 9 and z < 19):
@@ -61,7 +76,7 @@ def get_sentinel(
         )
 
     _geohash, bbox = tile2goehashBBOX(x, y, z)
-    path_cache = f'cache/sentinel/{period_select["name"]}_{year}/{_geohash}'
+    path_cache = f'cache/sentinel/{period_select["name"]}_{year}_{visparam}/{_geohash}'
 
     file_cache = f"{path_cache}/{z}/{x}_{y}.png"
 
