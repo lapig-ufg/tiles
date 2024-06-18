@@ -1,0 +1,19 @@
+version: '3.7'
+
+services:
+  tile-server:
+    build:
+      context: ./docker/local
+    hostname: tile-server
+    container_name: tile-server
+    privileged: true
+    ports:
+      - '8083:8083'
+    
+    restart: always
+    stdin_open: true
+    tty: true
+    volumes:
+      - './cache:/cache'
+      - '/etc/localtime:/etc/localtime'
+      - './.service-accounts/blissful-axiom-314717-845a6f8c6805.json:/app/.service-accounts/gee.json'

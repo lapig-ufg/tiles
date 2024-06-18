@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from google.oauth2 import service_account
 
-from app.config import settings
+from app.config import settings, logger
 from app.database import Base, engine
 from app.router import created_routes
 
@@ -28,6 +28,7 @@ app = FastAPI(default_response_class=ORJSONResponse)
 def initialize_gee():
     try:
         service_account_file = settings.GEE_SERVICE_ACCOUNT_FILE
+        logger.debug(f"Initializing service account {service_account_file}")
         credentials = service_account.Credentials.from_service_account_file(
             service_account_file,
             scopes=["https://www.googleapis.com/auth/earthengine.readonly"],

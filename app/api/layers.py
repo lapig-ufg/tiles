@@ -76,7 +76,7 @@ def get_s2_harmonized(
         )
 
     _geohash, bbox = tile2goehashBBOX(x, y, z)
-    path_cache = f'cache/sentinel/{period_select["name"]}_{year}_{visparam}/{_geohash}'
+    path_cache = f'/cache/sentinel/{period_select["name"]}_{year}_{visparam}/{_geohash}'
 
     file_cache = f"{path_cache}/{z}/{x}_{y}.png"
 
