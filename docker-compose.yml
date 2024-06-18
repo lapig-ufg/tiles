@@ -1,23 +1,159 @@
-version: '3.7'
+version: "3.8"
+
+name: tile-lapig
 
 services:
-  tile-server:
+  tile-app-1:
     build:
-      context: ./docker/local
-    hostname: tile-server
-    container_name: tile-server
+      context: ./docker/prod
+    hostname: tile-app-1
+    container_name: tile-app-1
     privileged: true
-    ports:
-      - '8083:8083'
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 500M
     
     restart: always
     stdin_open: true
     tty: true
     volumes:
-      - './cache:/cache'
       - '/etc/localtime:/etc/localtime'
-      - '.:/app/tiles'
-      - './.service-accounts/blissful-axiom-314717-845a6f8c6805.json:/app/.service-accounts/gee.json'
+      - './.service-accounts/gee.json:/app/.service-accounts/gee.json'
+    labels:
+      - traefik.enable=true
+      #Webapp
+      - traefik.http.routers.tile.rule=Host(`tile.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile.tls=true
+      - traefik.http.routers.tile.tls.certresolver=le
+      - traefik.http.routers.tile.entrypoints=websecure
+      - traefik.http.routers.tile.service=tile
+      - traefik.http.services.tile.loadbalancer.server.port=8083
+      # mapping
+      - traefik.http.routers.tile1.rule=Host(`t1.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile1.tls=true
+      - traefik.http.routers.tile1.tls.certresolver=le
+      - traefik.http.routers.tile1.entrypoints=websecure
+      - traefik.http.routers.tile1.service=tile1
+      - traefik.http.services.tile1.loadbalancer.server.port=8083
+
+  tile-app-2:
+    build:
+      context: ./docker/prod
+    hostname: tile-app-2
+    container_name: tile-app-2
+    privileged: true
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 500M
+    
+    restart: always
+    stdin_open: true
+    tty: true
+    volumes:
+      - '/etc/localtime:/etc/localtime'
+      - './.service-accounts/gee.json:/app/.service-accounts/gee.json'
+    labels:
+      - traefik.enable=true
+      # mapping
+      - traefik.http.routers.tile2.rule=Host(`t2.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile2.tls=true
+      - traefik.http.routers.tile2.tls.certresolver=le
+      - traefik.http.routers.tile2.entrypoints=websecure
+      - traefik.http.routers.tile2.service=tile2
+      - traefik.http.services.tile2.loadbalancer.server.port=8083
+
+  tile-app-3:
+    build:
+      context: ./docker/prod
+    hostname: tile-app-3
+    container_name: tile-app-3
+    privileged: true
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 500M
+    
+    restart: always
+    stdin_open: true
+    tty: true
+    volumes:
+      - '/etc/localtime:/etc/localtime'
+      - './.service-accounts/gee.json:/app/.service-accounts/gee.json'
+    labels:
+      - traefik.enable=true
+      # mapping
+      - traefik.http.routers.tile3.rule=Host(`t3.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile3.tls=true
+      - traefik.http.routers.tile3.tls.certresolver=le
+      - traefik.http.routers.tile3.entrypoints=websecure
+      - traefik.http.routers.tile3.service=tile3
+      - traefik.http.services.tile3.loadbalancer.server.port=8083
+
+  tile-app-4:
+    build:
+      context: ./docker/prod
+    hostname: tile-app-4
+    container_name: tile-app-4
+    privileged: true
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 500M
+    
+    restart: always
+    stdin_open: true
+    tty: true
+    volumes:
+      - '/etc/localtime:/etc/localtime'
+      - './.service-accounts/gee.json:/app/.service-accounts/gee.json'
+    labels:
+      - traefik.enable=true
+      # mapping
+      - traefik.http.routers.tile4.rule=Host(`t4.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile4.tls=true
+      - traefik.http.routers.tile4.tls.certresolver=le
+      - traefik.http.routers.tile4.entrypoints=websecure
+      - traefik.http.routers.tile4.service=tile4
+      - traefik.http.services.tile4.loadbalancer.server.port=8083
+
+  tile-app-5:
+    build:
+      context: ./docker/prod
+    hostname: tile-app-5
+    container_name: tile-app-5
+    privileged: true
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 500M
+    restart: always
+    stdin_open: true
+    tty: true
+    volumes:
+      - '/etc/localtime:/etc/localtime'
+      - './.service-accounts/gee.json:/app/.service-accounts/gee.json'
+    labels:
+      - traefik.enable=true
+      # mapping
+      - traefik.http.routers.tile5.rule=Host(`t5.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile5.tls=true
+      - traefik.http.routers.tile5.tls.certresolver=le
+      - traefik.http.routers.tile5.entrypoints=websecure
+      - traefik.http.routers.tile5.service=tile5
+      - traefik.http.services.tile5.loadbalancer.server.port=8083
+
 
   valkey:
     image: 'valkey/valkey:7.2.5'

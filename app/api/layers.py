@@ -28,8 +28,18 @@ class Period(str, Enum):
     DRY = "DRY"
 
 
+async def fetch_image_from_api(image_url: str):
+    """Busca uma imagem de uma API externa."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(image_url) as response:
+            if response.status != 200:
+                raise HTTPException(status_code=response.status, detail="Imagem não encontrada na API externa")
+            return await response.read()
 
-@router.get("/s2_harmonized/{period}/{year}/{x}/{y}/{z}", response_class=FileResponse)
+
+
+
+@router.get("/s2_harmonized/{period}/{year}/{x}/{y}/{z}")
 async def get_s2_harmonized(
     request: Request,
     period: Period,
@@ -82,9 +92,11 @@ async def get_s2_harmonized(
 
     file_cache = f"{path_cache}/{z}/{x}_{y}.png"
 
-    if os.path.isfile(file_cache):
-        logger.info(f"Using cached file: {file_cache}")
-        return FileResponse(file_cache, media_type="image/png" )
+    binary_data = request.app.state.valkey.get(file_cache)
+    
+    if binary_data:
+        logger.debug(f"Using cached file: {file_cache}")
+        return StreamingResponse(io.BytesIO(binary_data), media_type="image/png")
         
 
     Path(f"{path_cache}/{z}").mkdir(parents=True, exist_ok=True)
@@ -96,7 +108,7 @@ async def get_s2_harmonized(
         > settings.LIFESPAN_URL
         
     ):
-        logger.info(f"New url: {path_cache}")
+        logger.debug(f"New url: {path_cache}")
         geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
 
         s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
@@ -114,20 +126,15 @@ async def get_s2_harmonized(
         request.app.state.valkey.set(path_cache,f'{layer_url}, {datetime.now()}')
         
     else:
-        logger.info("Using existing layer URL")
+        logger.debug("Using existing layer URL")
         layer_url = urlGEElayer['url']
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(layer_url.format(x=x, y=y, z=z)) as request:
-            if request.status == 200:
-                # Salva a imagem no cache
-                async with aiofiles.open(file_cache, "wb") as f:
-                    async for chunk in request.content.iter_chunked(8192):
-                        await f.write(chunk)
+    try:
+        binary_data = await fetch_image_from_api(layer_url.format(x=x, y=y,z=z))
+        request.app.state.valkey.set(file_cache, binary_data)
+    except HTTPException as exc:
+        logger.exception(exc)
+        raise HTTPException(status_code=500, detail="Erro ao se comunicar com a API externa") 
 
-                return FileResponse(file_cache, media_type="image/png")
-            else:
-                raise HTTPException(
-                    status_code=request.status,
-                    detail="Failed to fetch image from remote server",
-                )
+    return StreamingResponse(io.BytesIO(binary_data), media_type="image/png")
+                
