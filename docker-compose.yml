@@ -158,6 +158,12 @@ services:
     volumes:
       - 'valkey-data:/data'
     restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 25G
+        reservations:
+          memory: 2G
 
 volumes:
   valkey-data:
