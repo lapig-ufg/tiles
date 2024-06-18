@@ -14,5 +14,5 @@ RUN apt-get update && apt-get install --no-install-recommends -y curl build-esse
     pip install --no-cache-dir -r requirements.txt
 
 
-CMD sh -c "cd /app/tiles && gunicorn -k  uvicorn.workers.UvicornWorker --bind 0.0.0.0:8083 -w 4 -t 0 main:app"
 
+CMD sh -c "start.sh"

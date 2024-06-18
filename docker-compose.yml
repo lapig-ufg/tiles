@@ -16,4 +16,18 @@ services:
     volumes:
       - './cache:/cache'
       - '/etc/localtime:/etc/localtime'
+      - '.:/app/tiles'
       - './.service-accounts/blissful-axiom-314717-845a6f8c6805.json:/app/.service-accounts/gee.json'
+
+  valkey:
+    image: 'valkey/valkey:7.2.5'
+    hostname: valkey
+    container_name: valkey
+    ports:
+      - '6379:6379'
+    volumes:
+      - 'valkey-data:/data'
+    restart: always
+
+volumes:
+  valkey-data:
