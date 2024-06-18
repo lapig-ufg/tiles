@@ -177,3 +177,9 @@ services:
 
 volumes:
   valkey-data:
+
+
+networks:
+  web_lapig:
+    external: true
+    driver: bridge
