@@ -9,6 +9,8 @@ services:
     hostname: tiles-app-1
     container_name: tiles-app-1
     privileged: true
+    networks:
+      - web_lapig
     deploy:
       resources:
         limits:
@@ -39,6 +41,8 @@ services:
     hostname: tiles-app-2
     container_name: tiles-app-2
     privileged: true
+    networks:
+      - web_lapig
     deploy:
       resources:
         limits:
@@ -68,6 +72,8 @@ services:
     hostname: tiles-app-3
     container_name: tiles-app-3
     privileged: true
+    networks:
+      - web_lapig
     deploy:
       resources:
         limits:
@@ -97,6 +103,8 @@ services:
     hostname: tiles-app-4
     container_name: tiles-app-4
     privileged: true
+    networks:
+      - web_lapig
     deploy:
       resources:
         limits:
@@ -126,6 +134,8 @@ services:
     hostname: tiles-app-5
     container_name: tiles-app-5
     privileged: true
+    networks:
+      - web_lapig
     deploy:
       resources:
         limits:
@@ -153,11 +163,11 @@ services:
     image: 'valkey/valkey:7.2.5'
     hostname: valkey
     container_name: valkey
-    ports:
-      - '6379:6379'
     volumes:
       - 'valkey-data:/data'
     restart: always
+    networks:
+      - web_lapig
     deploy:
       resources:
         limits:
