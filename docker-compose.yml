@@ -32,7 +32,7 @@ services:
       - traefik.http.routers.tile.service=tile
       - traefik.http.services.tile.loadbalancer.server.port=8083
       # mapping
-      - traefik.http.routers.tile1.rule=Host(`t1.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile1.rule=Host(`tm1.lapig.iesa.ufg.br`)
       - traefik.http.routers.tile1.tls=true
       - traefik.http.routers.tile1.tls.certresolver=le
       - traefik.http.routers.tile1.entrypoints=websecure
@@ -61,7 +61,7 @@ services:
     labels:
       - traefik.enable=true
       # mapping
-      - traefik.http.routers.tile2.rule=Host(`t2.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile2.rule=Host(`tm2.lapig.iesa.ufg.br`)
       - traefik.http.routers.tile2.tls=true
       - traefik.http.routers.tile2.tls.certresolver=le
       - traefik.http.routers.tile2.entrypoints=websecure
@@ -90,7 +90,7 @@ services:
     labels:
       - traefik.enable=true
       # mapping
-      - traefik.http.routers.tile3.rule=Host(`t3.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile3.rule=Host(`tm3.lapig.iesa.ufg.br`)
       - traefik.http.routers.tile3.tls=true
       - traefik.http.routers.tile3.tls.certresolver=le
       - traefik.http.routers.tile3.entrypoints=websecure
@@ -119,7 +119,7 @@ services:
     labels:
       - traefik.enable=true
       # mapping
-      - traefik.http.routers.tile4.rule=Host(`t4.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile4.rule=Host(`tm4.lapig.iesa.ufg.br`)
       - traefik.http.routers.tile4.tls=true
       - traefik.http.routers.tile4.tls.certresolver=le
       - traefik.http.routers.tile4.entrypoints=websecure
@@ -147,7 +147,7 @@ services:
     labels:
       - traefik.enable=true
       # mapping
-      - traefik.http.routers.tile5.rule=Host(`t5.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile5.rule=Host(`tm5.lapig.iesa.ufg.br`)
       - traefik.http.routers.tile5.tls=true
       - traefik.http.routers.tile5.tls.certresolver=le
       - traefik.http.routers.tile5.entrypoints=websecure
