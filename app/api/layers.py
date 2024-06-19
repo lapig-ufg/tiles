@@ -109,7 +109,7 @@ async def get_s2_harmonized(
         
     ):
         logger.debug(f"New url: {path_cache}")
-        geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
+        geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"]).buffer(1000)
 
         s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
         s2 = s2.filterDate(
