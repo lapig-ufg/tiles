@@ -138,8 +138,7 @@ async def get_s2_harmonized(
         request.app.state.valkey.set(file_cache, binary_data)
     except HTTPException as exc:
         logger.exception(f'{file_cache} {exc}')
-        
-        return FileResponse('data/blank.png', media_type="image/png")
+        raise HTTPException(500, exc)
 
     return StreamingResponse(io.BytesIO(binary_data), media_type="image/png")
                 
