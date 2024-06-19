@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from google.oauth2 import service_account
 import valkey
 
-from app.config import settings, logger
+from app.config import settings, logger, start_logger
 from app.database import Base, engine
 from app.router import created_routes
 
@@ -28,6 +28,7 @@ app = FastAPI(default_response_class=ORJSONResponse)
 
 @app.on_event("startup")
 async def startup_event():
+    start_logger()
     try:
         service_account_file = settings.GEE_SERVICE_ACCOUNT_FILE
         logger.debug(f"Initializing service account {service_account_file}")
