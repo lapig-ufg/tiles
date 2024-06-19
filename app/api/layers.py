@@ -91,11 +91,11 @@ async def get_s2_harmonized(
     path_cache = f's2_harmonized_{period_select["name"]}_{year}_{visparam}/{_geohash}'
 
     file_cache = f"{path_cache}/{z}/{x}_{y}.png"
-
+    logger.info(file_cache)
     binary_data = request.app.state.valkey.get(file_cache)
     
     if binary_data:
-        logger.debug(f"Using cached file: {file_cache}")
+        logger.info(f"Using cached file: {file_cache}")
         return StreamingResponse(io.BytesIO(binary_data), media_type="image/png")
         
 
@@ -139,6 +139,6 @@ async def get_s2_harmonized(
     except HTTPException as exc:
         logger.exception(f'{file_cache} {exc}')
         raise HTTPException(500, exc)
-
+    logger.info(f"Success not cached {file_cache}")
     return StreamingResponse(io.BytesIO(binary_data), media_type="image/png")
                 

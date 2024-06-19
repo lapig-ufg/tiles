@@ -16,7 +16,7 @@ services:
         limits:
           memory: 2G
         reservations:
-          memory: 500M
+          memory: 1G
     
     restart: always
     stdin_open: true
@@ -48,7 +48,7 @@ services:
         limits:
           memory: 2G
         reservations:
-          memory: 500M
+          memory: 1G
     
     restart: always
     stdin_open: true
@@ -79,7 +79,7 @@ services:
         limits:
           memory: 2G
         reservations:
-          memory: 500M
+          memory: 1G
     
     restart: always
     stdin_open: true
@@ -110,7 +110,7 @@ services:
         limits:
           memory: 2G
         reservations:
-          memory: 500M
+          memory: 1G
     
     restart: always
     stdin_open: true
@@ -141,7 +141,7 @@ services:
         limits:
           memory: 2G
         reservations:
-          memory: 500M
+          memory: 1G
     restart: always
     stdin_open: true
     tty: true
