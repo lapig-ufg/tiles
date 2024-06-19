@@ -108,23 +108,27 @@ async def get_s2_harmonized(
         > settings.LIFESPAN_URL
         
     ):
-        logger.debug(f"New url: {path_cache}")
-        geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"]).buffer(10_000)
+        try:
+            logger.debug(f"New url: {path_cache}")
+            geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
 
-        s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
-        s2 = s2.filterDate(
-            period_select["dtStart"], period_select["dtEnd"]
-        ).filterBounds(geom)
-        s2 = s2.sort("CLOUDY_PIXEL_PERCENTAGE", False)
-        s2 = s2.select(*_visparam["select"])
-        best_image = s2.mosaic()
-        
-        logger.debug(f'{_visparam["select"]} | {_visparam["visparam"]}')
-        
-        map_id = ee.data.getMapId({"image": best_image, **_visparam["visparam"]})
-        layer_url = map_id["tile_fetcher"].url_format
-        request.app.state.valkey.set(path_cache,f'{layer_url}, {datetime.now()}')
-        
+            s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
+            s2 = s2.filterDate(
+                period_select["dtStart"], period_select["dtEnd"]
+            ).filterBounds(geom)
+            s2 = s2.sort("CLOUDY_PIXEL_PERCENTAGE", False)
+            s2 = s2.select(*_visparam["select"])
+            best_image = s2.mosaic()
+            
+            logger.debug(f'{_visparam["select"]} | {_visparam["visparam"]}')
+            
+            map_id = ee.data.getMapId({"image": best_image, **_visparam["visparam"]})
+            layer_url = map_id["tile_fetcher"].url_format
+            request.app.state.valkey.set(path_cache,f'{layer_url}, {datetime.now()}')
+        except Exception as e:
+            logger.exception(f'{file_cache} | {e}')
+            return FileResponse('data/blank.png', media_type="image/png")
+            
     else:
         logger.debug("Using existing layer URL")
         layer_url = urlGEElayer['url']
@@ -133,8 +137,9 @@ async def get_s2_harmonized(
         binary_data = await fetch_image_from_api(layer_url.format(x=x, y=y,z=z))
         request.app.state.valkey.set(file_cache, binary_data)
     except HTTPException as exc:
-        logger.exception(exc)
-        raise HTTPException(status_code=500, detail="Erro ao se comunicar com a API externa") 
+        logger.exception(f'{file_cache} {exc}')
+        
+        return FileResponse('data/blank.png', media_type="image/png")
 
     return StreamingResponse(io.BytesIO(binary_data), media_type="image/png")
                 
