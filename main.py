@@ -48,8 +48,6 @@ def read_root():
 @app.get('/api/capabilities')
 def get_capabilities():
     return CAPABILITIES
-    
-
 
 
 app = created_routes(app)
