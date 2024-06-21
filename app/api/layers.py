@@ -34,7 +34,7 @@ def get_s2_harmonized(
     x: int,
     y: int,
     z: int,
-    visparam="tvi-green",
+    visparam="tvi-red",
     month: int = 0,
     db: Session = Depends(get_db),
 ):
