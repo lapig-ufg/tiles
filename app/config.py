@@ -7,7 +7,7 @@ from loguru import logger
 
 def start_logger():
     type_logger = "development"
-    if os.environ.get("ECO_ENV") == "production":
+    if os.environ.get("TILES_ENV") == "production":
         type_logger = "production"
     logger.info(f"The system is operating in mode {type_logger}")
 
@@ -16,27 +16,27 @@ confi_format = "[ {time} | process: {process.id} | {level: <8}] {module}.{functi
 rotation = "500 MB"
 
 
-if os.environ.get("ECO_ENV") == "production":
+if os.environ.get("TILES_ENV") == "production":
     logger.remove()
     logger.add(sys.stderr, level="INFO", format=confi_format)
 
 try:
-    logger.add("/logs/tiles_eco/tiles_eco.log", rotation=rotation, level="INFO")
+    logger.add("/logs/tiles/tiles.log", rotation=rotation, level="INFO")
 except:
     logger.add(
-        "../logs/tiles_eco/tiles_eco.log",
+        "./logs/tiles/tiles.log",
         rotation=rotation,
         level="INFO",
     )
 try:
     logger.add(
-        "/logs/tiles_eco/tiles_eco_WARNING.log",
+        "/logs/tiles/tiles_WARNING.log",
         level="WARNING",
         rotation=rotation,
     )
 except:
     logger.add(
-        "../logs/tiles_eco/tiles_eco_WARNING.log",
+        "./logs/tiles/tiles_WARNING.log",
         level="WARNING",
         rotation=rotation,
     )

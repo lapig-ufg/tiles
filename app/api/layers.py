@@ -4,19 +4,21 @@ from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
-from app.capabilities import CAPABILITIES
+from app.utils.capabilities import CAPABILITIES
+from app.utils.cache import getCacheUrl
 import ee
-from fastapi import APIRouter, Depends, HTTPException, Response
-from fastapi.responses import StreamingResponse
-from requests import get
-from sqlalchemy.orm import Session
+import aiohttp
+import aiofiles
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse, FileResponse
+
 
 from app.config import logger, settings
-from app.database import get_db
 from app.models import Layer
 from app.repository import LayerRepository
 from app.tile import tile2goehashBBOX
 from app.visParam import VISPARAMS
+
 
 router = APIRouter()
 
@@ -26,9 +28,20 @@ class Period(str, Enum):
     DRY = "DRY"
 
 
+async def fetch_image_from_api(image_url: str):
+    """Busca uma imagem de uma API externa."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(image_url) as response:
+            if response.status != 200:
+                raise HTTPException(status_code=response.status, detail="Imagem não encontrada na API externa")
+            return await response.read()
+
+
+
 
 @router.get("/s2_harmonized/{period}/{year}/{x}/{y}/{z}")
-def get_s2_harmonized(
+async def get_s2_harmonized(
+    request: Request,
     period: Period,
     year: int,
     x: int,
@@ -36,7 +49,7 @@ def get_s2_harmonized(
     z: int,
     visparam="tvi-red",
     month: int = 0,
-    db: Session = Depends(get_db),
+    
 ):
 
     CAPABILITIES['collections']
@@ -58,8 +71,7 @@ def get_s2_harmonized(
     
     if not (z > 9 and z < 19):
         logger.debug('zoom ')
-        with open('data/maxminzoom.png', "rb") as f:
-            return StreamingResponse(io.BytesIO(f.read()), media_type="image/png")
+        return FileResponse('data/maxminzoom.png', media_type="image/png")
 
     period_select = PERIODS.get(period, "Error")
     if period_select == "Error":
@@ -76,60 +88,57 @@ def get_s2_harmonized(
         )
 
     _geohash, bbox = tile2goehashBBOX(x, y, z)
-    path_cache = f'cache/sentinel/{period_select["name"]}_{year}_{visparam}/{_geohash}'
+    path_cache = f's2_harmonized_{period_select["name"]}_{year}_{visparam}/{_geohash}'
 
     file_cache = f"{path_cache}/{z}/{x}_{y}.png"
-
-    if os.path.isfile(file_cache):
+    logger.info(file_cache)
+    binary_data = request.app.state.valkey.get(file_cache)
+    
+    if binary_data:
         logger.info(f"Using cached file: {file_cache}")
-        with open(file_cache, "rb") as f:
-            return StreamingResponse(io.BytesIO(f.read()), media_type="image/png")
+        return StreamingResponse(io.BytesIO(binary_data), media_type="image/png")
+        
 
     Path(f"{path_cache}/{z}").mkdir(parents=True, exist_ok=True)
 
-    urlGEElayer = LayerRepository.find_by_layer(db, path_cache)
+    urlGEElayer = getCacheUrl(request.app.state.valkey.get(path_cache))
 
-    if (
-        not urlGEElayer
-        or (datetime.now() - urlGEElayer.date).total_seconds() / 3600
+    if (urlGEElayer is None
+        or (datetime.now() - urlGEElayer['date']).total_seconds() / 3600
         > settings.LIFESPAN_URL
         
     ):
-        logger.info(f"New url: {path_cache}")
-        geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
+        try:
+            logger.debug(f"New url: {path_cache}")
+            geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
 
-        s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
-        s2 = s2.filterDate(
-            period_select["dtStart"], period_select["dtEnd"]
-        ).filterBounds(geom)
-        s2 = s2.sort("CLOUDY_PIXEL_PERCENTAGE", False)
-        s2 = s2.select(*_visparam["select"])
-        best_image = s2.mosaic()
-        
-        logger.debug(f'{_visparam["select"]} | {_visparam["visparam"]}')
-        
-        map_id = ee.data.getMapId({"image": best_image, **_visparam["visparam"]})
-        layer_url = map_id["tile_fetcher"].url_format
-        urlGEElayer = LayerRepository.save(
-            db, Layer(layer=path_cache, url=layer_url, date=datetime.now())
-        )
+            s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
+            s2 = s2.filterDate(
+                period_select["dtStart"], period_select["dtEnd"]
+            ).filterBounds(geom)
+            s2 = s2.sort("CLOUDY_PIXEL_PERCENTAGE", False)
+            s2 = s2.select(*_visparam["select"])
+            best_image = s2.mosaic()
+            
+            logger.debug(f'{_visparam["select"]} | {_visparam["visparam"]}')
+            
+            map_id = ee.data.getMapId({"image": best_image, **_visparam["visparam"]})
+            layer_url = map_id["tile_fetcher"].url_format
+            request.app.state.valkey.set(path_cache,f'{layer_url}, {datetime.now()}')
+        except Exception as e:
+            logger.exception(f'{file_cache} | {e}')
+            return FileResponse('data/blank.png', media_type="image/png")
+            
     else:
-        logger.info("Using existing layer URL")
-        layer_url = urlGEElayer.url
+        logger.debug("Using existing layer URL")
+        layer_url = urlGEElayer['url']
 
-    request = get(layer_url.format(x=x, y=y, z=z), stream=True)
-
-    if request.status_code == 200:
-        # Salva a imagem no cache
-        with open(file_cache, "wb") as f:
-            for chunk in request.iter_content(chunk_size=8192):
-                f.write(chunk)
-
-        # Reabre o cache para fazer o streaming
-        with open(file_cache, "rb") as f:
-            return StreamingResponse(io.BytesIO(f.read()), media_type="image/png")
-    else:
-        raise HTTPException(
-            status_code=request.status_code,
-            detail="Failed to fetch image from remote server",
-        )
+    try:
+        binary_data = await fetch_image_from_api(layer_url.format(x=x, y=y,z=z))
+        request.app.state.valkey.set(file_cache, binary_data)
+    except HTTPException as exc:
+        logger.exception(f'{file_cache} {exc}')
+        raise HTTPException(500, exc)
+    logger.info(f"Success not cached {file_cache}")
+    return StreamingResponse(io.BytesIO(binary_data), media_type="image/png")
+                

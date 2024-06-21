@@ -1,0 +1,185 @@
+version: "3.8"
+
+name: tiles-lapig
+
+services:
+  tiles-app-1:
+    build:
+      context: ./docker/prod
+    hostname: tiles-app-1
+    container_name: tiles-app-1
+    privileged: true
+    networks:
+      - web_lapig
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+    
+    restart: always
+    stdin_open: true
+    tty: true
+    volumes:
+      - '/etc/localtime:/etc/localtime'
+      - './.service-accounts/gee.json:/app/.service-accounts/gee.json'
+    labels:
+      - traefik.enable=true
+      #Webapp
+      - traefik.http.routers.tile.rule=Host(`tiles.lapig.iesa.ufg.br`) || Host(`tm1.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile.tls=true
+      - traefik.http.routers.tile.tls.certresolver=le
+      - traefik.http.routers.tile.entrypoints=websecure
+      - traefik.http.routers.tile.service=tile
+      - traefik.http.services.tile.loadbalancer.server.port=8083
+      
+
+  tiles-app-2:
+    build:
+      context: ./docker/prod
+    hostname: tiles-app-2
+    container_name: tiles-app-2
+    privileged: true
+    networks:
+      - web_lapig
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+    
+    restart: always
+    stdin_open: true
+    tty: true
+    volumes:
+      - '/etc/localtime:/etc/localtime'
+      - './.service-accounts/gee.json:/app/.service-accounts/gee.json'
+    labels:
+      - traefik.enable=true
+      # mapping
+      - traefik.http.routers.tile2.rule=Host(`tm2.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile2.tls=true
+      - traefik.http.routers.tile2.tls.certresolver=le
+      - traefik.http.routers.tile2.entrypoints=websecure
+      - traefik.http.routers.tile2.service=tile2
+      - traefik.http.services.tile2.loadbalancer.server.port=8083
+
+  tiles-app-3:
+    build:
+      context: ./docker/prod
+    hostname: tiles-app-3
+    container_name: tiles-app-3
+    privileged: true
+    networks:
+      - web_lapig
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+    
+    restart: always
+    stdin_open: true
+    tty: true
+    volumes:
+      - '/etc/localtime:/etc/localtime'
+      - './.service-accounts/gee.json:/app/.service-accounts/gee.json'
+    labels:
+      - traefik.enable=true
+      # mapping
+      - traefik.http.routers.tile3.rule=Host(`tm3.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile3.tls=true
+      - traefik.http.routers.tile3.tls.certresolver=le
+      - traefik.http.routers.tile3.entrypoints=websecure
+      - traefik.http.routers.tile3.service=tile3
+      - traefik.http.services.tile3.loadbalancer.server.port=8083
+
+  tiles-app-4:
+    build:
+      context: ./docker/prod
+    hostname: tiles-app-4
+    container_name: tiles-app-4
+    privileged: true
+    networks:
+      - web_lapig
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+    
+    restart: always
+    stdin_open: true
+    tty: true
+    volumes:
+      - '/etc/localtime:/etc/localtime'
+      - './.service-accounts/gee.json:/app/.service-accounts/gee.json'
+    labels:
+      - traefik.enable=true
+      # mapping
+      - traefik.http.routers.tile4.rule=Host(`tm4.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile4.tls=true
+      - traefik.http.routers.tile4.tls.certresolver=le
+      - traefik.http.routers.tile4.entrypoints=websecure
+      - traefik.http.routers.tile4.service=tile4
+      - traefik.http.services.tile4.loadbalancer.server.port=8083
+
+  tiles-app-5:
+    build:
+      context: ./docker/prod
+    hostname: tiles-app-5
+    container_name: tiles-app-5
+    privileged: true
+    networks:
+      - web_lapig
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+    restart: always
+    stdin_open: true
+    tty: true
+    volumes:
+      - '/etc/localtime:/etc/localtime'
+      - './.service-accounts/gee.json:/app/.service-accounts/gee.json'
+    labels:
+      - traefik.enable=true
+      # mapping
+      - traefik.http.routers.tile5.rule=Host(`tm5.lapig.iesa.ufg.br`)
+      - traefik.http.routers.tile5.tls=true
+      - traefik.http.routers.tile5.tls.certresolver=le
+      - traefik.http.routers.tile5.entrypoints=websecure
+      - traefik.http.routers.tile5.service=tile5
+      - traefik.http.services.tile5.loadbalancer.server.port=8083
+
+
+  valkey:
+    image: 'valkey/valkey:7.2.5'
+    hostname: valkey
+    container_name: valkey
+    volumes:
+      - 'valkey-data:/data'
+    restart: always
+    networks:
+      - web_lapig
+    deploy:
+      resources:
+        limits:
+          memory: 25G
+        reservations:
+          memory: 2G
+
+volumes:
+  valkey-data:
+
+
+networks:
+  web_lapig:
+    external: true
+    driver: bridge
