@@ -12,9 +12,7 @@ from app.config import settings, logger, start_logger
 from app.database import Base, engine
 from app.router import created_routes
 
-
 Base.metadata.create_all(bind=engine)
-
 
 class ORJSONResponse(JSONResponse):
     media_type = "application/json"
@@ -22,9 +20,7 @@ class ORJSONResponse(JSONResponse):
     def render(self, content: typing.Any) -> bytes:
         return orjson.dumps(content)
 
-
 app = FastAPI(default_response_class=ORJSONResponse)
-
 
 @app.on_event("startup")
 async def startup_event():
@@ -42,17 +38,15 @@ async def startup_event():
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to initialize GEE")
     
-    app.state.valkey = valkey.Valkey(host='valkey', port=6379)
+    app.state.valkey = valkey.Valkey(host='localhost', port=6379)
     
 @app.on_event("shutdown")
 async def shutdown_event():
     app.state.valkey.close()
 
-
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the GEE FastAPI"}
-
 
 @app.get('/api/capabilities')
 def get_capabilities():
