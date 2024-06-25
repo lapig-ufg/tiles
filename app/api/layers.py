@@ -35,14 +35,14 @@ async def fetch_image_from_api(image_url: str):
                 raise HTTPException(status_code=response.status, detail="Imagem não encontrada na API externa")
             return await response.read()
 
-@router.get("/s2_harmonized/{period}/{year}/{x}/{y}/{z}")
+@router.get("/s2_harmonized/{x}/{y}/{z}")
 async def get_s2_harmonized(
     request: Request,
-    period: Period,
-    year: int,
     x: int,
     y: int,
     z: int,
+    period: Period = Period.WET,
+    year: int = datetime.now().year,
     visparam="tvi-red",
     month: int = 0,
     
@@ -95,7 +95,7 @@ async def get_s2_harmonized(
         return StreamingResponse(io.BytesIO(binary_data), media_type="image/png")
         
 
-    Path(f"{path_cache}/{z}").mkdir(parents=True, exist_ok=True)
+    #Path(f"{path_cache}/{z}").mkdir(parents=True, exist_ok=True)
 
     urlGEElayer = getCacheUrl(request.app.state.valkey.get(path_cache))
 
@@ -140,14 +140,14 @@ async def get_s2_harmonized(
 
 @router.get("/landsat/{x}/{y}/{z}")
 async def get_landsat(
+    request: Request,
     x: int,
     y: int,
     z: int,
-    request: Request,
-    period: Period = Query(default=Period.MONTH),
-    year: int = Query(default=datetime.now().year),
-    visparam: str = Query(default="landsat-tvi-red"),
-    month: int = Query(default=datetime.now().month),
+    period: Period =Period.MONTH,
+    year: int = int(datetime.now().year),
+    visparam: str = "landsat-tvi-red",
+    month: int = int(datetime.now().month),
 ):
     metadata = next(filter(lambda x: x['name'] == 'landsat', CAPABILITIES['collections']), None)
     if not metadata:
@@ -194,7 +194,8 @@ async def get_landsat(
         )
 
     _geohash, bbox = tile2goehashBBOX(x, y, z)
-    path_cache = f'landsat_{period_select["name"]}_{year}_{visparam}/{_geohash}'
+    
+    path_cache = f'landsat_{period_select["name"]}_{year}_{month}_{visparam}/{_geohash}'
 
     file_cache = f"{path_cache}/{z}/{x}_{y}.png"
     logger.info(file_cache)
@@ -204,7 +205,7 @@ async def get_landsat(
         logger.info(f"Using cached file: {file_cache}")
         return StreamingResponse(io.BytesIO(binary_data), media_type="image/png")
 
-    Path(f"{path_cache}/{z}").mkdir(parents=True, exist_ok=True)
+    #Path(f"{path_cache}/{z}").mkdir(parents=True, exist_ok=True)
 
     urlGEElayer_json = request.app.state.valkey.get(path_cache)
 
@@ -212,7 +213,7 @@ async def get_landsat(
         try:
             logger.debug(f"New url: {path_cache}")
             geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
-
+            
             l4 = ee.ImageCollection('LANDSAT/LT04/C02/T1_L2').select( ['SR_B4', 'SR_B5', 'SR_B7'], ['NIR', 'SWIR', 'RED'])
             l5 = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2').select( ['SR_B4', 'SR_B5', 'SR_B7'], ['NIR', 'SWIR', 'RED'])
             l7 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2').select(['SR_B4', 'SR_B5', 'SR_B7'], ['NIR', 'SWIR', 'RED'])
@@ -223,8 +224,8 @@ async def get_landsat(
             landsat = landsat.filterDate(
                 period_select["dtStart"], period_select["dtEnd"]
             ).filterBounds(geom)
-            landsat = landsat.sort("CLOUD_COVER")
-            best_image = landsat.first()
+            landsat = landsat.sort("CLOUD_COVER",False)
+            best_image = landsat.mosaic()
 
             logger.debug(f'{_visparam["visparam"]}')
 

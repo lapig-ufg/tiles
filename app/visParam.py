@@ -29,8 +29,8 @@ VISPARAMS = {
     "landsat-tvi-red": {
         "visparam": {
             "gamma": "1.1",
-            "max": "5400, 4300, 2800",
-            "min": "700, 600, 400",
+            #"max": "5400, 4300, 2800",
+            #"min": "700, 600, 400",
             "bands": ["NIR", "SWIR", "RED"],
         }
     }
