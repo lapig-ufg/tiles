@@ -7,18 +7,20 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 router = APIRouter()
+
+
 @router.get("/landsat/{lat}/{lon}")
 def timeseries_landsat(
-    lat: float,
-    lon: float,
-    data_inicio: str = Query(None, description="Start date in YYYY-MM-DD format"),
-    data_fim: str = Query(None, description="End date in YYYY-MM-DD format")
+        lat: float,
+        lon: float,
+        data_inicio: str = Query(None, description="Start date in YYYY-MM-DD format"),
+        data_fim: str = Query(None, description="End date in YYYY-MM-DD format")
 ):
     try:
         if not data_fim:
             data_fim = datetime.now().strftime('%Y-%m-%d')
         if not data_inicio:
-            data_inicio = (datetime.now() - timedelta(days=365*50)).strftime('%Y-%m-%d')
+            data_inicio = (datetime.now() - timedelta(days=365 * 50)).strftime('%Y-%m-%d')
 
         point = ee.Geometry.Point([lon, lat])
 
@@ -32,13 +34,34 @@ def timeseries_landsat(
             ndvi = image.normalizedDifference(['NIR', 'RED']).rename('NDVI')
             return image.addBands(ndvi)
 
-        l4 = ee.ImageCollection('LANDSAT/LT04/C02/T1_L2').filterDate(data_inicio, data_fim).select(['SR_B3', 'SR_B4', 'QA_PIXEL'], ['RED', 'NIR', 'QA_PIXEL']).map(mask)
-        l5 = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2').filterDate(data_inicio, data_fim).select(['SR_B3', 'SR_B4', 'QA_PIXEL'], ['RED', 'NIR', 'QA_PIXEL']).map(mask)
-        l7 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2').filterDate(data_inicio, data_fim).select(['SR_B3', 'SR_B4', 'QA_PIXEL'], ['RED', 'NIR', 'QA_PIXEL']).map(mask)
-        l8 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2').filterDate(data_inicio, data_fim).select(['SR_B4', 'SR_B5', 'QA_PIXEL'], ['RED', 'NIR', 'QA_PIXEL']).map(mask)
-        l9 = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2').filterDate(data_inicio, data_fim).select(['SR_B4', 'SR_B5', 'QA_PIXEL'], ['RED', 'NIR', 'QA_PIXEL']).map(mask)
+        l4 = ee.ImageCollection('LANDSAT/LT04/C02/T1_L2').select(['SR_B3', 'SR_B4', 'QA_PIXEL'],
+                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask)
+        l5 = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2').select(['SR_B3', 'SR_B4', 'QA_PIXEL'],
+                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask)
+        l7 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2').select(['SR_B3', 'SR_B4', 'QA_PIXEL'],
+                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask)
+        l8 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2').select(['SR_B4', 'SR_B5', 'QA_PIXEL'],
+                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask)
+        l9 = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2').select(['SR_B4', 'SR_B5', 'QA_PIXEL'],
+                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask)
 
-        collections = l4.merge(l5).merge(l7).merge(l8).merge(l9).filterBounds(point).map(calculate_ndvi)
+        collections = l4.merge(l5).merge(l7).merge(l8).merge(l9).filterBounds(point).filterDate(data_inicio,
+                                                                                                data_fim).map(
+            calculate_ndvi)
+
+        def select_best_quality_image(collection):
+            distinct_dates = collection.aggregate_array('system:time_start').distinct()
+
+            def map_dates(date):
+                date = ee.Date(date)
+                date_collection = collection.filterDate(date, date.advance(1, 'day'))
+                return ee.Algorithms.If(date_collection.size(), date_collection.qualityMosaic('QA_PIXEL'), None)
+
+            best_images = distinct_dates.map(map_dates)
+            best_images = ee.ImageCollection(best_images).filter(ee.Filter.notNull(['system:time_start']))
+            return best_images
+
+        best_quality_collections = collections
 
         def get_ndvi_time_series(image):
             date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
@@ -47,20 +70,21 @@ def timeseries_landsat(
             ).get('NDVI')
             return ee.Feature(None, {'date': date, 'NDVI': ndvi})
 
-        # Filter NDVI to remove extreme values
-        ndvi_time_series = collections.map(get_ndvi_time_series).filter(ee.Filter.notNull(['NDVI'])).filter(ee.Filter.rangeContains('NDVI', 0, 1))
+        ndvi_time_series = best_quality_collections.map(get_ndvi_time_series).filter(
+            ee.Filter.notNull(['NDVI'])).filter(ee.Filter.rangeContains('NDVI', 0, 1))
 
         ndvi_data = ndvi_time_series.reduceColumns(
             ee.Reducer.toList(2), ['date', 'NDVI']
         ).get('list').getInfo()
 
-        ndvi_dates, ndvi_values = zip(*ndvi_data)
+        if ndvi_data:
+            ndvi_dates, ndvi_values = zip(*ndvi_data)
+        else:
+            ndvi_dates, ndvi_values = [], []
 
-        # Remove duplicates and ensure unique dates
         ndvi_df = pd.DataFrame({'date': ndvi_dates, 'NDVI': ndvi_values})
         ndvi_df = ndvi_df.groupby('date').mean().reset_index()
 
-        # Apply Savitzky-Golay filter
         def apply_savgol_filter(values, window_size=11, poly_order=2):
             if len(values) > window_size:
                 return savgol_filter(values, window_length=window_size, polyorder=poly_order)
@@ -85,7 +109,10 @@ def timeseries_landsat(
             ee.Reducer.toList(2), ['date', 'precipitation']
         ).get('list').getInfo()
 
-        precip_dates, precip_values = zip(*precip_data)
+        if precip_data:
+            precip_dates, precip_values = zip(*precip_data)
+        else:
+            precip_dates, precip_values = [], []
 
         plotly_data = [
             {
@@ -94,7 +121,7 @@ def timeseries_landsat(
                 'type': 'scatter',
                 'mode': 'lines',
                 'name': 'NDVI (Savgol)',
-                'line': {'color': 'green'}
+                'line': {'color': 'rgb(50, 168, 82)'}
             },
             {
                 'x': list(ndvi_dates),
@@ -102,7 +129,7 @@ def timeseries_landsat(
                 'type': 'scatter',
                 'mode': 'markers',
                 'name': 'NDVI (Original)',
-                'marker': {'color': 'rgba(255, 165, 0, 0.2)'}  # Orange with 60% transparency
+                'marker': {'color': 'rgba(50, 168, 82, 0.3)'}
             },
             {
                 'x': list(precip_dates),
@@ -127,6 +154,115 @@ def timeseries_landsat(
             detail=f"An unexpected error occurred: {str(e)}"
         )
 
+@router.get("/modis/{lat}/{lon}")
+def timeseries_modis(
+        lat: float,
+        lon: float,
+        data_inicio: str = Query(None, description="Start date in YYYY-MM-DD format"),
+        data_fim: str = Query(None, description="End date in YYYY-MM-DD format")
+):
+    try:
+        if not data_fim:
+            data_fim = datetime.now().strftime('%Y-%m-%d')
+        if not data_inicio:
+            data_inicio = (datetime.now() - timedelta(days=365 * 20)).strftime('%Y-%m-%d')  # MODIS tem dados desde 2000
+
+        point = ee.Geometry.Point([lon, lat])
+
+        modis = ee.ImageCollection('MODIS/061/MOD13Q1').filterBounds(point).filterDate(data_inicio, data_fim)
+
+        def get_ndvi_time_series(image):
+            date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
+            ndvi = image.select('NDVI').reduceRegion(
+                ee.Reducer.mean(), point, 500
+            ).get('NDVI')
+            # Convert NDVI from MODIS scale to -1 to 1 scale
+            ndvi = ee.Number(ndvi).divide(10000)
+            return ee.Feature(None, {'date': date, 'NDVI': ndvi})
+
+        ndvi_time_series = modis.map(get_ndvi_time_series).filter(
+            ee.Filter.notNull(['NDVI'])).filter(ee.Filter.rangeContains('NDVI', -1, 1))
+
+        ndvi_data = ndvi_time_series.reduceColumns(
+            ee.Reducer.toList(2), ['date', 'NDVI']
+        ).get('list').getInfo()
+
+        if ndvi_data:
+            ndvi_dates, ndvi_values = zip(*ndvi_data)
+        else:
+            ndvi_dates, ndvi_values = [], []
+
+        ndvi_df = pd.DataFrame({'date': ndvi_dates, 'NDVI': ndvi_values})
+        ndvi_df = ndvi_df.groupby('date').mean().reset_index()
+
+        def apply_savgol_filter(values, window_size=13, poly_order=2):
+            if len(values) > window_size:
+                return savgol_filter(values, window_length=window_size, polyorder=poly_order)
+            return values
+
+        ndvi_dates = ndvi_df['date'].tolist()
+        ndvi_values = ndvi_df['NDVI'].tolist()
+        ndvi_values_smoothed = apply_savgol_filter(np.array(ndvi_values))
+
+        chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY').filterDate(data_inicio, data_fim).filterBounds(point)
+
+        def get_precipitation_time_series(image):
+            date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
+            precipitation = image.reduceRegion(
+                ee.Reducer.mean(), point, 500
+            ).get('precipitation')
+            return ee.Feature(None, {'date': date, 'precipitation': precipitation})
+
+        precip_time_series = chirps.map(get_precipitation_time_series).filter(ee.Filter.notNull(['precipitation']))
+
+        precip_data = precip_time_series.reduceColumns(
+            ee.Reducer.toList(2), ['date', 'precipitation']
+        ).get('list').getInfo()
+
+        if precip_data:
+            precip_dates, precip_values = zip(*precip_data)
+        else:
+            precip_dates, precip_values = [], []
+
+        plotly_data = [
+            {
+                'x': list(ndvi_dates),
+                'y': list(ndvi_values_smoothed),
+                'type': 'scatter',
+                'mode': 'lines',
+                'name': 'NDVI (Savgol)',
+                'line': {'color': 'rgb(50, 168, 82)'}
+            },
+            {
+                'x': list(ndvi_dates),
+                'y': list(ndvi_values),
+                'type': 'scatter',
+                'mode': 'markers',
+                'name': 'NDVI (Original)',
+                'marker': {'color': 'rgba(50, 168, 82, 0.3)'}
+            },
+            {
+                'x': list(precip_dates),
+                'y': list(precip_values),
+                'type': 'bar',
+                'name': 'Precipitation',
+                'marker': {'color': 'blue'},
+                'yaxis': 'y2'
+            }
+        ]
+
+        return JSONResponse(content=plotly_data)
+
+    except ee.EEException as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error fetching data from Earth Engine: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"An unexpected error occurred: {str(e)}"
+        )
 @router.get("/sentinel2/{lat}/{lon}")
 def timeseries_sentinel2(
     lat: float,
@@ -189,7 +325,7 @@ def timeseries_sentinel2(
         ndvi_df = pd.DataFrame({'date': ndvi_dates, 'NDVI': ndvi_values})
         ndvi_df = ndvi_df.groupby('date').mean().reset_index()
 
-        def apply_savgol_filter(values, window_size=11, poly_order=2):
+        def apply_savgol_filter(values, window_size=7, poly_order=3):
             if len(values) > window_size:
                 return savgol_filter(values, window_length=window_size, polyorder=poly_order).tolist()
             return values.tolist()
@@ -222,7 +358,7 @@ def timeseries_sentinel2(
                 'type': 'scatter',
                 'mode': 'lines',
                 'name': 'NDVI (Savgol)',
-                'line': {'color': 'green'}
+                'line': {'color': 'rgb(50, 168, 82)'}
             },
             {
                 'x': ndvi_dates,
@@ -230,7 +366,7 @@ def timeseries_sentinel2(
                 'type': 'scatter',
                 'mode': 'markers',
                 'name': 'NDVI (Original)',
-                'marker': {'color': 'rgba(255, 165, 0, 0.2)'}  # Orange with 60% transparency
+                'marker': {'color': 'rgba(50, 168, 82, 0.3)'}
             },
             {
                 'x': precip_dates,
