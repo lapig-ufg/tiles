@@ -38,7 +38,7 @@ async def startup_event():
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to initialize GEE")
     
-    app.state.valkey = valkey.Valkey(host='localhost', port=6379)
+    app.state.valkey = valkey.Valkey(host='valkey', port=6379)
     
 @app.on_event("shutdown")
 async def shutdown_event():
