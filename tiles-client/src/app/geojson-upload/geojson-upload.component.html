@@ -1,0 +1,25 @@
+<div class="flex align-content-center justify-content-center">
+    <p-fileUpload
+        class="mt-2"
+        mode="basic"
+        name="geojson"
+        chooseIcon="pi pi-upload"
+        accept=".geojson,application/json"
+        [maxFileSize]="1000000"
+        (onSelect)="onFileSelect($event)"
+        chooseLabel="GeoJSON">
+    </p-fileUpload>
+
+    <div *ngIf="features && features.length">
+        <p-paginator
+            (onPageChange)="onPageChange($event)"
+            [first]="first"
+            [rows]="rows"
+            [totalRecords]="features.length"
+            [showCurrentPageReport]="true"
+            [showPageLinks]="false"
+            [showJumpToPageDropdown]="false"
+            currentPageReportTemplate="Point {currentPage} of {totalRecords}">
+        </p-paginator>
+    </div>
+</div>

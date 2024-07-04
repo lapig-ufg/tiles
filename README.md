@@ -5,5 +5,5 @@ This API is designed to create map tiles in the X, Y, Z format from assets in Go
 
 
 ```sh
- ng build --base-href "/tiles/" && rsync -av --delete dist/tiles ../titles_eco2/site/browser/ && cd ../titles_eco2 && npx angular-cli-ghpages --dir=site/browser
+ cd tiles-client && ng build --base-href "/" && rsync -av --delete dist/tiles ../site/browser/ && cd ../ && npx angular-cli-ghpages --dir=site/browser
  ```

@@ -1,0 +1,31 @@
+<h4 *ngIf="lat && lon" class="text-center card">Latitude: {{ lat | number }}, Longitude: {{ lon | number }}</h4>
+
+<div class="flex justify-content-evenly align-content-center">
+    <span>
+        <label for="period-type-sant">Period Type</label>
+        <p-selectButton
+            id="period-type-sant"
+            [options]="sentinelPeriods"
+            [(ngModel)]="selectedSentinelPeriod"
+            class="w-full"
+            (onChange)="updateSentinelMaps()"
+        ></p-selectButton>
+    </span>
+    <span>
+        <label for="vis-params-sant">Visualization Params</label>
+        <p-selectButton
+            id="vis-params-sant"
+            [options]="sentinelVisParams"
+            [(ngModel)]="selectedSentinelVisParam"
+            class="w-full"
+            (onChange)="updateSentinelMaps()"
+        ></p-selectButton>
+    </span>
+
+</div>
+<div class="map-grid mt-3">
+    <div *ngFor="let map of sentinelMaps" class="map-item">
+        <div [id]="map.id" class="map-container"></div>
+    </div>
+</div>
+<app-sentinel-timeseries *ngIf="lat && lon" [lat]="lat" [lon]="lon"></app-sentinel-timeseries>

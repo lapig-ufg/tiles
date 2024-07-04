@@ -1,0 +1,26 @@
+<h4 *ngIf="lat && lon" class="text-center card">Latitude: {{ lat | number }}, Longitude: {{ lon | number }}</h4>
+
+ <div class="flex justify-content-center align-content-center">
+    <label for="period-type-land">Period Type</label>
+    <p-selectButton
+        id="period-type-land"
+        [options]="landsatPeriods"
+        [(ngModel)]="selectedLandsatPeriod"
+        class="w-full"
+        (onChange)="updateLandsatMaps()"
+    ></p-selectButton>
+    <label for="vis-params-land">Visualization Params</label>
+    <p-selectButton
+        id="vis-params-land"
+        [options]="landsatVisParams"
+        [(ngModel)]="selectedLandsatVisParam"
+        class="w-full"
+        (onChange)="updateLandsatMaps()"
+    ></p-selectButton>
+</div>
+<div class="map-grid mt-3">
+    <div *ngFor="let map of landsatMaps" class="map-item">
+        <div [id]="map.id" class="map-container"></div>
+    </div>
+</div>
+<app-landsat-timeseries *ngIf="lat && lon" [lat]="lat" [lon]="lon"></app-landsat-timeseries>

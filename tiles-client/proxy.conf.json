@@ -1,0 +1,8 @@
+{
+  "/api": {
+    "target": "https://tiles.lapig.iesa.ufg.br",
+    "secure": false,
+    "changeOrigin": true,
+    "logLevel": "debug"
+  }
+}

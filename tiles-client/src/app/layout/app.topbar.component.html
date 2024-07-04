@@ -1,0 +1,25 @@
+<div class="layout-topbar">
+    <div class="topbar-start">
+        <button #menubutton type="button" class="topbar-menubutton p-link p-trigger" (click)="onMenuButtonClick()">
+            <i class="pi pi-bars"></i>
+        </button>
+<!--        <app-breadcrumb class="topbar-breadcrumb"></app-breadcrumb>-->
+    </div>
+
+    <div class="topbar-end">
+
+        <ul class="topbar-menu">
+              <app-geojson-upload class="mr-2"></app-geojson-upload>
+            <li class="topbar-search">
+                <span class="p-input-icon-left">
+                    <input type="text" pInputText placeholder="Latitude"  [(ngModel)]="latitude" class="w-12rem sm:w-full">
+                </span>
+                <span class="p-input-icon-left ml-2">
+                    <input type="text" pInputText placeholder="Longitude" [(ngModel)]="longitude" class="w-12rem sm:w-full">
+                </span>
+                <button pButton type="button" icon="pi pi-search" class="p-button-text p-button-secondary p-button-rounded flex-shrink-0 ml-3" [disabled]="!latitude && !longitude" (click)="onSearchPoint()"></button>
+
+            </li>
+        </ul>
+    </div>
+</div>
