@@ -55,9 +55,6 @@ testem.log
 Thumbs.db
 
 # Compiled files
-theme.css
-layout.css
 src/assets/demo/styles/badges.css
 src/assets/demo/styles/code.css
-src/assets/layout/styles/layout/preloading.css
 src/assets/layout/styles/theme/designer

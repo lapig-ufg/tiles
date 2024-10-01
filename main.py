@@ -7,7 +7,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from google.oauth2 import service_account
 import valkey
-
+from os import getenv
+from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings, logger, start_logger
 from app.database import Base, engine
 from app.router import created_routes
@@ -21,6 +22,32 @@ class ORJSONResponse(JSONResponse):
         return orjson.dumps(content)
 
 app = FastAPI(default_response_class=ORJSONResponse)
+
+# Obtém o caminho do diretório dos arquivos estáticos via variável de ambiente
+origin_regex = r"^https:\/\/(?:\w+\.)?lapig\.iesa\.ufg\.br$|^https:\/\/lapig-ufg\.github\.io$"
+
+# Função para obter as origens separadas por vírgula da variável de ambiente
+def get_origins_from_env():
+    origins = getenv('ALLOW_ORIGINS', '')
+    if not origins:
+        return []  # Retorna lista vazia se a variável de ambiente não estiver definida ou estiver vazia
+    return [origin.strip() for origin in origins.split(',') if origin]
+
+
+# Obtém as origens permitidas da variável de ambiente
+allow_origins = get_origins_from_env()
+
+# Configurações CORS com expressões regulares para subdomínios dinâmicos
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allow_origins,  # Lista de origens estáticas (deixe vazio se estiver usando regex)
+    allow_methods=["*"],  # Métodos permitidos
+    allow_headers=["*"],  # Cabeçalhos permitidos
+    allow_credentials=True,  # Permite o envio de cookies/credenciais
+    allow_origin_regex=origin_regex,
+    expose_headers=["X-Response-Time"],  # Cabeçalhos expostos
+    max_age=3600,  # Tempo máximo para cache da resposta preflight
+)
 
 @app.on_event("startup")
 async def startup_event():
