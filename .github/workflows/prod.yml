@@ -96,26 +96,31 @@ jobs:
         run: |
           /compose/resetapp.sh --title "Tile 1" \
           --container "app_tile_1" \
+          --file "tile-1" \
           --github "https://github.com/${{ github.repository }}" \
           --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
           ${{ needs.build.outputs.APPLICATION_NAME }}
           /compose/resetapp.sh --title "Tile 2" \
           --container "app_tile_2" \
+          --file "tile-2" \
           --github "https://github.com/${{ github.repository }}" \
           --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
           ${{ needs.build.outputs.APPLICATION_NAME }}
           /compose/resetapp.sh --title "Tile 3" \
+          --file "tile-3" \
           --container "app_tile_3" \
           --github "https://github.com/${{ github.repository }}" \
           --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
           ${{ needs.build.outputs.APPLICATION_NAME }}
           /compose/resetapp.sh --title "Tile 4" \
+          --file "tile-4" \
           --container "app_tile_4" \
           --github "https://github.com/${{ github.repository }}" \
           --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
           ${{ needs.build.outputs.APPLICATION_NAME }}
           /compose/resetapp.sh --title "Tile 5" \
-          --container "app_tile_4" \
+          --file "tile-5" \
+          --container "app_tile_5" \
           --github "https://github.com/${{ github.repository }}" \
           --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
           ${{ needs.build.outputs.APPLICATION_NAME }}
