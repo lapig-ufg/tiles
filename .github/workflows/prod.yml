@@ -1,0 +1,121 @@
+name: Build and Deploy in Server APP Tile
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+
+      APPLICATION_NAME: ${{ steps.creat_env.outputs.APPLICATION_NAME }}
+      DOCKER_PATH: ${{ steps.creat_env.outputs.DOCKER_PATH }}
+
+      START_TIME: ${{ steps.creat_env.outputs.START_TIME }}
+      LAST_COMMIT_HASH: ${{ steps.creat_env.outputs.LAST_COMMIT_HASH }}
+
+      LAPIG_AUTHOR_NAME: ${{ steps.creat_env.outputs.LAPIG_AUTHOR_NAME }}
+      LAPIG_AUTHOR_EMAIL: ${{ steps.creat_env.outputs.LAPIG_AUTHOR_EMAIL }}
+      LAPIG_AUTHOR_DATE: ${{ steps.creat_env.outputs.LAPIG_AUTHOR_DATE }}
+      LAPIG_PROJECT_NAME: ${{ steps.creat_env.outputs.LAPIG_PROJECT_NAME }}
+      LAPIG_COMMIT_DATE: ${{ steps.creat_env.outputs.LAPIG_COMMIT_DATE }}
+
+      CREATE_STATUS: ${{steps.deploy_container.outputs.CREATE_STATUS}}
+      DELETE_STATUS: ${{steps.delete_container.outputs.DELETE_STATUS}}
+      START_STATUS: ${{steps.start_container.outputs.START_STATUS}}
+
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+
+      - name: Define a variável application_name
+        id: creat_env
+        run: |
+          echo "START_TIME=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+          echo "DOCKER_PATH=prod" >> $GITHUB_ENV
+          echo "DOCKER_PATH=prod" >> $GITHUB_OUTPUT
+          repo_full_name=$GITHUB_REPOSITORY
+          repo_name=${repo_full_name##*/}
+          echo "Nome do repositório: $repo_name"
+
+          echo "application_name=app_tile" >> $GITHUB_ENV
+          echo "APPLICATION_NAME=app_tile" >> $GITHUB_OUTPUT
+
+          echo "LAST_COMMIT_HASH=$(git log --pretty=format:%h -n 1)" >> $GITHUB_ENV
+          
+          echo "LAST_COMMIT_HASH=$(git log --pretty=format:%h -n 1)" >> "$GITHUB_OUTPUT"
+          
+          echo "LAPIG_AUTHOR_NAME=$(git show -s --pretty=%an)" >> "$GITHUB_OUTPUT"
+          echo "LAPIG_AUTHOR_EMAIL=$(git show -s --pretty=%ae)" >> "$GITHUB_OUTPUT"
+          echo "LAPIG_AUTHOR_DATE=$(git log -1 --format=%cd --date=local)" >> "$GITHUB_OUTPUT"
+          echo "LAPIG_PROJECT_NAME=$repo_name" >> "$GITHUB_OUTPUT"
+          echo "LAPIG_COMMIT_DATE=$(git show -s --format=%ci)" >> "$GITHUB_OUTPUT"
+
+      - name: Create version.json
+        run: echo "{\"commitId\":\"$LAST_COMMIT_HASH\"}" > version.json
+
+      - name: Build Docker
+        run: |
+          docker build -t lapig/$application_name:${DOCKER_PATH}_${LAST_COMMIT_HASH} -t lapig/$application_name:${DOCKER_PATH}_latest  -f docker/$DOCKER_PATH/Dockerfile . --no-cache
+
+      - name: Login to Docker Registry
+        run: echo "${{ secrets.DOCKERHUB_PASS }}" | docker login -u "lapig" --password-stdin
+
+      - name: Push Image to Registry
+        run: |
+          docker push lapig/$application_name:${DOCKER_PATH}_${LAST_COMMIT_HASH}
+          docker push lapig/$application_name:${DOCKER_PATH}_latest
+
+      - name: Remove image locally
+        run: |
+          docker rmi lapig/$application_name:${DOCKER_PATH}_${LAST_COMMIT_HASH}
+          docker rmi lapig/$application_name:${DOCKER_PATH}_latest
+
+  deploy:
+    needs: build
+    runs-on: self-hosted
+
+    steps:
+      - name: Load env
+        run: |
+          echo "application_name=${{needs.build.outputs.APPLICATION_NAME}}" >> $GITHUB_ENV
+          echo "DOCKER_PATH=${{needs.build.outputs.DOCKER_PATH}}" >> $GITHUB_ENV
+
+      - name: Pull Image on Server
+        run: |
+          docker pull lapig/$application_name:${DOCKER_PATH}_latest
+          docker pull redis:7
+
+      - name: Delete Container
+        id: delete_container
+        
+        run: |
+          /compose/resetapp.sh --title "Tile 1" \
+          --container "app_tile_1" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Tile 2" \
+          --container "app_tile_2" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Tile 3" \
+          --container "app_tile_3" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Tile 4" \
+          --container "app_tile_4" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Tile 5" \
+          --container "app_tile_4" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
