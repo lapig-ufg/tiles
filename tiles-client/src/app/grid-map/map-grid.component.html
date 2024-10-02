@@ -1,7 +1,7 @@
 <h4 *ngIf="lat && lon" class="text-center card">Latitude: {{ lat | number }}, Longitude: {{ lon | number }}</h4>
 
-<div class="flex justify-content-evenly align-content-center">
-    <span>
+<div class="flex justify-content-evenly">
+    <span class="flex flex-column align-items-center">
         <label for="period-type-sant">Period Type</label>
         <p-selectButton
             id="period-type-sant"
@@ -11,7 +11,17 @@
             (onChange)="updateSentinelMaps()"
         ></p-selectButton>
     </span>
-    <span>
+    <span class="flex flex-column align-items-center">
+        <label for="year-select-sant">Year</label>
+        <p-dropdown
+            class="w-full"
+            id="year-select-sant"
+            [options]="sentinelYears"
+            [(ngModel)]="selectedSentinelYear"
+            (onChange)="updateSentinelMaps()"
+        ></p-dropdown>
+    </span>
+    <span class="flex flex-column align-items-center">
         <label for="vis-params-sant">Visualization Params</label>
         <p-selectButton
             id="vis-params-sant"

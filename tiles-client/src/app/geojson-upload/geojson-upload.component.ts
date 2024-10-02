@@ -18,7 +18,6 @@ export class GeojsonUploadComponent {
 
     onFileSelect(event: any) {
         const file = event.files[0];
-        console.log(file)
         const reader = new FileReader();
         reader.onload = () => {
             try {

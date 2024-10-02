@@ -1,14 +1,20 @@
-import { Component, OnInit } from '@angular/core';
+import {Component, OnInit} from '@angular/core';
 import Map from 'ol/Map';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/Tile';
 import XYZ from 'ol/source/XYZ';
-import { fromLonLat, toLonLat } from 'ol/proj';
-import { LayerService } from "./services/layer.service";
-import { defaults as defaultInteractions } from 'ol/interaction';
+import {fromLonLat, toLonLat, transform} from 'ol/proj';
+import {LayerService} from "./services/layer.service";
+import {defaults as defaultInteractions} from 'ol/interaction';
 import Pointer from 'ol/interaction/Pointer';
-import { PointService } from './services/point.service';
+import {PointService} from './services/point.service';
 import {MonthMapItem, PeriodMapItem} from "../interfaces/map.interface";
+import VectorLayer from "ol/layer/Vector";
+import VectorSource from "ol/source/Vector";
+import {Icon, Style} from "ol/style";
+import {Point} from "ol/geom";
+import {Feature} from "ol";
+import {marker} from "../../assets/layout/images/marker";
 
 const currentYear = new Date().getFullYear();
 const currentMonth = new Date().getMonth() + 1;
@@ -19,14 +25,14 @@ const CAPABILITIES = {
             "name": "s2_harmonized",
             "visparam": ["tvi-green", "tvi-red", "tvi-rgb"],
             "period": ["WET", "DRY", "MONTH"],
-            "year": Array.from({ length: currentYear - 2019 + 1 }, (_, i) => 2019 + i),
+            "year": Array.from({length: currentYear - 2019 + 1}, (_, i) => 2019 + i),
             "month": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
         },
         {
             "name": "landsat",
             "visparam": ["landsat-tvi-false", "landsat-tvi-true", "landsat-tvi-agri"],
             "period": ["WET", "DRY", "MONTH"],
-            "year": Array.from({ length: currentYear - 1985 + 1 }, (_, i) => 1985 + i),
+            "year": Array.from({length: currentYear - 1985 + 1}, (_, i) => 1985 + i),
             "month": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
         }
     ]
@@ -44,6 +50,8 @@ export class MapGridComponent implements OnInit {
     private mapsInstances: { id: string, map: Map }[] = [];
     public lat: number | null = null;
     public lon: number | null = null;
+    public sentinelYears: number[] = [];
+    public selectedSentinelYear: number = currentYear;
 
     public sentinelPeriods = ["WET", "DRY", "MONTH"];
     public landsatPeriods = ["WET", "DRY", "MONTH"];
@@ -54,7 +62,8 @@ export class MapGridComponent implements OnInit {
     public selectedSentinelVisParam = this.sentinelVisParams[0];
     public selectedLandsatVisParam = this.landsatVisParams[0];
 
-    constructor(private layerService: LayerService, public pointService: PointService) {}
+    constructor(public pointService: PointService) {
+    }
 
     ngOnInit(): void {
         this.initializeMaps();
@@ -68,6 +77,33 @@ export class MapGridComponent implements OnInit {
                 }
             }
         });
+        const sentinelCapabilities = CAPABILITIES.collections.find(c => c.name === 's2_harmonized');
+        if (sentinelCapabilities) {
+            this.sentinelYears = sentinelCapabilities.year;
+        }
+    }
+
+    private addMarker(lat: number, lon: number, map: Map): void {
+        const iconFeature = new Feature({
+            geometry: new Point(fromLonLat([lon, lat])),
+        });
+        const iconStyle = new Style({
+            image: new Icon({
+                anchor: [0.5, 0.5],
+                src: marker,
+                scale: 1,
+            }),
+        });
+
+        iconFeature.setStyle(iconStyle);
+
+        const vectorSource = new VectorSource({
+            features: [iconFeature],
+        });
+        const vectorLayer = new VectorLayer({
+            source: vectorSource,
+        });
+        map.addLayer(vectorLayer)
     }
 
     private initializeMaps(): void {
@@ -81,11 +117,12 @@ export class MapGridComponent implements OnInit {
         } else {
             this.landsatMaps = [];
         }
-
         const capabilities = CAPABILITIES.collections.find(c => c.name === (type === 'sentinel' ? 's2_harmonized' : 'landsat'));
-
         if (capabilities) {
             for (let year of capabilities.year) {
+                if (year !== this.selectedSentinelYear) {
+                    continue;
+                }
                 if (selectedPeriod === 'MONTH') {
                     for (let month of capabilities.month) {
                         if (year === currentYear && parseInt(month, 10) > currentMonth) {
@@ -105,15 +142,15 @@ export class MapGridComponent implements OnInit {
     private addMap(type: 'sentinel' | 'landsat', mapId: string, periodOrMonth: string, year: number, visparam: string, month?: string): void {
         if (type === 'sentinel') {
             if (periodOrMonth === 'MONTH') {
-                this.sentinelMaps.push({ month: month as string, year, id: mapId });
+                this.sentinelMaps.push({month: month as string, year, id: mapId});
             } else {
-                this.sentinelMaps.push({ period: periodOrMonth, year, id: mapId });
+                this.sentinelMaps.push({period: periodOrMonth, year, id: mapId});
             }
         } else {
             if (periodOrMonth === 'MONTH') {
-                this.landsatMaps.push({ month: month as string, year, id: mapId });
+                this.landsatMaps.push({month: month as string, year, id: mapId});
             } else {
-                this.landsatMaps.push({ period: periodOrMonth, year, id: mapId });
+                this.landsatMaps.push({period: periodOrMonth, year, id: mapId});
             }
         }
         this.createMap(mapId, periodOrMonth, year, type, visparam, month);
@@ -122,7 +159,6 @@ export class MapGridComponent implements OnInit {
     private createMap(mapId: string, periodOrMonth: string, year: number, type: string, visparam: string, month?: string): void {
         setTimeout(() => {
             const url = `https://tm{1-5}.lapig.iesa.ufg.br/api/layers/${type === 'sentinel' ? 's2_harmonized' : 'landsat'}/{x}/{y}/{z}?period=${periodOrMonth}&year=${year}&visparam=${visparam}${periodOrMonth === 'MONTH' ? `&month=${month}` : ''}`;
-            console.log('url', url)
             const map = new Map({
                 target: mapId,
                 layers: [
@@ -142,14 +178,17 @@ export class MapGridComponent implements OnInit {
                     new Pointer({
                         handleDownEvent: (event) => {
                             const coordinates = toLonLat(event.coordinate) as [number, number];
+                            console.log(coordinates)
                             this.updateCenterCoordinates(coordinates);
-                            return true; // stop event propagation
+                            return true;
                         }
                     })
                 ])
             });
+            const projectedCoordinate = transform(this.centerCoordinates, 'EPSG:3857', 'EPSG:4326');
+            this.addMarker(projectedCoordinate[1], projectedCoordinate[0], map);
 
-            this.mapsInstances.push({ id: mapId, map });
+            this.mapsInstances.push({id: mapId, map});
         }, 0);
     }
 
@@ -162,16 +201,13 @@ export class MapGridComponent implements OnInit {
         for (let mapInstance of this.mapsInstances) {
             const view = mapInstance.map.getView();
             view.setCenter(this.centerCoordinates);
+            const projectedCoordinate = transform(this.centerCoordinates, 'EPSG:3857', 'EPSG:4326');
+            this.addMarker(projectedCoordinate[1], projectedCoordinate[0], mapInstance.map);
         }
     }
 
     public updateSentinelMaps(): void {
         this.mapsInstances = this.mapsInstances.filter(mapInstance => !mapInstance.id.startsWith('sentinel-map'));
         this.createMaps('sentinel', this.selectedSentinelPeriod, this.selectedSentinelVisParam);
-    }
-
-    public updateLandsatMaps(): void {
-        this.mapsInstances = this.mapsInstances.filter(mapInstance => !mapInstance.id.startsWith('landsat-map'));
-        this.createMaps('landsat', this.selectedLandsatPeriod, this.selectedLandsatVisParam);
     }
 }
