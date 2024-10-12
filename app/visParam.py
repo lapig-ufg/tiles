@@ -54,7 +54,7 @@ VISPARAMS = {
         "visparam": {
             'LANDSAT/LT05/C02/T1_L2': {'bands': ['SR_B4', 'SR_B5', 'SR_B3'], 'min': [0.05, 0.05, 0.03],
                                        'max': [0.6, 0.55, 0.3], 'gamma': [1.2]},
-            'LANDSAT/LE07/C02/T1_L2': {'bands': ['SR_B5', 'SR_B4', 'SR_B3'], 'min': [0.05, 0.05, 0.03],
+            'LANDSAT/LE07/C02/T1_L2': {'bands': ['SR_B4', 'SR_B5', 'SR_B3'], 'min': [0.05, 0.05, 0.03],
                                        'max': [0.6, 0.55, 0.3], 'gamma': [1.2]},
             'LANDSAT/LC08/C02/T1_L2': {'bands': ['SR_B5', 'SR_B6', 'SR_B4'], 'min': [0.05, 0.05, 0.03],
                                        'max': [0.6, 0.55, 0.3], 'gamma': [1.2]},
