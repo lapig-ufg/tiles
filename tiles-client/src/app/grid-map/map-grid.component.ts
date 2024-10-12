@@ -50,8 +50,8 @@ export class MapGridComponent implements OnInit {
     private mapsInstances: { id: string, map: Map }[] = [];
     public lat: number | null = null;
     public lon: number | null = null;
-    public sentinelYears: number[] = [];
-    public selectedSentinelYear: number = currentYear;
+    public sentinelYears: any[] = [];
+    public selectedSentinelYear: number | string = currentYear;
 
     public sentinelPeriods = ["WET", "DRY", "MONTH"];
     public landsatPeriods = ["WET", "DRY", "MONTH"];
@@ -81,6 +81,7 @@ export class MapGridComponent implements OnInit {
         if (sentinelCapabilities) {
             this.sentinelYears = sentinelCapabilities.year;
         }
+        this.sentinelYears.unshift('Todos')
     }
 
     private addMarker(lat: number, lon: number, map: Map): void {
@@ -120,7 +121,7 @@ export class MapGridComponent implements OnInit {
         const capabilities = CAPABILITIES.collections.find(c => c.name === (type === 'sentinel' ? 's2_harmonized' : 'landsat'));
         if (capabilities) {
             for (let year of capabilities.year) {
-                if (year !== this.selectedSentinelYear) {
+                if (this.selectedSentinelYear != 'Todos' && year !== this.selectedSentinelYear) {
                     continue;
                 }
                 if (selectedPeriod === 'MONTH') {
@@ -139,7 +140,11 @@ export class MapGridComponent implements OnInit {
         }
     }
 
-    private addMap(type: 'sentinel' | 'landsat', mapId: string, periodOrMonth: string, year: number, visparam: string, month?: string): void {
+    private addMap(type: 'sentinel' | 'landsat', mapId: string, periodOrMonth: string, _year: number | string, visparam: string, month?: string): void {
+        if (_year == 'Todos') {
+            return;
+        }
+        const year = Number(_year);
         if (type === 'sentinel') {
             if (periodOrMonth === 'MONTH') {
                 this.sentinelMaps.push({month: month as string, year, id: mapId});
@@ -159,6 +164,7 @@ export class MapGridComponent implements OnInit {
     private createMap(mapId: string, periodOrMonth: string, year: number, type: string, visparam: string, month?: string): void {
         setTimeout(() => {
             const url = `https://tm{1-5}.lapig.iesa.ufg.br/api/layers/${type === 'sentinel' ? 's2_harmonized' : 'landsat'}/{x}/{y}/{z}?period=${periodOrMonth}&year=${year}&visparam=${visparam}${periodOrMonth === 'MONTH' ? `&month=${month}` : ''}`;
+            // const url = `http://127.0.0.1:8000/api/layers/${type === 'sentinel' ? 's2_harmonized' : 'landsat'}/{x}/{y}/{z}?period=${periodOrMonth}&year=${year}&visparam=${visparam}${periodOrMonth === 'MONTH' ? `&month=${month}` : ''}`;
             const map = new Map({
                 target: mapId,
                 layers: [

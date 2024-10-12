@@ -50,8 +50,8 @@ export class MapGridLandsatComponent implements OnInit {
     public lat: number | null = null;
     public lon: number | null = null;
 
-    public landsatYears: number[] = [];
-    public selectedLandsatYear: number = currentYear;
+    public landsatYears: any[] = [];
+    public selectedLandsatYear: number | string = currentYear;
 
     public sentinelPeriods = ["WET", "DRY", "MONTH"];
     public landsatPeriods = ["WET", "DRY", "MONTH"];
@@ -80,6 +80,7 @@ export class MapGridLandsatComponent implements OnInit {
         if (landsatCapabilities) {
             this.landsatYears = landsatCapabilities.year;
         }
+        this.landsatYears.unshift('Todos')
     }
     private addMarker(lat: number, lon: number, map: Map): void {
         const iconFeature = new Feature({
@@ -119,7 +120,7 @@ export class MapGridLandsatComponent implements OnInit {
 
         if (capabilities) {
             for (let year of capabilities.year) {
-                if (year !== this.selectedLandsatYear) {
+                if (this.selectedLandsatYear != 'Todos' && year !== this.selectedLandsatYear) {
                     continue;
                 }
                 if (selectedPeriod === 'MONTH') {
@@ -138,7 +139,11 @@ export class MapGridLandsatComponent implements OnInit {
         }
     }
 
-    private addMap(type: 'sentinel' | 'landsat', mapId: string, periodOrMonth: string, year: number, visparam: string, month?: string): void {
+    private addMap(type: 'sentinel' | 'landsat', mapId: string, periodOrMonth: string,  _year: number | string, visparam: string, month?: string): void {
+          if (_year == 'Todos') {
+            return;
+        }
+        const year = Number(_year);
         if (type === 'sentinel') {
             if (periodOrMonth === 'MONTH') {
                 this.sentinelMaps.push({ month: month as string, year, id: mapId });
