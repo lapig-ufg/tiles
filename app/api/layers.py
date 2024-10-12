@@ -47,7 +47,6 @@ async def get_s2_harmonized(
     month: int = int(datetime.now().month),
     
 ):
-    logger.info(f'period {period}, year {year}, month {month}')
     metadata = list(filter(lambda x: x['name'] == 's2_harmonized', CAPABILITIES['collections']))[0]
     
     if not year in metadata['year']:
@@ -71,7 +70,7 @@ async def get_s2_harmonized(
             "dtStart": f"{year}-{month:02}-01",
             "dtEnd": f"{year}-{month:02}-{last_day:02}"
         }
-
+    logger.info(f'month: {month}')
     if not (9 < z < 19):
         logger.debug('zoom ')
         return FileResponse('data/maxminzoom.png', media_type="image/png")
@@ -92,8 +91,7 @@ async def get_s2_harmonized(
 
     logger.info(f'period {period}, year {year}, month {month}, period_select {period_select}')
     _geohash, bbox = tile2goehashBBOX(x, y, z)
-    path_cache = f's2_harmonized_{period_select["name"]}_{year}_{visparam}/{_geohash}'
-
+    path_cache = f's2_harmonized_{period_select["name"]}_{year}_{month}_{visparam}/{_geohash}'
     file_cache = f"{path_cache}/{z}/{x}_{y}.png"
 
     binary_data = request.app.state.valkey.get(file_cache)
@@ -110,17 +108,17 @@ async def get_s2_harmonized(
         
     ):
         try:
-            logger.debug(f"New url: {path_cache}")
+            # logger.debug(f"New url: {path_cache}")
             geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
-            s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
-            s2 = s2.filterDate(
-                period_select["dtStart"], period_select["dtEnd"]
-            ).filterBounds(geom)
-            s2 = s2.sort("CLOUDY_PIXEL_PERCENTAGE", False)
-            s2 = s2.select(*_visparam["select"])
+            logger.info(f'range date: {period_select["dtStart"]}, {period_select["dtEnd"]}')
+            s2 = (ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
+                  .filterDate(period_select["dtStart"], period_select["dtEnd"])
+                  .filterBounds(geom)
+                  .sort("CLOUDY_PIXEL_PERCENTAGE", False)
+                  .select(*_visparam["select"]))
             best_image = s2.mosaic()
-            
-            logger.debug(f'{_visparam["select"]} | {_visparam["visparam"]}')
+
+            # logger.debug(f'{_visparam["select"]} | {_visparam["visparam"]}')
             
             map_id = ee.data.getMapId({"image": best_image, **_visparam["visparam"]})
             layer_url = map_id["tile_fetcher"].url_format
@@ -220,18 +218,16 @@ async def get_landsat(
             geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
 
             period_year = datetime.strptime(period_select["dtStart"], "%Y-%m-%d").year
-            if 1983 <= period_year <= 1993:
-                collection_name = 'LANDSAT/LT04/C02/T1_L2'
-            elif 1984 <= period_year <= 2012:
-                collection_name = 'LANDSAT/LT05/C02/T1_L2'
+            if 1984 <= period_year <= 2012:
+                collection_name = 'LANDSAT/LT05/C02/T1_L2'  # Landsat 5
             elif 1999 <= period_year <= 2022:
-                collection_name = 'LANDSAT/LE07/C02/T1_L2'
+                collection_name = 'LANDSAT/LE07/C02/T1_L2'  # Landsat 7
             elif 2013 <= period_year <= 2022:
-                collection_name = 'LANDSAT/LC08/C02/T1_L2'
+                collection_name = 'LANDSAT/LC08/C02/T1_L2'  # Landsat 8
             elif period_year >= 2022:
-                collection_name = 'LANDSAT/LC09/C02/T1_L2'
+                collection_name = 'LANDSAT/LC09/C02/T1_L2'  # Landsat 9
             else:
-                raise ValueError("No valid Landsat collection for the provided date range")
+                raise ValueError("No valid Landsat collection (Landsat 5 onwards) for the provided date range")
 
             vis_params = get_landsat_vis_params(visparam, collection_name)
 
