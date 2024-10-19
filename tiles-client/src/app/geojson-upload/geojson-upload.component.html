@@ -1,4 +1,4 @@
-<div class="flex align-content-center justify-content-center">
+<div class="flex align-content-center justify-content-center align-items-center">
     <p-fileUpload
         class="mt-2"
         mode="basic"
@@ -9,7 +9,24 @@
         (onSelect)="onFileSelect($event)"
         chooseLabel="GeoJSON">
     </p-fileUpload>
-
+    <div *ngIf="features && features.length" class="p-inputgroup ml-3 mr-3 w-3 h-3">
+        <p-inputNumber
+            [(ngModel)]="inputPage"
+            [min]="1"
+            [max]="totalPages"
+            mode="decimal"
+            [showButtons]="true"
+            [step]="1"
+            placeholder="Digite a página">
+        </p-inputNumber>
+        <span class="p-inputgroup-addon">
+            <p-button
+                icon="pi pi-search"
+                class="p-button-info"
+                (onClick)="goToPage()">
+            </p-button>
+        </span>
+    </div>
     <div *ngIf="features && features.length">
         <p-paginator
             (onPageChange)="onPageChange($event)"

@@ -14,6 +14,8 @@ import {FormsModule} from "@angular/forms";
 import {SelectButtonModule} from "primeng/selectbutton";
 import {MapGridLandsatComponent} from "./map-grid-landsat/map-grid-landsat.component";
 import {DropdownModule} from "primeng/dropdown";
+import {TableModule} from "primeng/table";
+import {PanelModule} from "primeng/panel";
 
 PlotlyModule.plotlyjs = PlotlyJS;
 @NgModule({
@@ -28,7 +30,9 @@ PlotlyModule.plotlyjs = PlotlyJS;
         TabViewModule,
         FormsModule,
         SelectButtonModule,
-        DropdownModule
+        DropdownModule,
+        TableModule,
+        PanelModule
     ],
     declarations: [
         HomeComponent,

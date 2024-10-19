@@ -1,6 +1,7 @@
 import { Component, ElementRef, ViewChild } from '@angular/core';
 import { LayoutService } from 'src/app/layout/service/app.layout.service';
 import {PointService} from "../grid-map/services/point.service";
+import {Observable} from "rxjs";
 
 @Component({
     selector: 'app-topbar',
@@ -9,6 +10,7 @@ import {PointService} from "../grid-map/services/point.service";
 export class AppTopbarComponent {
     latitude!:number;
     longitude!:number;
+    public pointInfo$: Observable<any> = this.pointService.pointInfo$;
 
     @ViewChild('menubutton') menuButton!: ElementRef;
 

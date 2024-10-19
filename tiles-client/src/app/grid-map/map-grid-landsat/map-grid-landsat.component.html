@@ -1,4 +1,24 @@
-<h4 *ngIf="lat && lon" class="text-center card">Latitude: {{ lat | number }}, Longitude: {{ lon | number }}</h4>
+<h5 *ngIf="lat && lon" class="text-center m-5">Latitude: {{ lat | number }}, Longitude: {{ lon | number }}</h5>
+<ng-container class="w-5" *ngIf="pointInfo$ | async as pointInfo">
+    <p-panel header="Point Info" [toggleable]="true" [collapsed]="true">
+        <div class="card ">
+            <p-table [value]="getObjectKeys(pointInfo)">
+                <ng-template pTemplate="header">
+                    <tr>
+                        <th>Key</th>
+                        <th>Value</th>
+                    </tr>
+                </ng-template>
+                <ng-template pTemplate="body" let-key>
+                    <tr>
+                        <td>{{ key }}</td>
+                        <td>{{ pointInfo[key] }}</td>
+                    </tr>
+                </ng-template>
+            </p-table>
+        </div>
+    </p-panel>
+</ng-container>
 <div class="flex justify-content-evenly">
     <span class="flex flex-column align-items-center">
         <label for="period-type-land">Period Type</label>
@@ -10,7 +30,17 @@
             (onChange)="updateLandsatMaps()"
         ></p-selectButton>
     </span>
-        <span class="flex flex-column align-items-center">
+    <span class="flex flex-column align-items-center">
+        <label for="year-type">Year Type</label>
+        <p-selectButton
+            id="year-type"
+            [options]="yearTypes"
+            [(ngModel)]="selectedYearType"
+            class="w-full"
+            (onChange)="updateLandsatMaps()"
+        ></p-selectButton>
+    </span>
+    <span class="flex flex-column align-items-center">
         <label for="year-select-sant">Year</label>
         <p-dropdown
             class="w-full"

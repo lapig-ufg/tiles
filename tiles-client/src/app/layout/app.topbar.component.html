@@ -7,19 +7,25 @@
     </div>
 
     <div class="topbar-end">
-
         <ul class="topbar-menu">
-              <app-geojson-upload class="mr-2"></app-geojson-upload>
-            <li class="topbar-search">
+            <app-geojson-upload class="mr-2"></app-geojson-upload>
+           <ng-container *ngIf="pointInfo$ | async as pointInfo; else searchForm">
+              <!-- Your content when pointInfo is not null -->
+            </ng-container>
+
+            <ng-template #searchForm>
+              <li class="topbar-search">
                 <span class="p-input-icon-left">
-                    <input type="text" pInputText placeholder="Latitude"  [(ngModel)]="latitude" class="w-12rem sm:w-full">
+                  <input type="text" pInputText placeholder="Latitude" [(ngModel)]="latitude" class="w-12rem sm:w-full">
                 </span>
                 <span class="p-input-icon-left ml-2">
-                    <input type="text" pInputText placeholder="Longitude" [(ngModel)]="longitude" class="w-12rem sm:w-full">
+                  <input type="text" pInputText placeholder="Longitude" [(ngModel)]="longitude" class="w-12rem sm:w-full">
                 </span>
-                <button pButton type="button" icon="pi pi-search" class="p-button-text p-button-secondary p-button-rounded flex-shrink-0 ml-3" [disabled]="!latitude && !longitude" (click)="onSearchPoint()"></button>
-
-            </li>
+                <button pButton type="button" icon="pi pi-search" class="p-button-text p-button-secondary p-button-rounded flex-shrink-0 ml-3"
+                        [disabled]="!latitude && !longitude" (click)="onSearchPoint()">
+                </button>
+              </li>
+            </ng-template>
         </ul>
     </div>
 </div>
