@@ -30,20 +30,26 @@ def timeseries_landsat(
             cloud_shadow = qa.bitwiseAnd(1 << 3).eq(0)
             return image.updateMask(cloud).updateMask(cloud_shadow)
 
+        def apply_scale(image):
+            optical_bands = image.select(['RED', 'NIR']) \
+                .multiply(0.0000275) \
+                .add(-0.2)
+            return image.addBands(optical_bands, None, True)
+
         def calculate_ndvi(image):
             ndvi = image.normalizedDifference(['NIR', 'RED']).rename('NDVI')
             return image.addBands(ndvi)
 
         l4 = ee.ImageCollection('LANDSAT/LT04/C02/T1_L2').select(['SR_B3', 'SR_B4', 'QA_PIXEL'],
-                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask)
+                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask).map(apply_scale)
         l5 = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2').select(['SR_B3', 'SR_B4', 'QA_PIXEL'],
-                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask)
+                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask).map(apply_scale)
         l7 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2').select(['SR_B3', 'SR_B4', 'QA_PIXEL'],
-                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask)
+                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask).map(apply_scale)
         l8 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2').select(['SR_B4', 'SR_B5', 'QA_PIXEL'],
-                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask)
+                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask).map(apply_scale)
         l9 = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2').select(['SR_B4', 'SR_B5', 'QA_PIXEL'],
-                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask)
+                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask).map(apply_scale)
 
         collections = l4.merge(l5).merge(l7).merge(l8).merge(l9).filterBounds(point).filterDate(data_inicio,
                                                                                                 data_fim).map(
