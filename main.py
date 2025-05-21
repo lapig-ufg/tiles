@@ -12,6 +12,7 @@ from app.config import settings, logger, start_logger
 from app.database import Base, engine
 from app.router import created_routes
 from app.utils.cors import origin_regex, allow_origins
+from app.cache import close_cache
 
 Base.metadata.create_all(bind=engine)
 
@@ -51,11 +52,10 @@ async def startup_event():
     except Exception as e:
         raise HTTPException(status_code=500, detail="Failed to initialize GEE")
     
-    app.state.valkey = valkey.Valkey(host='valkey', port=6379)
-    
+
 @app.on_event("shutdown")
 async def shutdown_event():
-    app.state.valkey.close()
+    close_cache()
 
 @app.get("/")
 def read_root():
