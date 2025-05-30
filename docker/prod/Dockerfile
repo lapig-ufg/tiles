@@ -13,4 +13,7 @@ COPY . .
 RUN apt-get update && apt-get install --no-install-recommends -y curl build-essential git nano && \
     uv pip install --system --no-cache-dir -r requirements.txt
 
+ENTRYPOINT ["newrelic-admin", "run-program"]
+
+
 
