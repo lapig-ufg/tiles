@@ -2,7 +2,8 @@ FROM python:3.12-slim-bookworm
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
 
-ENV TILES_ENV='production'
+ENV TILES_ENV=production
+ENV NEW_RELIC_CONFIG_FILE=newrelic.ini
     
 LABEL maintainer="Jario Matos da Rocha <jairo@jairomr.com.br>"
 
