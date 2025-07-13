@@ -1,3 +1,20 @@
 [default]
 GEE_SERVICE_ACCOUNT_FILE='/app/.service-accounts/gee.json'
-LIFESPAN_URL =  1
+LIFESPAN_URL = 24  # Aumentado para 24 horas
+
+# Cache híbrido
+REDIS_URL = 'redis://valkey:6379'
+S3_ENDPOINT = 'http://minio:9000'
+S3_ACCESS_KEY = 'minioadmin'
+S3_SECRET_KEY = 'minioadmin'
+S3_BUCKET = 'tiles-cache'
+
+# Performance
+WORKERS = 20  # Ajustar baseado em CPUs disponíveis
+WORKER_CONNECTIONS = 2000
+MAX_REQUESTS = 20000
+MAX_REQUESTS_JITTER = 1000
+
+# Rate limiting
+RATE_LIMIT_PER_MINUTE = 1000  # Por IP
+RATE_LIMIT_BURST = 100

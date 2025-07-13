@@ -23,8 +23,8 @@ from app.tile import tile2goehashBBOX
 from app.visParam import VISPARAMS, get_landsat_vis_params
 from app.errors import generate_error_image
 from app.cache import (
-    get_png,  set_png,          # bytes (tile)
-    get_meta, set_meta          # {"url": str, "date": iso}
+    aget_png as get_png,  aset_png as set_png,          # bytes (tile)
+    aget_meta as get_meta, aset_meta as set_meta          # {"url": str, "date": iso}
 )
 
 # --------------------------------------------------------------------------- #
@@ -36,7 +36,7 @@ class Period(str, Enum):
     DRY   = "DRY"
     MONTH = "MONTH"
 
-MIN_ZOOM, MAX_ZOOM = 10, 18                     # 9 < z < 19
+MIN_ZOOM, MAX_ZOOM = 6, 18                     # Permitir zoom de 6 a 18
 
 router = APIRouter()
 
@@ -71,8 +71,8 @@ def _build_periods(period: str | Period, year: int, month: int) -> Dict[str, str
 
 def _check_zoom(z: int):
     if not (MIN_ZOOM <= z <= MAX_ZOOM):
-        logger.debug("zoom fora do intervalo")
-        raise HTTPException(400, "Zoom deve estar entre 10-18")
+        logger.debug(f"zoom {z} fora do intervalo [{MIN_ZOOM}, {MAX_ZOOM}]")
+        raise HTTPException(400, f"Zoom deve estar entre {MIN_ZOOM}-{MAX_ZOOM}")
 
 
 def _check_capability(name: str, year: int, period: str, visparam: str):
@@ -165,12 +165,12 @@ async def _serve_tile(layer: str,
     file_cache = f"{path_cache}/{z}/{x}_{y}.png"
 
     # 1 ▸ PNG já cacheado?
-    png_bytes = get_png(file_cache)
+    png_bytes = await get_png(file_cache)
     if png_bytes:
         return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
 
     # 2 ▸ URL EE: meta cache + TTL
-    meta      = get_meta(path_cache)
+    meta      = await get_meta(path_cache)
     expired   = (
         meta is None or
         (datetime.now() - datetime.fromisoformat(meta["date"])).total_seconds()/3600
@@ -180,7 +180,7 @@ async def _serve_tile(layer: str,
         geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
         try:
             layer_url = builder(geom, dates, visparam if layer == "landsat" else vis)
-            set_meta(path_cache, {"url": layer_url, "date": datetime.now().isoformat()})
+            await set_meta(path_cache, {"url": layer_url, "date": datetime.now().isoformat()})
         except Exception as e:                           # noqa: BLE001
             logger.exception("Erro criar layer EE")
             return FileResponse("data/blank.png", media_type="image/png")
@@ -190,7 +190,7 @@ async def _serve_tile(layer: str,
     # 3 ▸ Faz download do tile remoto
     try:
         png_bytes = await _http_get_bytes(layer_url.format(x=x, y=y, z=z))
-        set_png(file_cache, png_bytes)
+        await set_png(file_cache, png_bytes)
         return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
     except HTTPException as exc:
         logger.exception("Erro ao baixar tile")
@@ -208,9 +208,26 @@ async def s2_harmonized(x: int, y: int, z: int,
                         year: int = datetime.now().year,
                         month: int = datetime.now().month,
                         visparam: str = "tvi-red"):
-    return await _serve_tile("s2_harmonized", x, y, z,
-                             period.value, year, month,
-                             visparam, _create_s2_layer)
+    try:
+        return await _serve_tile("s2_harmonized", x, y, z,
+                                 period.value, year, month,
+                                 visparam, _create_s2_layer)
+    except HTTPException as exc:
+        logger.error(f"Erro no tile s2_harmonized/{x}/{y}/{z}: {exc.detail}")
+        error_img = generate_error_image(str(exc.detail))
+        return StreamingResponse(
+            error_img,
+            media_type="image/png",
+            headers={"X-Error": str(exc.detail)}
+        )
+    except Exception as exc:
+        logger.exception(f"Erro inesperado no tile s2_harmonized/{x}/{y}/{z}")
+        error_img = generate_error_image("Erro interno do servidor")
+        return StreamingResponse(
+            error_img,
+            media_type="image/png",
+            headers={"X-Error": "Internal Server Error"}
+        )
 
 
 @router.get("/landsat/{x}/{y}/{z}")
@@ -220,6 +237,23 @@ async def landsat(x: int, y: int, z: int,
                   year: int = datetime.now().year,
                   month: int = datetime.now().month,
                   visparam: str = "landsat-tvi-false"):
-    return await _serve_tile("landsat", x, y, z,
-                             period, year, month,
-                             visparam, _create_landsat_layer)
+    try:
+        return await _serve_tile("landsat", x, y, z,
+                                 period, year, month,
+                                 visparam, _create_landsat_layer)
+    except HTTPException as exc:
+        logger.error(f"Erro no tile landsat/{x}/{y}/{z}: {exc.detail}")
+        error_img = generate_error_image(str(exc.detail))
+        return StreamingResponse(
+            error_img,
+            media_type="image/png",
+            headers={"X-Error": str(exc.detail)}
+        )
+    except Exception as exc:
+        logger.exception(f"Erro inesperado no tile landsat/{x}/{y}/{z}")
+        error_img = generate_error_image("Erro interno do servidor")
+        return StreamingResponse(
+            error_img,
+            media_type="image/png",
+            headers={"X-Error": "Internal Server Error"}
+        )

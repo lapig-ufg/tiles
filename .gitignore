@@ -129,7 +129,36 @@ dmypy.json
 # Pyre type checker
 .pyre/
 .credentials
-.service-accounts
+.service-accounts/*.json
+!.service-accounts/*.example
+!.service-accounts/README.md
 *.iml
 .secrets.toml
 site
+.env
+.env.*
+!.env.example
+tiles.env
+
+# MinIO/S3 data
+minio-data/
+tiles-cache/
+
+# Node modules (tiles-client)
+tiles-client/node_modules/
+tiles-client/dist/
+tiles-client/.angular/
+app/.service-accounts/gee.json
+
+# UV
+.uv/
+
+# Temporary files
+*.tmp
+*.bak
+*.old
+*.orig
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -15,7 +15,12 @@ def latlon_to_tile(lat, lon, zoom):
 
 
 def get_brazil_tile_bounds(zoom):
-    """Returns the tile boundaries for Brazil at a specific zoom level."""
+    """
+    Returns the tile boundaries for Brazil at a specific zoom level.
+    
+    NOTA: Esta função NÃO está sendo usada para restringir tiles.
+    O sistema aceita tiles de qualquer região do mundo.
+    """
     # Aproximated boundaries for Brazil
     lat_min, lon_min = -33.7, -73.9  # Southernmost point
     lat_max, lon_max = 5.3, -34.8  # Northernmost point
@@ -27,7 +32,12 @@ def get_brazil_tile_bounds(zoom):
 
 
 def is_within_brazil(x, y, z):
-    """Check if tile x, y at zoom level z is within the bounds of Brazil."""
+    """
+    Check if tile x, y at zoom level z is within the bounds of Brazil.
+    
+    NOTA: Esta função NÃO está sendo usada para restringir tiles.
+    O sistema aceita tiles de qualquer região do mundo.
+    """
     x_min, y_min, x_max, y_max = get_brazil_tile_bounds(z)
     return x in range(x_min, x_max + 1) and y in range(y_max, y_min + 1)
 
