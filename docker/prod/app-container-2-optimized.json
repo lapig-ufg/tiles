@@ -1,0 +1,144 @@
+{
+    "Hostname": "app_tile_2",
+    "Names": "app_tile_2",
+    "Image": "lapig/app_tile:prod_latest",
+    "Tty": true,
+    "WorkingDir": "/app",
+    "Cmd": [
+        "gunicorn", 
+        "main:app",
+        "-w", "36",
+        "-k", "uvicorn.workers.UvicornWorker",
+        "--bind", "0.0.0.0:8080",
+        "--worker-connections", "2000",
+        "--max-requests", "100000",
+        "--max-requests-jitter", "10000",
+        "--timeout", "300",
+        "--keepalive", "300",
+        "--backlog", "4096",
+        "--worker-tmp-dir", "/dev/shm",
+        "--preload",
+        "--access-logfile", "-",
+        "--error-logfile", "-",
+        "--log-level", "warning"
+    ],
+    "Env": [
+        "ALLOW_ORIGINS=http://localhost:4200",
+        "TILES_ENV=production",
+        "PYTHONUNBUFFERED=1",
+        "PYTHONDONTWRITEBYTECODE=1",
+        "PYTHONOPTIMIZE=1",
+        "MALLOC_ARENA_MAX=2",
+        "OMP_NUM_THREADS=1",
+        "WORKERS=36",
+        "WORKER_CONNECTIONS=2000",
+        "MAX_REQUESTS=100000",
+        "MAX_REQUESTS_JITTER=10000",
+        "RATE_LIMIT_PER_MINUTE=5000",
+        "RATE_LIMIT_BURST=500",
+        "LOG_LEVEL=WARNING"
+    ],
+    "HostConfig": {
+        "RestartPolicy": {
+            "Name": "always"
+        },
+        "Memory": 8589934592,
+        "MemoryReservation": 4294967296,
+        "CpuShares": 4096,
+        "Ulimits": [
+            {
+                "Name": "nofile",
+                "Hard": 1048576,
+                "Soft": 1048576
+            },
+            {
+                "Name": "nproc",
+                "Hard": 65536,
+                "Soft": 65536
+            },
+            {
+                "Name": "memlock",
+                "Hard": -1,
+                "Soft": -1
+            }
+        ],
+        "Sysctls": {
+            "net.core.somaxconn": "65535",
+            "net.ipv4.tcp_max_syn_backlog": "65535",
+            "net.ipv4.ip_local_port_range": "1024 65535",
+            "net.ipv4.tcp_tw_reuse": "1",
+            "net.ipv4.tcp_fin_timeout": "15",
+            "net.core.netdev_max_backlog": "65535",
+            "net.ipv4.tcp_keepalive_time": "300",
+            "net.ipv4.tcp_keepalive_intvl": "30",
+            "net.ipv4.tcp_keepalive_probes": "3"
+        },
+        "Mounts": [
+            {
+                "Type": "bind",
+                "Source": "/etc/localtime",
+                "Target": "/etc/localtime",
+                "ReadOnly": true
+            },
+            {
+                "Type": "bind",
+                "Source": "/home/suporte/config/__aplications__/compose/app_tile/env/t2.ini",
+                "Target": "/app/newrelic.ini",
+                "ReadOnly": true
+            },
+            {
+                "Type": "bind",
+                "Source": "/home/suporte/config/service_account/blissful-axiom-314717.json",
+                "Target": "/app/.service-accounts/gee.json",
+                "ReadOnly": true
+            },
+            {
+                "Type": "tmpfs",
+                "Target": "/dev/shm",
+                "TmpfsOptions": {
+                    "SizeBytes": 2147483648,
+                    "Mode": 1777
+                }
+            },
+            {
+                "Type": "tmpfs",
+                "Target": "/tmp",
+                "TmpfsOptions": {
+                    "SizeBytes": 1073741824,
+                    "Mode": 1777
+                }
+            }
+        ],
+        "PortBindings": {
+            "8080/tcp": [
+                {
+                    "HostPort": ""
+                }
+            ]
+        },
+        "NetworkMode": "web_lapig",
+        "LogConfig": {
+            "Type": "json-file",
+            "Config": {
+                "max-size": "100m",
+                "max-file": "3"
+            }
+        }
+    },
+    "NetworkingConfig": {
+        "EndpointsConfig": {
+            "web_lapig": {
+                "IPAMConfig": {}
+            }
+        }
+    },
+    "Labels": {
+        "traefik.enable": "true",
+        "traefik.http.routers.app_tile_2.rule": "Host(`tm2.lapig.iesa.ufg.br`)",
+        "traefik.http.routers.app_tile_2.tls": "true",
+        "traefik.http.routers.app_tile_2.tls.certresolver": "le",
+        "traefik.http.routers.app_tile_2.entrypoints": "websecure",
+        "traefik.http.routers.app_tile_2.service": "app_tile_2",
+        "traefik.http.services.app_tile_2.loadbalancer.server.port": "8080"
+    }
+}

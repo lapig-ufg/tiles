@@ -1,0 +1,28 @@
+{
+  "CORSRules": [
+    {
+      "AllowedOrigins": [
+        "http://localhost:*",
+        "https://*.lapig.iesa.ufg.br",
+        "https://lapig.iesa.ufg.br"
+      ],
+      "AllowedMethods": [
+        "GET",
+        "HEAD"
+      ],
+      "AllowedHeaders": [
+        "*"
+      ],
+      "ExposeHeaders": [
+        "ETag",
+        "x-amz-server-side-encryption",
+        "x-amz-request-id",
+        "x-amz-id-2",
+        "Content-Length",
+        "Content-Type",
+        "Cache-Control"
+      ],
+      "MaxAgeSeconds": 3600
+    }
+  ]
+}

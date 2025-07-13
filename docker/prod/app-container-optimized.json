@@ -1,0 +1,100 @@
+{
+    "Hostname": "app_tile_1",
+    "Image": "lapig/app_tile:prod_latest",
+    "WorkingDir": "/app",
+    "Cmd": [
+        "gunicorn",
+        "main:app",
+        "-w", "32",
+        "-k", "uvicorn.workers.UvicornWorker",
+        "--bind", "0.0.0.0:8080",
+        "--worker-connections", "4000",
+        "--max-requests", "50000",
+        "--max-requests-jitter", "5000",
+        "--timeout", "300",
+        "--keepalive", "300",
+        "--access-logfile", "-",
+        "--error-logfile", "-",
+        "--preload",
+        "--worker-tmp-dir", "/dev/shm"
+    ],
+    "Env": [
+        "TILES_ENV=production",
+        "ALLOW_ORIGINS=https://tiles.lapig.iesa.ufg.br,https://tm1.lapig.iesa.ufg.br",
+        "REDIS_URL=redis-sentinel://redis-sentinel-1:26379/0?master_name=mymaster",
+        "S3_ENDPOINT=http://nginx-minio:9000",
+        "S3_ACCESS_KEY=${S3_ACCESS_KEY}",
+        "S3_SECRET_KEY=${S3_SECRET_KEY}",
+        "S3_BUCKET=tiles-cache",
+        "WORKERS=32",
+        "WORKER_CONNECTIONS=4000",
+        "MAX_REQUESTS=50000",
+        "MAX_REQUESTS_JITTER=5000",
+        "RATE_LIMIT_PER_MINUTE=10000",
+        "LOG_LEVEL=WARNING",
+        "PYTHONUNBUFFERED=1",
+        "PYTHONDONTWRITEBYTECODE=1"
+    ],
+    "HostConfig": {
+        "RestartPolicy": {
+            "Name": "always"
+        },
+        "Resources": {
+            "Limits": {
+                "Memory": 8589934592,
+                "CpuShares": 4096
+            },
+            "Reservations": {
+                "Memory": 4294967296
+            }
+        },
+        "Ulimits": [
+            {
+                "Name": "nofile",
+                "Hard": 1000000,
+                "Soft": 1000000
+            },
+            {
+                "Name": "nproc",
+                "Hard": 32768,
+                "Soft": 32768
+            }
+        ],
+        "Sysctls": {
+            "net.core.somaxconn": "65535",
+            "net.ipv4.tcp_max_syn_backlog": "65535",
+            "net.ipv4.ip_local_port_range": "1024 65535",
+            "net.ipv4.tcp_tw_reuse": "1",
+            "net.ipv4.tcp_fin_timeout": "15"
+        },
+        "Mounts": [
+            {
+                "Type": "bind",
+                "Source": "/etc/localtime",
+                "Target": "/etc/localtime",
+                "ReadOnly": true
+            },
+            {
+                "Type": "bind",
+                "Source": "/home/suporte/config/service_account/blissful-axiom-314717.json",
+                "Target": "/app/.service-accounts/gee.json",
+                "ReadOnly": true
+            },
+            {
+                "Type": "tmpfs",
+                "Target": "/dev/shm",
+                "TmpfsOptions": {
+                    "SizeBytes": 2147483648
+                }
+            }
+        ],
+        "NetworkMode": "web_lapig"
+    },
+    "NetworkingConfig": {
+        "EndpointsConfig": {
+            "web_lapig": {
+                "IPAMConfig": {}
+            }
+        }
+    }
+}

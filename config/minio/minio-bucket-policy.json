@@ -1,0 +1,58 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": ["*"]
+      },
+      "Action": [
+        "s3:GetBucketLocation",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::tiles-cache"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "s3:prefix": ["tiles/*"]
+        }
+      }
+    },
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": ["*"]
+      },
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::tiles-cache/tiles/*"
+      ]
+    },
+    {
+      "Effect": "Deny",
+      "Principal": {
+        "AWS": ["*"]
+      },
+      "NotAction": [
+        "s3:GetObject",
+        "s3:GetBucketLocation",
+        "s3:ListBucket"
+      ],
+      "Resource": [
+        "arn:aws:s3:::tiles-cache/*"
+      ],
+      "Condition": {
+        "StringNotLike": {
+          "aws:userid": [
+            "AIDAI*",
+            "AIPAI*",
+            "AIDACKCEVSQ6C2EXAMPLE"
+          ]
+        }
+      }
+    }
+  ]
+}

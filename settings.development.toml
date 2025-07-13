@@ -1,0 +1,24 @@
+[development]
+GEE_SERVICE_ACCOUNT_FILE='./.service-accounts/gee.json'
+LIFESPAN_URL = 24  # 24 horas
+
+# Cache híbrido - configurações locais
+REDIS_URL = 'redis://localhost:6379'
+S3_ENDPOINT = 'http://localhost:9000'
+S3_ACCESS_KEY = 'minioadmin'
+S3_SECRET_KEY = 'minioadmin'
+S3_BUCKET = 'tiles-cache'
+
+# Performance para desenvolvimento
+WORKERS = 4  # Menos workers para desenvolvimento
+WORKER_CONNECTIONS = 1000
+MAX_REQUESTS = 10000
+MAX_REQUESTS_JITTER = 1000
+
+# Rate limiting
+RATE_LIMIT_PER_MINUTE = 1000
+RATE_LIMIT_BURST = 100
+
+# Desenvolvimento
+SKIP_GEE_INIT = false  # Mudar para true se não tiver credenciais GEE
+LOG_LEVEL = 'DEBUG'

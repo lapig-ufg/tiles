@@ -1,0 +1,274 @@
+"""
+Cache híbrido usando Redis para metadados e S3/MinIO para tiles PNG
+Otimizado para alta performance e milhões de requisições/segundo
+"""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import os
+import time
+from datetime import datetime, timedelta
+from typing import Any, Dict, Optional, List
+from contextlib import asynccontextmanager
+
+import aioboto3
+import redis.asyncio as redis
+import orjson
+from botocore.exceptions import ClientError
+
+from app.config import logger, settings
+
+
+class HybridTileCache:
+    """
+    Cache híbrido de alta performance:
+    - Redis/Valkey: Metadados e controle (rápido, pequeno)
+    - S3/MinIO: Armazenamento de PNGs (escalável, barato)
+    - Cache local em memória: Hot tiles (ultra-rápido)
+    """
+    
+    def __init__(
+        self,
+        redis_url: str = "redis://valkey:6379",
+        s3_endpoint: str = None,
+        s3_bucket: str = "tiles-cache",
+        local_cache_size: int = 1000,  # tiles em memória
+    ):
+        self.redis_url = redis_url
+        self.s3_endpoint = s3_endpoint or settings.get("S3_ENDPOINT", "http://minio:9000")
+        self.s3_bucket = s3_bucket
+        self.s3_session = aioboto3.Session()
+        
+        # Cache local LRU para tiles mais acessados
+        self.local_cache: Dict[str, tuple[bytes, float]] = {}
+        self.local_cache_size = local_cache_size
+        self.access_count: Dict[str, int] = {}
+        
+        # Configurações de TTL otimizadas
+        self.PNG_TTL = 30 * 24 * 3600   # 30 dias para tiles
+        self.META_TTL = 7 * 24 * 3600    # 7 dias para metadados
+        self.URL_TTL = 24 * 3600         # 24 horas para URLs do Earth Engine
+        
+        # Pool de conexões
+        self._redis_pool = None
+        self._initialized = False
+        
+    async def initialize(self):
+        """Inicializa conexões e cria bucket se necessário"""
+        if self._initialized:
+            return
+            
+        # Cria pool de conexões Redis
+        self._redis_pool = redis.ConnectionPool.from_url(
+            self.redis_url,
+            max_connections=100,
+            decode_responses=False  # Trabalhamos com bytes
+        )
+        
+        # Verifica/cria bucket S3
+        # Sempre usar variáveis de ambiente para credenciais
+        async with self.s3_session.client(
+            's3',
+            endpoint_url=self.s3_endpoint,
+            aws_access_key_id=os.environ.get("S3_ACCESS_KEY", settings.get("S3_ACCESS_KEY", "minioadmin")),
+            aws_secret_access_key=os.environ.get("S3_SECRET_KEY", settings.get("S3_SECRET_KEY", "minioadmin")),
+        ) as s3:
+            try:
+                await s3.head_bucket(Bucket=self.s3_bucket)
+            except ClientError:
+                await s3.create_bucket(Bucket=self.s3_bucket)
+                logger.info(f"Bucket {self.s3_bucket} criado")
+                
+        self._initialized = True
+        logger.info("HybridTileCache inicializado")
+    
+    @asynccontextmanager
+    async def _get_redis(self):
+        """Context manager para conexão Redis"""
+        client = redis.Redis(connection_pool=self._redis_pool)
+        try:
+            yield client
+        finally:
+            await client.close()
+    
+    def _generate_s3_key(self, tile_key: str) -> str:
+        """Gera chave S3 com particionamento para melhor performance"""
+        # Particiona por geohash para distribuir melhor no S3
+        hash_prefix = hashlib.md5(tile_key.encode()).hexdigest()[:2]
+        return f"tiles/{hash_prefix}/{tile_key}"
+    
+    async def get_png(self, key: str) -> Optional[bytes]:
+        """
+        Busca tile PNG com fallback em cascata:
+        1. Cache local (memória)
+        2. Redis (metadados) + S3 (dados)
+        3. None se não existir
+        """
+        # 1. Verifica cache local
+        if key in self.local_cache:
+            data, timestamp = self.local_cache[key]
+            if time.time() - timestamp < 3600:  # 1 hora de cache local
+                self.access_count[key] = self.access_count.get(key, 0) + 1
+                return data
+        
+        # 2. Verifica metadados no Redis
+        async with self._get_redis() as r:
+            meta = await r.hgetall(f"tile:{key}")
+            if not meta or not meta.get(b's3_key'):
+                return None
+            
+            # Atualiza TTL ao acessar (keep-alive)
+            await r.expire(f"tile:{key}", self.META_TTL)
+        
+        # 3. Busca do S3
+        s3_key = meta[b's3_key'].decode()
+        async with self.s3_session.client(
+            's3',
+            endpoint_url=self.s3_endpoint,
+            aws_access_key_id=os.environ.get("S3_ACCESS_KEY", settings.get("S3_ACCESS_KEY", "minioadmin")),
+            aws_secret_access_key=os.environ.get("S3_SECRET_KEY", settings.get("S3_SECRET_KEY", "minioadmin")),
+        ) as s3:
+            try:
+                response = await s3.get_object(Bucket=self.s3_bucket, Key=s3_key)
+                data = await response['Body'].read()
+                
+                # Adiciona ao cache local se for frequentemente acessado
+                self._update_local_cache(key, data)
+                
+                return data
+            except ClientError as e:
+                logger.error(f"Erro ao buscar {s3_key} do S3: {e}")
+                # Remove metadado inválido
+                async with self._get_redis() as r:
+                    await r.delete(f"tile:{key}")
+                return None
+    
+    async def set_png(self, key: str, data: bytes, ttl: int = None) -> None:
+        """Salva tile PNG no cache híbrido"""
+        if ttl is None:
+            ttl = self.PNG_TTL
+            
+        s3_key = self._generate_s3_key(key)
+        
+        # Upload paralelo para S3
+        upload_task = self._upload_to_s3(s3_key, data)
+        
+        # Salva metadados no Redis
+        async with self._get_redis() as r:
+            meta = {
+                's3_key': s3_key,
+                'size': str(len(data)),
+                'created': datetime.now().isoformat(),
+                'content_type': 'image/png'
+            }
+            await r.hset(f"tile:{key}", mapping=meta)
+            await r.expire(f"tile:{key}", ttl)
+        
+        # Aguarda upload S3
+        await upload_task
+        
+        # Atualiza cache local
+        self._update_local_cache(key, data)
+    
+    async def _upload_to_s3(self, s3_key: str, data: bytes) -> None:
+        """Upload assíncrono para S3 com retry"""
+        async with self.s3_session.client(
+            's3',
+            endpoint_url=self.s3_endpoint,
+            aws_access_key_id=os.environ.get("S3_ACCESS_KEY", settings.get("S3_ACCESS_KEY", "minioadmin")),
+            aws_secret_access_key=os.environ.get("S3_SECRET_KEY", settings.get("S3_SECRET_KEY", "minioadmin")),
+        ) as s3:
+            for attempt in range(3):
+                try:
+                    await s3.put_object(
+                        Bucket=self.s3_bucket,
+                        Key=s3_key,
+                        Body=data,
+                        ContentType='image/png',
+                        CacheControl='public, max-age=2592000'  # 30 dias
+                    )
+                    return
+                except Exception as e:
+                    if attempt == 2:
+                        logger.error(f"Falha ao salvar {s3_key} após 3 tentativas: {e}")
+                        raise
+                    await asyncio.sleep(0.1 * (attempt + 1))
+    
+    def _update_local_cache(self, key: str, data: bytes) -> None:
+        """Atualiza cache local com LRU eviction"""
+        self.local_cache[key] = (data, time.time())
+        self.access_count[key] = self.access_count.get(key, 0) + 1
+        
+        # Eviction se necessário
+        if len(self.local_cache) > self.local_cache_size:
+            # Remove o menos acessado
+            least_used = min(self.local_cache.keys(), 
+                           key=lambda k: self.access_count.get(k, 0))
+            del self.local_cache[least_used]
+            self.access_count.pop(least_used, None)
+    
+    async def get_meta(self, key: str) -> Optional[Dict[str, Any]]:
+        """Busca metadados (URLs do Earth Engine, etc)"""
+        async with self._get_redis() as r:
+            data = await r.get(f"meta:{key}")
+            if data:
+                await r.expire(f"meta:{key}", self.URL_TTL)  # Keep-alive
+                return orjson.loads(data)
+        return None
+    
+    async def set_meta(self, key: str, meta: Dict[str, Any], ttl: int = None) -> None:
+        """Salva metadados no Redis"""
+        if ttl is None:
+            ttl = self.URL_TTL
+            
+        async with self._get_redis() as r:
+            await r.set(f"meta:{key}", orjson.dumps(meta), ex=ttl)
+    
+    async def batch_get_tiles(self, keys: List[str]) -> Dict[str, Optional[bytes]]:
+        """Busca múltiplos tiles em paralelo para melhor performance"""
+        tasks = [self.get_png(key) for key in keys]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        return {
+            key: result if not isinstance(result, Exception) else None
+            for key, result in zip(keys, results)
+        }
+    
+    async def get_stats(self) -> Dict[str, Any]:
+        """Retorna estatísticas do cache para monitoramento"""
+        async with self._get_redis() as r:
+            info = await r.info()
+            dbsize = await r.dbsize()
+        
+        return {
+            "redis": {
+                "connected_clients": info.get("connected_clients", 0),
+                "used_memory_human": info.get("used_memory_human", "0"),
+                "total_keys": dbsize,
+            },
+            "local_cache": {
+                "size": len(self.local_cache),
+                "max_size": self.local_cache_size,
+                "hot_tiles": sorted(
+                    self.access_count.items(),
+                    key=lambda x: x[1],
+                    reverse=True
+                )[:10]
+            }
+        }
+    
+    async def close(self):
+        """Fecha conexões ao desligar"""
+        if self._redis_pool:
+            await self._redis_pool.disconnect()
+        self._initialized = False
+
+
+# Instância global do cache
+# Usa variáveis de ambiente ou configurações como fallback
+tile_cache = HybridTileCache(
+    redis_url=os.environ.get("REDIS_URL", settings.get("REDIS_URL", "redis://localhost:6379")),
+    s3_endpoint=os.environ.get("S3_ENDPOINT", settings.get("S3_ENDPOINT", "http://localhost:9000")),
+    s3_bucket=os.environ.get("S3_BUCKET", settings.get("S3_BUCKET", "tiles-cache")),
+)

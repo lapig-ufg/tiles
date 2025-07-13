@@ -1,0 +1,191 @@
+version: '3.8'
+
+# Configuração otimizada para produção com alta carga
+# Suporta milhões de requisições por segundo
+
+services:
+  # Load Balancer HAProxy (mais eficiente que Traefik para alta carga)
+  haproxy:
+    image: haproxy:2.8-alpine
+    container_name: tiles-haproxy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8404:8404"  # Stats
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    networks:
+      - web_lapig
+    sysctls:
+      - net.core.somaxconn=65535
+      - net.ipv4.tcp_max_syn_backlog=65535
+      - net.ipv4.ip_local_port_range=1024 65535
+      - net.ipv4.tcp_tw_reuse=1
+      - net.ipv4.tcp_fin_timeout=15
+    ulimits:
+      nofile:
+        soft: 1000000
+        hard: 1000000
+    restart: always
+
+  # Redis Cluster para alta disponibilidade
+  redis-master:
+    image: redis:7-alpine
+    container_name: tiles-redis-master
+    command: >
+      redis-server
+      --maxmemory 8gb
+      --maxmemory-policy allkeys-lru
+      --tcp-backlog 65535
+      --timeout 0
+      --tcp-keepalive 60
+      --save ""
+    networks:
+      - web_lapig
+    sysctls:
+      - net.core.somaxconn=65535
+    volumes:
+      - redis-master-data:/data
+    restart: always
+
+  redis-replica-1:
+    image: redis:7-alpine
+    container_name: tiles-redis-replica-1
+    command: >
+      redis-server
+      --replicaof redis-master 6379
+      --maxmemory 8gb
+      --maxmemory-policy allkeys-lru
+      --tcp-backlog 65535
+    networks:
+      - web_lapig
+    depends_on:
+      - redis-master
+    restart: always
+
+  redis-replica-2:
+    image: redis:7-alpine
+    container_name: tiles-redis-replica-2
+    command: >
+      redis-server
+      --replicaof redis-master 6379
+      --maxmemory 8gb
+      --maxmemory-policy allkeys-lru
+      --tcp-backlog 65535
+    networks:
+      - web_lapig
+    depends_on:
+      - redis-master
+    restart: always
+
+  # Sentinel para failover automático
+  redis-sentinel-1:
+    image: redis:7-alpine
+    container_name: tiles-redis-sentinel-1
+    command: redis-sentinel /etc/redis-sentinel/sentinel.conf
+    volumes:
+      - ./redis-sentinel.conf:/etc/redis-sentinel/sentinel.conf
+    networks:
+      - web_lapig
+    depends_on:
+      - redis-master
+      - redis-replica-1
+      - redis-replica-2
+    restart: always
+
+  # MinIO com erasure coding para alta disponibilidade
+  minio1:
+    image: minio/minio:latest
+    container_name: tiles-minio1
+    command: server http://minio{1...4}/data{1...2} --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_PROMETHEUS_AUTH_TYPE=public
+    networks:
+      - web_lapig
+    volumes:
+      - minio1-data1:/data1
+      - minio1-data2:/data2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    restart: always
+
+  minio2:
+    image: minio/minio:latest
+    container_name: tiles-minio2
+    command: server http://minio{1...4}/data{1...2} --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_PROMETHEUS_AUTH_TYPE=public
+    networks:
+      - web_lapig
+    volumes:
+      - minio2-data1:/data1
+      - minio2-data2:/data2
+    restart: always
+
+  minio3:
+    image: minio/minio:latest
+    container_name: tiles-minio3
+    command: server http://minio{1...4}/data{1...2} --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_PROMETHEUS_AUTH_TYPE=public
+    networks:
+      - web_lapig
+    volumes:
+      - minio3-data1:/data1
+      - minio3-data2:/data2
+    restart: always
+
+  minio4:
+    image: minio/minio:latest
+    container_name: tiles-minio4
+    command: server http://minio{1...4}/data{1...2} --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+      - MINIO_PROMETHEUS_AUTH_TYPE=public
+    networks:
+      - web_lapig
+    volumes:
+      - minio4-data1:/data1
+      - minio4-data2:/data2
+    restart: always
+
+  # Nginx como balanceador MinIO
+  nginx-minio:
+    image: nginx:alpine
+    container_name: tiles-nginx-minio
+    volumes:
+      - ./nginx-minio.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - web_lapig
+    depends_on:
+      - minio1
+      - minio2
+      - minio3
+      - minio4
+    restart: always
+
+volumes:
+  redis-master-data:
+  minio1-data1:
+  minio1-data2:
+  minio2-data1:
+  minio2-data2:
+  minio3-data1:
+  minio3-data2:
+  minio4-data1:
+  minio4-data2:
+
+networks:
+  web_lapig:
+    external: true

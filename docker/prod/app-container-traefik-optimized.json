@@ -1,0 +1,165 @@
+{
+    "Hostname": "app_tile_1",
+    "Names": "app_tile_1",
+    "Image": "lapig/app_tile:prod_latest",
+    "Tty": true,
+    "WorkingDir": "/app",
+    "Cmd": [
+        "gunicorn",
+        "main:app",
+        "-w", "36",
+        "-k", "uvicorn.workers.UvicornWorker",
+        "--bind", "0.0.0.0:8080",
+        "--worker-connections", "2000",
+        "--max-requests", "100000",
+        "--max-requests-jitter", "10000",
+        "--timeout", "300",
+        "--keepalive", "300",
+        "--backlog", "4096",
+        "--access-logfile", "-",
+        "--access-logformat", "%(h)s %(l)s %(u)s %(t)s \"%(r)s\" %(s)s %(b)s \"%(f)s\" \"%(a)s\" %(D)s",
+        "--error-logfile", "-",
+        "--log-level", "warning",
+        "--preload",
+        "--worker-tmp-dir", "/dev/shm",
+        "--threads", "4",
+        "--forwarded-allow-ips", "*"
+    ],
+    "Env": [
+        "TILES_ENV=production",
+        "ALLOW_ORIGINS=https://tiles.lapig.iesa.ufg.br,https://tm1.lapig.iesa.ufg.br",
+        "REDIS_URL=redis://YOUR_REDIS_HOST:6379/0",
+        "S3_ENDPOINT=https://minio.lapig.iesa.ufg.br",
+        "S3_ACCESS_KEY=${S3_ACCESS_KEY}",
+        "S3_SECRET_KEY=${S3_SECRET_KEY}",
+        "S3_BUCKET=tiles-cache",
+        "WORKERS=36",
+        "WORKER_CONNECTIONS=2000",
+        "MAX_REQUESTS=100000",
+        "MAX_REQUESTS_JITTER=10000",
+        "RATE_LIMIT_PER_MINUTE=5000",
+        "RATE_LIMIT_BURST=500",
+        "LOG_LEVEL=WARNING",
+        "PYTHONUNBUFFERED=1",
+        "PYTHONDONTWRITEBYTECODE=1",
+        "PYTHONOPTIMIZE=1",
+        "MALLOC_ARENA_MAX=2",
+        "GUNICORN_CMD_ARGS=--statsd-host=localhost:8125 --statsd-prefix=tiles"
+    ],
+    "HostConfig": {
+        "RestartPolicy": {
+            "Name": "always"
+        },
+        "Resources": {
+            "Limits": {
+                "Memory": 8589934592,
+                "CpuQuota": 400000,
+                "CpuPeriod": 100000
+            },
+            "Reservations": {
+                "Memory": 4294967296,
+                "NanoCpus": 2000000000
+            }
+        },
+        "Ulimits": [
+            {
+                "Name": "nofile",
+                "Hard": 1048576,
+                "Soft": 1048576
+            },
+            {
+                "Name": "nproc",
+                "Hard": 65536,
+                "Soft": 65536
+            },
+            {
+                "Name": "memlock",
+                "Hard": -1,
+                "Soft": -1
+            }
+        ],
+        "Sysctls": {
+            "net.core.somaxconn": "65535",
+            "net.ipv4.tcp_max_syn_backlog": "65535",
+            "net.ipv4.ip_local_port_range": "1024 65535",
+            "net.ipv4.tcp_tw_reuse": "1",
+            "net.ipv4.tcp_fin_timeout": "15",
+            "net.core.netdev_max_backlog": "65535",
+            "net.ipv4.tcp_keepalive_time": "300",
+            "net.ipv4.tcp_keepalive_intvl": "30",
+            "net.ipv4.tcp_keepalive_probes": "3"
+        },
+        "Mounts": [
+            {
+                "Type": "bind",
+                "Source": "/etc/localtime",
+                "Target": "/etc/localtime",
+                "ReadOnly": true
+            },
+            {
+                "Type": "bind",
+                "Source": "/home/suporte/config/service_account/blissful-axiom-314717.json",
+                "Target": "/app/.service-accounts/gee.json",
+                "ReadOnly": true
+            },
+            {
+                "Type": "tmpfs",
+                "Target": "/dev/shm",
+                "TmpfsOptions": {
+                    "SizeBytes": 2147483648,
+                    "Mode": 1777
+                }
+            },
+            {
+                "Type": "tmpfs",
+                "Target": "/tmp",
+                "TmpfsOptions": {
+                    "SizeBytes": 1073741824,
+                    "Mode": 1777
+                }
+            }
+        ],
+        "PortBindings": {
+            "8080/tcp": [
+                {
+                    "HostPort": ""
+                }
+            ]
+        },
+        "NetworkMode": "web_lapig",
+        "LogConfig": {
+            "Type": "json-file",
+            "Config": {
+                "max-size": "100m",
+                "max-file": "3"
+            }
+        }
+    },
+    "NetworkingConfig": {
+        "EndpointsConfig": {
+            "web_lapig": {
+                "IPAMConfig": {}
+            }
+        }
+    },
+    "Labels": {
+        "traefik.enable": "true",
+        "traefik.http.routers.app_tile_1.rule": "Host(`tiles.lapig.iesa.ufg.br`) || Host(`tm1.lapig.iesa.ufg.br`)",
+        "traefik.http.routers.app_tile_1.tls": "true",
+        "traefik.http.routers.app_tile_1.tls.certresolver": "le",
+        "traefik.http.routers.app_tile_1.entrypoints": "websecure",
+        "traefik.http.routers.app_tile_1.service": "app_tile_1",
+        "traefik.http.services.app_tile_1.loadbalancer.server.port": "8080",
+        "traefik.http.services.app_tile_1.loadbalancer.sticky": "true",
+        "traefik.http.services.app_tile_1.loadbalancer.sticky.cookie.name": "tile_session",
+        "traefik.http.services.app_tile_1.loadbalancer.sticky.cookie.httpOnly": "true",
+        "traefik.http.services.app_tile_1.loadbalancer.sticky.cookie.secure": "true",
+        "traefik.http.services.app_tile_1.loadbalancer.healthcheck.path": "/health",
+        "traefik.http.services.app_tile_1.loadbalancer.healthcheck.interval": "10s",
+        "traefik.http.services.app_tile_1.loadbalancer.healthcheck.timeout": "3s",
+        "traefik.http.middlewares.app_tile_1_compress.compress": "true",
+        "traefik.http.middlewares.app_tile_1_headers.headers.customresponseheaders.X-Cache-Status": "MISS",
+        "traefik.http.middlewares.app_tile_1_headers.headers.customresponseheaders.Cache-Control": "public, max-age=2592000, immutable",
+        "traefik.http.routers.app_tile_1.middlewares": "app_tile_1_compress@docker,app_tile_1_headers@docker"
+    }
+}
