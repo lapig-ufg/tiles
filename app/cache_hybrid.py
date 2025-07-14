@@ -258,6 +258,93 @@ class HybridTileCache:
             }
         }
     
+    async def delete_by_pattern(self, pattern: str) -> int:
+        """
+        Remove entradas do cache que correspondem ao padrão.
+        Retorna o número de itens removidos.
+        """
+        deleted_count = 0
+        
+        # 1. Busca e remove do Redis
+        async with self._get_redis() as r:
+            # Busca chaves de tiles
+            tile_keys = []
+            async for key in r.scan_iter(match=f"tile:{pattern}*"):
+                tile_keys.append(key)
+            
+            # Busca chaves de metadados
+            meta_keys = []
+            async for key in r.scan_iter(match=f"meta:{pattern}*"):
+                meta_keys.append(key)
+            
+            # Remove do Redis em batch
+            if tile_keys or meta_keys:
+                # Busca metadados dos tiles para obter chaves S3
+                s3_keys_to_delete = []
+                for tile_key in tile_keys:
+                    meta = await r.hgetall(tile_key)
+                    if meta and meta.get(b's3_key'):
+                        s3_keys_to_delete.append(meta[b's3_key'].decode())
+                
+                # Remove do Redis
+                if tile_keys:
+                    await r.delete(*tile_keys)
+                    deleted_count += len(tile_keys)
+                if meta_keys:
+                    await r.delete(*meta_keys)
+                    deleted_count += len(meta_keys)
+                
+                # Remove do S3
+                if s3_keys_to_delete:
+                    await self._batch_delete_from_s3(s3_keys_to_delete)
+        
+        # 2. Remove do cache local
+        keys_to_remove = [k for k in self.local_cache.keys() if k.startswith(pattern)]
+        for key in keys_to_remove:
+            del self.local_cache[key]
+            self.access_count.pop(key, None)
+            deleted_count += 1
+        
+        logger.info(f"Removidos {deleted_count} itens do cache com padrão: {pattern}")
+        return deleted_count
+    
+    async def _batch_delete_from_s3(self, s3_keys: List[str]) -> None:
+        """Remove múltiplos objetos do S3 em batch"""
+        if not s3_keys:
+            return
+            
+        async with self.s3_session.client(
+            's3',
+            endpoint_url=self.s3_endpoint,
+            aws_access_key_id=os.environ.get("S3_ACCESS_KEY", settings.get("S3_ACCESS_KEY", "minioadmin")),
+            aws_secret_access_key=os.environ.get("S3_SECRET_KEY", settings.get("S3_SECRET_KEY", "minioadmin")),
+        ) as s3:
+            # S3 permite deletar até 1000 objetos por vez
+            for i in range(0, len(s3_keys), 1000):
+                batch = s3_keys[i:i+1000]
+                objects = [{'Key': key} for key in batch]
+                
+                try:
+                    await s3.delete_objects(
+                        Bucket=self.s3_bucket,
+                        Delete={'Objects': objects}
+                    )
+                    logger.info(f"Removidos {len(batch)} objetos do S3")
+                except Exception as e:
+                    logger.error(f"Erro ao remover objetos do S3: {e}")
+    
+    async def clear_cache_by_layer(self, layer: str) -> int:
+        """Remove todo o cache de uma camada específica"""
+        return await self.delete_by_pattern(f"{layer}_")
+    
+    async def clear_cache_by_year(self, year: int) -> int:
+        """Remove todo o cache de um ano específico"""
+        return await self.delete_by_pattern(f"*_{year}_")
+    
+    async def clear_cache_by_point(self, x: int, y: int, z: int) -> int:
+        """Remove cache de um tile específico"""
+        return await self.delete_by_pattern(f"*/{z}/{x}_{y}")
+    
     async def close(self):
         """Fecha conexões ao desligar"""
         if self._redis_pool:
