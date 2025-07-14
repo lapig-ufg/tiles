@@ -1,0 +1,84 @@
+{
+    "Hostname": "app_tile_1",
+    "Names": "app_tile_1",
+    "Image": "lapig/app_tile:prod_latest",
+    "Tty": true,
+    "WorkingDir": "/app",
+    "Cmd": [
+        "uvicorn", 
+        "--host", 
+        "0.0.0.0",
+        "--port",
+        "8080", 
+        "--workers", 
+        "20", 
+        "main:app",
+        "--timeout-keep-alive",
+        "300"
+    ],
+    "Env":[
+        "ALLOW_ORIGINS=http://localhost:4200",
+        "GEE_SERVICE_ACCOUNT_FILE=/app/.service-accounts/gee.json",
+        "LIFESPAN_URL=24",
+        "LOG_LEVEL=WARNING",
+        "MAX_REQUESTS=50000",
+        "MAX_REQUESTS_JITTER=5000",
+        "PORT=8080",
+        "RATE_LIMIT_BURST=500",
+        "RATE_LIMIT_PER_MINUTE=5000",
+        "REDIS_URL=redis://valkey:6379",
+        "S3_ACCESS_KEY=ZIv8tLyxtryMA7Lir5vX",
+        "S3_BUCKET=tiles-cache",
+        "S3_ENDPOINT=https://s3.lapig.iesa.ufg.br",
+        "S3_SECRET_KEY=RIN4DkTNNBxXoUj2z8SwlsOLiVxRFDQu1EsgrlK3",
+        "SKIP_GEE_INIT=false",
+        "TILES_ENV=production",
+        "WORKER_CONNECTIONS=4000",
+        "WORKERS=20"
+    ],
+    "HostConfig": {
+        "RestartPolicy": {
+            "Name": "always"
+        },
+        "Memory": 4294967296,
+        "MemoryReservation": 2147483648,
+        "Mounts": [
+            {
+                "Type": "bind",
+                "Source": "/etc/localtime",
+                "Target": "/etc/localtime",
+                "ReadOnly": true
+            },
+            {
+                "Type": "bind",
+                "Source":"/home/suporte/config/__ aplications __/compose/app_tile/env/t1.ini",
+                "Target": "/app/newrelic.ini",
+                "ReadOnly": true
+            },
+            {
+                "Type": "bind",
+                "Source": "/home/suporte/config/service_account/blissful-axiom-314717.json",
+                "Target": "/app/.service-accounts/gee.json",
+                "ReadOnly": true
+            }
+        ],
+        "PortBindings": {
+            "8080/tcp": [
+                {
+                    "HostPort": ""
+                }
+            ]
+        },
+        "NetworkMode": "web_lapig"
+    },
+    "NetworkingConfig": {
+        "EndpointsConfig": {
+            "web_lapig": {
+                "IPAMConfig": {}
+            }
+        }
+    },
+    "Labels": {
+        "traefik.enable": "false"
+    }
+}
