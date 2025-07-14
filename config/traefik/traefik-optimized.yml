@@ -1,0 +1,115 @@
+http:
+  middlewares:
+    # Headers de segurança
+    secure-headers:
+      headers:
+        sslRedirect: true
+        referrerPolicy: origin-when-cross-origin
+        customResponseHeaders:
+          X-Content-Type-Options: nosniff
+          X-Frame-Options: SAMEORIGIN
+    
+    # Rate Limiting Global
+    rate-limit-global:
+      rateLimit:
+        average: 1000  # Aumentado para 1000 req/s (5 instâncias)
+        period: 1s
+        burst: 2500    # Permite burst de 2500 requests total
+    
+    # Rate Limiting para tiles
+    rate-limit-tiles:
+      rateLimit:
+        average: 2500  # 500 req/s por instância x 5 = 2500 total
+        period: 1s
+        burst: 5000    # Burst de 1000 por instância x 5
+    
+    # Compress
+    compress:
+      compress:
+        excludedContentTypes:
+          - text/event-stream
+    
+    # Cache headers para tiles
+    cache-headers-tiles:
+      headers:
+        customResponseHeaders:
+          Cache-Control: "public, max-age=2592000, immutable"  # 30 dias
+          Vary: "Accept-Encoding"
+          X-Content-Type-Options: "nosniff"
+    
+    # ModSecurity com configuração otimizada
+    my-traefik-modsecurity-plugin:
+      plugin:
+        traefik-modsecurity-plugin:
+          BadRequestsThresholdCount: "500"  # Aumentado para 5 instâncias
+          BadRequestsThresholdPeriodSecs: "60"
+          JailEnabled: "false"
+          JailTimeDurationSecs: "300"
+          ModsecurityUrl: http://waf:8080
+          TimeoutMillis: "1000"
+          CacheEnabled: true
+          CacheConditionsMethods: ["GET", "HEAD"]
+          CacheKeyIncludeHost: true
+          CacheKeyIncludeRequestURI: true
+
+  routers:
+    # Router unificado para todos os tiles com balanceamento
+    tiles-unified:
+      rule: "Host(`tiles.lapig.iesa.ufg.br`) || Host(`tm1.lapig.iesa.ufg.br`) || Host(`tm2.lapig.iesa.ufg.br`) || Host(`tm3.lapig.iesa.ufg.br`) || Host(`tm4.lapig.iesa.ufg.br`) || Host(`tm5.lapig.iesa.ufg.br`)"
+      service: tiles-loadbalancer
+      middlewares:
+        - rate-limit-tiles@file
+        - compress@file
+        - cache-headers-tiles@file
+        - secure-headers@file
+      tls:
+        certResolver: le
+        domains:
+          - main: tiles.lapig.iesa.ufg.br
+          - main: tm1.lapig.iesa.ufg.br
+          - main: tm2.lapig.iesa.ufg.br
+          - main: tm3.lapig.iesa.ufg.br
+          - main: tm4.lapig.iesa.ufg.br
+          - main: tm5.lapig.iesa.ufg.br
+
+  services:
+    # Load balancer com todas as 5 instâncias
+    tiles-loadbalancer:
+      loadBalancer:
+        sticky:
+          cookie:
+            name: tiles_session
+            httpOnly: true
+            secure: true
+            sameSite: lax
+        servers:
+          - url: "http://app_tile_1:8080"
+          - url: "http://app_tile_2:8080"
+          - url: "http://app_tile_3:8080"
+          - url: "http://app_tile_4:8080"
+          - url: "http://app_tile_5:8080"
+        healthCheck:
+          path: /health
+          interval: 10s
+          timeout: 3s
+          scheme: http
+        passHostHeader: true
+
+tls:
+  options:
+    default:
+      minVersion: "VersionTLS12"
+      sniStrict: true
+      cipherSuites:
+        - "TLS_AES_128_GCM_SHA256"
+        - "TLS_AES_256_GCM_SHA384"
+        - "TLS_CHACHA20_POLY1305_SHA256"
+        - "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+        - "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"
+
+metrics:
+  addInternals: true
+  otlp:
+    grpc:
+      endpoint: otel:4317
+      insecure: true

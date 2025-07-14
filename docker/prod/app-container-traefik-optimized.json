@@ -159,7 +159,13 @@
         "traefik.http.services.app_tile_1.loadbalancer.healthcheck.timeout": "3s",
         "traefik.http.middlewares.app_tile_1_compress.compress": "true",
         "traefik.http.middlewares.app_tile_1_headers.headers.customresponseheaders.X-Cache-Status": "MISS",
-        "traefik.http.middlewares.app_tile_1_headers.headers.customresponseheaders.Cache-Control": "public, max-age=2592000, immutable",
-        "traefik.http.routers.app_tile_1.middlewares": "app_tile_1_compress@docker,app_tile_1_headers@docker"
+        "traefik.http.middlewares.app_tile_1_headers.headers.customresponseheaders.Cache-Control": "public, max-age=5184000, immutable",
+        "traefik.http.middlewares.app_tile_1_headers.headers.customresponseheaders.Vary": "Accept-Encoding",
+        "traefik.http.middlewares.app_tile_1_headers.headers.customresponseheaders.X-Content-Type-Options": "nosniff",
+        "traefik.http.middlewares.app_tile_1_ratelimit.ratelimit.average": "200",
+        "traefik.http.middlewares.app_tile_1_ratelimit.ratelimit.period": "1s",
+        "traefik.http.middlewares.app_tile_1_ratelimit.ratelimit.burst": "500",
+        "traefik.http.middlewares.app_tile_1_ratelimit.ratelimit.sourcecriterion.ipstrategy.depth": "1",
+        "traefik.http.routers.app_tile_1.middlewares": "app_tile_1_compress@docker,app_tile_1_headers@docker,app_tile_1_ratelimit@docker"
     }
 }
