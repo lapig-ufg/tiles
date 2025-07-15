@@ -154,3 +154,33 @@ jobs:
           --github "https://github.com/${{ github.repository }}" \
           --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
           ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Tile 11" \
+          --file "tile-11" \
+          --container "app_tile_11" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Tile 12" \
+          --file "tile-12" \
+          --container "app_tile_12" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Tile 13" \
+          --file "tile-13" \
+          --container "app_tile_13" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Tile 14" \
+          --file "tile-14" \
+          --container "app_tile_14" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Tile 15" \
+          --file "tile-15" \
+          --container "app_tile_15" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
