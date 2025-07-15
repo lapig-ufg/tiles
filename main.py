@@ -24,11 +24,11 @@ from app.utils.cors import origin_regex, allow_origins
 from app.cache_hybrid import tile_cache
 
 # Inicializa New Relic se estiver em produção
-try:
-    import newrelic.agent
-    newrelic.agent.initialize()
-except ImportError:
-    pass
+# try:
+#     import newrelic.agent
+#     newrelic.agent.initialize()
+# except ImportError:
+#     pass
 
 Base.metadata.create_all(bind=engine)
 
