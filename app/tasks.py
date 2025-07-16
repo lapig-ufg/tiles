@@ -1,38 +1,11 @@
 """
 Sistema de filas assíncronas para processamento pesado
 """
-from celery import Celery
-from app.config import settings
 import ee
 from typing import Dict, Any, List
 import asyncio
-
-# Configuração Celery
-celery_app = Celery(
-    "tiles",
-    broker=settings.get("CELERY_BROKER_URL", "redis://valkey:6379/1"),
-    backend=settings.get("CELERY_RESULT_BACKEND", "redis://valkey:6379/2"),
-)
-
-# Configurações otimizadas para processamento de tiles
-celery_app.conf.update(
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    timezone="UTC",
-    enable_utc=True,
-    # Rate limiting no próprio Celery
-    task_annotations={
-        "tasks.process_landsat_tile": {"rate_limit": "100/m"},
-        "tasks.process_sentinel_tile": {"rate_limit": "100/m"},
-    },
-    # Configurações de workers
-    worker_prefetch_multiplier=4,
-    worker_max_tasks_per_child=1000,
-    # Timeouts
-    task_soft_time_limit=300,  # 5 minutos
-    task_time_limit=600,  # 10 minutos
-)
+from loguru import logger
+from app.celery_app import celery_app
 
 @celery_app.task(bind=True, max_retries=3)
 def process_landsat_tile(self, params: Dict[str, Any]):
@@ -44,10 +17,12 @@ def process_landsat_tile(self, params: Dict[str, Any]):
         
         # Aqui viria a lógica de processamento do tile
         # Por exemplo: gerar tile, salvar no cache, etc.
+        logger.info(f"Processando tile Landsat: {params.get('tile_id')}")
         
         return {"status": "success", "tile_id": params.get("tile_id")}
     
     except Exception as exc:
+        logger.error(f"Erro ao processar tile: {exc}")
         # Retry com backoff exponencial
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)
 
@@ -72,3 +47,45 @@ def process_timeseries_batch(tiles: List[Dict[str, Any]]):
         results.append({"tile": tile, "status": "processed"})
     
     return results
+
+
+@celery_app.task(name='tasks.generate_tile_cache')
+def generate_tile_cache(z: int, x: int, y: int, layer: str, params: Dict[str, Any]):
+    """Gera e armazena tile no cache"""
+    try:
+        from app.api.layers import process_tile_request
+        from app.cache_hybrid import HybridCache
+        
+        # Gera chave do cache
+        cache_key = f"tile:{layer}:{z}:{x}:{y}:{hash(str(params))}"
+        
+        # Tenta obter do cache primeiro
+        cache = HybridCache()
+        cached_data = cache.get(cache_key)
+        
+        if cached_data:
+            logger.info(f"Tile {z}/{x}/{y} já está no cache")
+            return {"status": "already_cached", "key": cache_key}
+        
+        # Processa o tile
+        logger.info(f"Gerando tile {z}/{x}/{y} para camada {layer}")
+        # Aqui seria a lógica real de geração do tile
+        
+        # Armazena no cache
+        tile_data = f"tile_data_{z}_{x}_{y}"  # Placeholder
+        cache.set(cache_key, tile_data, ttl=86400)  # 24 horas
+        
+        return {
+            "status": "generated",
+            "key": cache_key,
+            "tile": f"{z}/{x}/{y}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao gerar tile {z}/{x}/{y}: {e}")
+        return {
+            "status": "error",
+            "error": str(e),
+            "tile": f"{z}/{x}/{y}"
+        }
+

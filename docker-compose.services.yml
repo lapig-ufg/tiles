@@ -27,7 +27,7 @@ services:
   celery-worker:
     build: .
     command: >
-      celery -A app.tasks worker 
+      celery -A app.celery_app worker 
       --loglevel=info 
       --concurrency=8 
       --max-tasks-per-child=1000
@@ -41,7 +41,7 @@ services:
 
   celery-beat:
     build: .
-    command: celery -A app.tasks beat --loglevel=info
+    command: celery -A app.celery_app beat --loglevel=info
     depends_on:
       - redis
     environment:
