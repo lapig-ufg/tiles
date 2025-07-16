@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exemplo de Integração - APIs de Tiles</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        h2 {
+            color: #333;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 15px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 10px;
+            background: #e3f2fd;
+            border-radius: 4px;
+        }
+        .log {
+            background: #263238;
+            color: #aed581;
+            padding: 15px;
+            border-radius: 4px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🛰️ Exemplo de Integração - APIs de Tiles Otimizadas</h1>
+        
+        <div class="section">
+            <h2>1. Viewport API - Carregamento Inteligente</h2>
+            <p>Carrega apenas tiles visíveis no viewport atual</p>
+            
+            <button onclick="loadViewportTiles()">Carregar Tiles do Viewport</button>
+            <button onclick="changeYear()">Mudar Ano (2023 → 2022)</button>
+            
+            <div class="status" id="viewport-status"></div>
+            
+            <pre><code>// Código de exemplo
+async function loadViewportTiles() {
+    const viewport = {
+        north: -10.0,
+        south: -15.0,
+        east: -45.0,
+        west: -50.0
+    };
+    
+    const response = await fetch('/api/viewport/tiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            viewport: viewport,
+            zoom: 13,
+            years: [2020, 2021, 2022, 2023],
+            layer: 'landsat',
+            priority_year: currentYear
+        })
+    });
+    
+    const data = await response.json();
+    console.log(`Carregados ${data.total_tiles} tiles`);
+}</code></pre>
+        </div>
+
+        <div class="section">
+            <h2>2. WebSocket API - Streaming em Tempo Real</h2>
+            <p>Recebe tiles via streaming conforme ficam disponíveis</p>
+            
+            <button onclick="connectWebSocket()">Conectar WebSocket</button>
+            <button onclick="subscribeTiles()">Inscrever para Tiles</button>
+            <button onclick="disconnectWebSocket()">Desconectar</button>
+            
+            <div class="status" id="ws-status">Desconectado</div>
+            <div class="log" id="ws-log"></div>
+        </div>
+
+        <div class="section">
+            <h2>3. Megatiles API - Agregação de Tiles</h2>
+            <p>Combina múltiplos tiles em uma única imagem</p>
+            
+            <button onclick="loadMegatile()">Carregar Megatile</button>
+            
+            <div id="megatile-container"></div>
+            
+            <pre><code>// Megatile combina 4x4 tiles de 4 anos = 64 tiles em 1 requisição
+const megatileUrl = '/api/megatile/landsat/2954/5123/13?years=2020,2021,2022,2023&size=4';
+const img = new Image();
+img.src = megatileUrl;</code></pre>
+        </div>
+
+        <div class="section">
+            <h2>4. Estratégias de Carregamento Progressivo</h2>
+            <p>Obtém estratégias otimizadas baseadas no contexto</p>
+            
+            <button onclick="getProgressiveStrategy(false)">Estratégia Estática</button>
+            <button onclick="getProgressiveStrategy(true)">Estratégia Animação</button>
+            
+            <div class="status" id="strategy-status"></div>
+        </div>
+
+        <div class="section">
+            <h2>5. Métricas e Estatísticas</h2>
+            <p>Monitora performance e uso das APIs</p>
+            
+            <button onclick="getQueueStats()">Status da Fila</button>
+            <button onclick="getMetrics()">Métricas do Sistema</button>
+            
+            <div class="status" id="metrics-status"></div>
+        </div>
+    </div>
+
+    <script>
+        // Estado global
+        let ws = null;
+        let currentYear = 2023;
+        const clientId = `client_${Date.now()}`;
+        
+        // Funções auxiliares
+        function log(message, target = 'ws-log') {
+            const logDiv = document.getElementById(target);
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${time}] ${message}\n`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function updateStatus(message, target) {
+            document.getElementById(target).innerHTML = message;
+        }
+        
+        // 1. Viewport API
+        async function loadViewportTiles() {
+            updateStatus('Carregando tiles do viewport...', 'viewport-status');
+            
+            try {
+                // Simula requisição (substitua pela URL real)
+                const viewport = {
+                    north: -10.0,
+                    south: -15.0,
+                    east: -45.0,
+                    west: -50.0
+                };
+                
+                // Simulação de resposta
+                const data = {
+                    total_tiles: 420,
+                    tiles_per_year: 105,
+                    years_count: 4,
+                    tiles: []
+                };
+                
+                updateStatus(
+                    `✅ Sucesso! ${data.total_tiles} tiles identificados<br>` +
+                    `📊 ${data.tiles_per_year} tiles por ano<br>` +
+                    `📅 ${data.years_count} anos de dados<br>` +
+                    `🚀 Tiles do ano ${currentYear} serão carregados primeiro`,
+                    'viewport-status'
+                );
+            } catch (error) {
+                updateStatus('❌ Erro: ' + error.message, 'viewport-status');
+            }
+        }
+        
+        function changeYear() {
+            currentYear = currentYear === 2023 ? 2022 : 2023;
+            updateStatus(`📅 Ano mudado para ${currentYear}`, 'viewport-status');
+            
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'prioritize',
+                    year: currentYear
+                }));
+                log(`Priorizando tiles do ano ${currentYear}`);
+            }
+        }
+        
+        // 2. WebSocket API
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                log('Já conectado!');
+                return;
+            }
+            
+            // Simula conexão (substitua pela URL real)
+            // ws = new WebSocket(`ws://localhost:8080/ws/tiles/${clientId}`);
+            
+            // Simulação de conexão
+            updateStatus('🟢 Conectado via WebSocket', 'ws-status');
+            log(`Conectado com ID: ${clientId}`);
+            
+            // Simula eventos
+            setTimeout(() => {
+                log('Servidor: Conexão estabelecida');
+                log('Servidor: Pronto para receber inscrições');
+            }, 500);
+        }
+        
+        function subscribeTiles() {
+            if (!ws) {
+                log('❌ Conecte o WebSocket primeiro!');
+                return;
+            }
+            
+            const tiles = [
+                {x: 2954, y: 5123, z: 13, year: 2023, layer: 'landsat'},
+                {x: 2955, y: 5123, z: 13, year: 2023, layer: 'landsat'},
+                {x: 2954, y: 5124, z: 13, year: 2023, layer: 'landsat'},
+                {x: 2955, y: 5124, z: 13, year: 2023, layer: 'landsat'}
+            ];
+            
+            log(`Inscrevendo para ${tiles.length} tiles...`);
+            
+            // Simula resposta
+            setTimeout(() => {
+                log('Servidor: Inscrição confirmada');
+                log('Servidor: Processando 4 tiles...');
+                
+                // Simula recebimento de tiles
+                let received = 0;
+                const interval = setInterval(() => {
+                    received++;
+                    log(`📦 Tile recebido: ${received}/4 (${(received/4*100).toFixed(0)}%)`);
+                    
+                    if (received >= 4) {
+                        clearInterval(interval);
+                        log('✅ Todos os tiles recebidos!');
+                    }
+                }, 800);
+            }, 300);
+        }
+        
+        function disconnectWebSocket() {
+            if (ws) {
+                updateStatus('🔴 Desconectado', 'ws-status');
+                log('Desconectado do servidor');
+                ws = null;
+            }
+        }
+        
+        // 3. Megatiles
+        function loadMegatile() {
+            const container = document.getElementById('megatile-container');
+            container.innerHTML = '<p>Carregando megatile...</p>';
+            
+            // Simula carregamento
+            setTimeout(() => {
+                container.innerHTML = `
+                    <p>✅ Megatile carregado!</p>
+                    <p>📐 Tamanho: 1024x4096 pixels</p>
+                    <p>🖼️ Contém: 64 tiles (4x4 grid × 4 anos)</p>
+                    <p>⚡ Economia: 63 requisições HTTP</p>
+                    <div style="margin-top: 10px; padding: 10px; background: #f0f0f0; border-radius: 4px;">
+                        <strong>Headers de resposta:</strong><br>
+                        X-Cache: HIT<br>
+                        X-Megatile: true<br>
+                        Content-Type: image/png
+                    </div>
+                `;
+            }, 1000);
+        }
+        
+        // 4. Estratégias progressivas
+        async function getProgressiveStrategy(isAnimation) {
+            const statusDiv = document.getElementById('strategy-status');
+            statusDiv.innerHTML = 'Calculando estratégia otimizada...';
+            
+            // Simula resposta
+            setTimeout(() => {
+                if (isAnimation) {
+                    statusDiv.innerHTML = `
+                        <h4>🎬 Estratégia de Animação</h4>
+                        <p><strong>Ordem de carregamento:</strong> 2023 → 2024 → 2025 → 2022 → 2021</p>
+                        <p><strong>Buffer:</strong> Pre-carrega próximos 5 frames</p>
+                        <p><strong>Resolução:</strong> Progressiva (baixa → alta)</p>
+                        <p>✅ Otimizado para playback suave</p>
+                    `;
+                } else {
+                    statusDiv.innerHTML = `
+                        <h4>🖼️ Estratégia Estática</h4>
+                        <p><strong>Prioridade 1:</strong> Ano atual (${currentYear})</p>
+                        <p><strong>Prioridade 2:</strong> Anos adjacentes (±2)</p>
+                        <p><strong>Prioridade 3:</strong> Resto dos anos</p>
+                        <p>✅ Otimizado para visualização rápida</p>
+                    `;
+                }
+            }, 500);
+        }
+        
+        // 5. Métricas
+        function getQueueStats() {
+            const stats = {
+                queued: 1250,
+                active: 100,
+                completed: 8450,
+                failed: 12
+            };
+            
+            updateStatus(
+                `<h4>📊 Status da Fila de Requisições</h4>` +
+                `⏳ Na fila: ${stats.queued}<br>` +
+                `🔄 Processando: ${stats.active}<br>` +
+                `✅ Completas: ${stats.completed}<br>` +
+                `❌ Falhas: ${stats.failed}<br>` +
+                `<br>` +
+                `<strong>Taxa de sucesso:</strong> ${((stats.completed/(stats.completed+stats.failed))*100).toFixed(1)}%`,
+                'metrics-status'
+            );
+        }
+        
+        function getMetrics() {
+            updateStatus(
+                `<h4>📈 Métricas do Sistema</h4>` +
+                `🚀 Tiles/segundo: 847<br>` +
+                `💾 Taxa de cache hit: 82.3%<br>` +
+                `⏱️ Latência média: 45ms<br>` +
+                `👥 Clientes conectados: 23<br>` +
+                `🔌 WebSockets ativos: 18<br>` +
+                `<br>` +
+                `<strong>Economia estimada:</strong> 94% menos requisições`,
+                'metrics-status'
+            );
+        }
+        
+        // Inicialização
+        document.addEventListener('DOMContentLoaded', () => {
+            updateStatus('Pronto para demonstração', 'viewport-status');
+            log('Sistema inicializado');
+        });
+    </script>
+</body>
+</html>

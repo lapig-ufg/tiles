@@ -68,17 +68,22 @@ class HybridTileCache:
         
         # Verifica/cria bucket S3
         # Sempre usar variáveis de ambiente para credenciais
-        async with self.s3_session.client(
-            's3',
-            endpoint_url=self.s3_endpoint,
-            aws_access_key_id=os.environ.get("S3_ACCESS_KEY", settings.get("S3_ACCESS_KEY", "minioadmin")),
-            aws_secret_access_key=os.environ.get("S3_SECRET_KEY", settings.get("S3_SECRET_KEY", "minioadmin")),
-        ) as s3:
-            try:
-                await s3.head_bucket(Bucket=self.s3_bucket)
-            except ClientError:
-                await s3.create_bucket(Bucket=self.s3_bucket)
-                logger.info(f"Bucket {self.s3_bucket} criado")
+        try:
+            async with self.s3_session.client(
+                's3',
+                endpoint_url=self.s3_endpoint,
+                aws_access_key_id=os.environ.get("S3_ACCESS_KEY", settings.get("S3_ACCESS_KEY", "minioadmin")),
+                aws_secret_access_key=os.environ.get("S3_SECRET_KEY", settings.get("S3_SECRET_KEY", "minioadmin")),
+            ) as s3:
+                try:
+                    await s3.head_bucket(Bucket=self.s3_bucket)
+                except ClientError:
+                    await s3.create_bucket(Bucket=self.s3_bucket)
+                    logger.info(f"Bucket {self.s3_bucket} criado")
+            logger.info("S3 conectado com sucesso")
+        except Exception as e:
+            logger.warning(f"Não foi possível conectar ao S3 ({self.s3_endpoint}): {e}")
+            logger.warning("Continuando apenas com cache local e Redis")
                 
         self._initialized = True
         logger.info("HybridTileCache inicializado")

@@ -24,6 +24,9 @@ from app.tile import tile2goehashBBOX
 from app.visParam import VISPARAMS, get_landsat_vis_params, get_landsat_collection
 from app.errors import generate_error_image
 from app.cache_hybrid import tile_cache
+from app.rate_limiter import limit_sentinel, limit_landsat, limiter
+from app.adaptive_limiter import adaptive_limiter
+from app.batch_processor import batch_processor
 
 # --------------------------------------------------------------------------- #
 # Constantes e tipos                                                          #
@@ -239,11 +242,12 @@ async def _serve_tile_optimized(
 # --------------------------------------------------------------------------- #
 
 @router.get("/s2_harmonized/{x}/{y}/{z}")
+@limit_sentinel()
 async def s2_harmonized_optimized(
     x: int, y: int, z: int,
     background_tasks: BackgroundTasks,
     request: Request,
-    period: Period = Period.WET,
+    period = Period.WET,
     year: int = datetime.now().year,
     month: int = datetime.now().month,
     visparam: str = "tvi-red"
@@ -273,6 +277,7 @@ async def s2_harmonized_optimized(
         )
 
 @router.get("/landsat/{x}/{y}/{z}")
+@limit_landsat()
 async def landsat_optimized(
     x: int, y: int, z: int,
     background_tasks: BackgroundTasks,
@@ -392,20 +397,133 @@ async def clear_cache(
             detail=f"Erro ao limpar cache: {str(e)}"
         )
 
+@router.post("/batch/process")
+async def process_batch_tiles(
+    request: Request,
+    layer: str,
+    tiles: list[dict],  # Lista de {"x": int, "y": int, "z": int}
+    period: str = "DRY",
+    year: int = datetime.now().year,
+    month: int = datetime.now().month,
+    visparam: str = "true-color"
+):
+    """
+    Processa múltiplos tiles em batch para otimizar requisições
+    
+    Exemplo:
+    POST /batch/process
+    {
+        "layer": "landsat",
+        "tiles": [
+            {"x": 123, "y": 456, "z": 10},
+            {"x": 124, "y": 456, "z": 10}
+        ],
+        "period": "DRY",
+        "year": 2024,
+        "visparam": "true-color"
+    }
+    """
+    # Adiciona ao batch processor
+    batch_id = await batch_processor.add_request(
+        layer,
+        {
+            "tiles": tiles,
+            "period": period,
+            "year": year,
+            "month": month,
+            "visparam": visparam
+        }
+    )
+    
+    return {
+        "batch_id": batch_id,
+        "status": "queued",
+        "tiles_count": len(tiles)
+    }
+
+@router.get("/system/metrics")
+@limiter.limit("10/minute")
+async def system_metrics(request: Request):
+    """Retorna métricas do sistema incluindo rate limiting adaptativo"""
+    load = adaptive_limiter.get_system_load()
+    current_limits = adaptive_limiter.current_limits
+    
+    return {
+        "system": load,
+        "rate_limits": current_limits,
+        "cache_stats": await tile_cache.get_stats()
+    }
+
 @router.post("/cache/prewarm/{layer}")
 async def prewarm_tiles(
     layer: str,
     background_tasks: BackgroundTasks,
-    zoom_levels: list[int] = [10, 11, 12],
-    bounds: dict = None
+    zoom_levels: list[int] = [12, 13, 14, 15],
+    bounds: dict = None,
+    point: dict = None,
+    radius_km: float = 50.0
 ):
-    """Pré-aquece tiles para uma região específica"""
-    if bounds is None:
-        # Brasil bounds padrão
+    """
+    Pré-aquece tiles para uma região específica
+    
+    Parâmetros:
+    - layer: Nome da camada (ex: 'landsat', 's2_harmonized')
+    - zoom_levels: Lista de níveis de zoom para pre-aquecer
+    - bounds: Caixa delimitadora com {"west", "south", "east", "north"}
+    - point: Ponto central com {"lat", "lon"} - alternativa ao bounds
+    - radius_km: Raio em km quando usando point (padrão: 50km)
+    
+    Exemplos:
+    1. Com bounds:
+       POST /cache/prewarm/landsat
+       {
+         "bounds": {"west": -50, "south": -20, "east": -40, "north": -10},
+         "zoom_levels": [10, 11, 12]
+       }
+    
+    2. Com ponto:
+       POST /cache/prewarm/landsat
+       {
+         "point": {"lat": -15.7801, "lon": -47.9292},
+         "radius_km": 100,
+         "zoom_levels": [10, 11, 12]
+       }
+    """
+    
+    # Validação de parâmetros
+    if point is not None and bounds is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Forneça apenas 'bounds' OU 'point', não ambos"
+        )
+    
+    # Se forneceu point, converte para bounds
+    if point is not None:
+        if "lat" not in point or "lon" not in point:
+            raise HTTPException(
+                status_code=400,
+                detail="Point deve ter 'lat' e 'lon'"
+            )
+        
+        # Converte point + radius para bounds
+        bounds = _point_to_bounds(point["lat"], point["lon"], radius_km)
+        logger.info(f"Convertendo point {point} com raio {radius_km}km para bounds {bounds}")
+    
+    # Se não forneceu nem bounds nem point, usa Brasil
+    elif bounds is None:
         bounds = {
             "west": -73.9, "south": -33.7,
             "east": -34.8, "north": 5.3
         }
+        logger.info("Usando bounds padrão do Brasil")
+    
+    # Valida bounds
+    required_keys = ["west", "south", "east", "north"]
+    if not all(key in bounds for key in required_keys):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bounds deve ter as chaves: {required_keys}"
+        )
     
     # Adiciona tarefa de pre-warming em background
     background_tasks.add_task(
@@ -413,10 +531,223 @@ async def prewarm_tiles(
         layer, zoom_levels, bounds
     )
     
-    return {"status": "Pre-warming iniciado", "layer": layer, "zoom_levels": zoom_levels}
+    return {
+        "status": "Pre-warming iniciado",
+        "layer": layer,
+        "zoom_levels": zoom_levels,
+        "bounds": bounds,
+        "estimated_area_km2": _calculate_area_km2(bounds)
+    }
+
+def _point_to_bounds(lat: float, lon: float, radius_km: float) -> dict:
+    """Converte ponto + raio para bounds"""
+    import math
+    
+    # Aproximação: 1 grau de latitude = ~111km
+    # 1 grau de longitude = ~111km * cos(latitude)
+    lat_degree_km = 111.0
+    lon_degree_km = 111.0 * math.cos(math.radians(lat))
+    
+    # Calcula deltas em graus
+    lat_delta = radius_km / lat_degree_km
+    lon_delta = radius_km / lon_degree_km
+    
+    return {
+        "south": lat - lat_delta,
+        "north": lat + lat_delta,
+        "west": lon - lon_delta,
+        "east": lon + lon_delta
+    }
+
+def _calculate_area_km2(bounds: dict) -> float:
+    """Calcula área aproximada em km² dos bounds"""
+    import math
+    
+    # Latitude média para cálculo mais preciso
+    lat_avg = (bounds["north"] + bounds["south"]) / 2
+    
+    # Diferenças em graus
+    lat_diff = bounds["north"] - bounds["south"]
+    lon_diff = bounds["east"] - bounds["west"]
+    
+    # Converte para km
+    lat_km = lat_diff * 111.0
+    lon_km = lon_diff * 111.0 * math.cos(math.radians(lat_avg))
+    
+    return round(lat_km * lon_km, 2)
 
 async def _prewarm_region(layer: str, zoom_levels: list[int], bounds: dict):
     """Executa pre-warming de tiles em background"""
-    # Implementação do pre-warming seria feita aqui
-    logger.info(f"Pre-warming {layer} para zooms {zoom_levels}")
-    # TODO: Implementar lógica de pre-warming
+    import math
+    from app.tile import latlon_to_tile
+    from datetime import datetime
+    
+    logger.info(f"Iniciando pre-warming {layer} para zooms {zoom_levels}")
+    
+    # Estatísticas de progresso
+    total_tiles = 0
+    cached_tiles = 0
+    failed_tiles = 0
+    
+    # Configurações padrão para pre-warming
+    current_year = datetime.now().year
+    default_params = {
+        "landsat": {
+            "period": "DRY",
+            "year": current_year,
+            "month": 1,
+            "visparam": "true-color"
+        },
+        "s2_harmonized": {
+            "period": "DRY", 
+            "year": current_year,
+            "month": 1,
+            "visparam": "true-color"
+        }
+    }
+    
+    # Usa parâmetros padrão ou custom
+    params = default_params.get(layer, {
+        "period": "DRY",
+        "year": current_year,
+        "month": 1,
+        "visparam": "true-color"
+    })
+    
+    # Sessão HTTP reutilizável para performance
+    async with aiohttp.ClientSession() as session:
+        for zoom in zoom_levels:
+            # Calcula tiles baseado nos bounds
+            x_min, y_max = latlon_to_tile(bounds["south"], bounds["west"], zoom)
+            x_max, y_min = latlon_to_tile(bounds["north"], bounds["east"], zoom)
+            
+            # Ajusta para garantir ordem correta
+            if x_min > x_max:
+                x_min, x_max = x_max, x_min
+            if y_min > y_max:
+                y_min, y_max = y_max, y_min
+            
+            tiles_in_zoom = (x_max - x_min + 1) * (y_max - y_min + 1)
+            logger.info(f"Zoom {zoom}: {tiles_in_zoom} tiles ({x_min},{y_min} até {x_max},{y_max})")
+            
+            # Processa tiles em batches para não sobrecarregar
+            batch_size = 10
+            tasks = []
+            
+            for x in range(x_min, x_max + 1):
+                for y in range(y_min, y_max + 1):
+                    total_tiles += 1
+                    
+                    # Cria tarefa assíncrona
+                    task = _prewarm_single_tile(
+                        layer, x, y, zoom,
+                        params["period"],
+                        params["year"],
+                        params["month"],
+                        params["visparam"],
+                        session
+                    )
+                    tasks.append(task)
+                    
+                    # Processa em batches
+                    if len(tasks) >= batch_size:
+                        results = await asyncio.gather(*tasks, return_exceptions=True)
+                        
+                        # Contabiliza resultados
+                        for result in results:
+                            if isinstance(result, Exception):
+                                failed_tiles += 1
+                                logger.warning(f"Falha no pre-warming: {result}")
+                            elif result:
+                                cached_tiles += 1
+                        
+                        tasks = []
+                        
+                        # Log de progresso a cada 100 tiles
+                        if total_tiles % 100 == 0:
+                            logger.info(
+                                f"Progresso: {total_tiles} tiles processados, "
+                                f"{cached_tiles} em cache, {failed_tiles} falhas"
+                            )
+            
+            # Processa tiles restantes
+            if tasks:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for result in results:
+                    if isinstance(result, Exception):
+                        failed_tiles += 1
+                    elif result:
+                        cached_tiles += 1
+    
+    # Log final
+    logger.info(
+        f"Pre-warming concluído para {layer}: "
+        f"{total_tiles} tiles processados, "
+        f"{cached_tiles} adicionados ao cache, "
+        f"{failed_tiles} falhas"
+    )
+    
+    return {
+        "layer": layer,
+        "zoom_levels": zoom_levels,
+        "total_tiles": total_tiles,
+        "cached_tiles": cached_tiles,
+        "failed_tiles": failed_tiles
+    }
+
+async def _prewarm_single_tile(
+    layer: str, x: int, y: int, z: int,
+    period: str, year: int, month: int, visparam: str,
+    session: aiohttp.ClientSession
+) -> bool:
+    """Pre-aquece um único tile"""
+    try:
+        # Constrói parâmetros do tile
+        from app.tile import tile2goehashBBOX
+        geohash, bbox = tile2goehashBBOX(x, y, z)
+        path_cache = f"{layer}_{period}_{year}_{month}_{visparam}/{geohash}"
+        file_cache = f"{path_cache}/{z}/{x}_{y}.png"
+        
+        # Verifica se já está em cache
+        png_bytes = await tile_cache.get_png(file_cache)
+        if png_bytes:
+            return False  # Já estava em cache
+        
+        # Busca/atualiza URL do Earth Engine se necessário
+        meta = await tile_cache.get_meta(path_cache)
+        dates = _build_periods(period, year, month)
+        
+        if not meta or (datetime.now() - datetime.fromisoformat(meta["date"])).total_seconds()/3600 > settings.LIFESPAN_URL:
+            # Precisa atualizar URL do Earth Engine
+            geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
+            
+            # Executa builder apropriado
+            loop = asyncio.get_event_loop()
+            if layer == "landsat":
+                layer_url = await loop.run_in_executor(
+                    ee_executor, _create_landsat_layer_sync, geom, dates, visparam
+                )
+            else:
+                vis = _vis_param(visparam)
+                layer_url = await loop.run_in_executor(
+                    ee_executor, _create_s2_layer_sync, geom, dates, vis
+                )
+            
+            # Salva metadata
+            new_meta = {"url": layer_url, "date": datetime.now().isoformat()}
+            await tile_cache.set_meta(path_cache, new_meta)
+        else:
+            layer_url = meta["url"]
+        
+        # Download do tile
+        tile_url = layer_url.replace("{x}", str(x)).replace("{y}", str(y)).replace("{z}", str(z))
+        png_bytes = await _http_get_bytes(tile_url, session)
+        
+        # Salva no cache
+        await tile_cache.set_png(file_cache, png_bytes)
+        
+        return True  # Novo tile adicionado ao cache
+        
+    except Exception as e:
+        logger.debug(f"Erro no pre-warming tile {layer}/{z}/{x}/{y}: {e}")
+        raise

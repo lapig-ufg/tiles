@@ -96,3 +96,5 @@ aioboto3==12.3.0
 redis[hiredis]==5.0.1
 slowapi==0.1.9
 nest-asyncio==1.5.9
+celery[redis]==5.4.0
+psutil==5.9.8

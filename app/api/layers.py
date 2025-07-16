@@ -26,6 +26,7 @@ from app.cache import (
     aget_png as get_png,  aset_png as set_png,          # bytes (tile)
     aget_meta as get_meta, aset_meta as set_meta          # {"url": str, "date": iso}
 )
+from app.rate_limiter import limit_sentinel, limit_landsat
 
 # --------------------------------------------------------------------------- #
 # Constantes e tipos                                                          #
@@ -197,9 +198,10 @@ async def _serve_tile(layer: str,
 # --------------------------------------------------------------------------- #
 
 @router.get("/s2_harmonized/{x}/{y}/{z}")
+@limit_sentinel()
 async def s2_harmonized(x: int, y: int, z: int,
                         request: Request,
-                        period: Period = Period.WET,
+                        period = Period.WET,
                         year: int = datetime.now().year,
                         month: int = datetime.now().month,
                         visparam: str = "tvi-red"):
@@ -226,6 +228,7 @@ async def s2_harmonized(x: int, y: int, z: int,
 
 
 @router.get("/landsat/{x}/{y}/{z}")
+@limit_landsat()
 async def landsat(x: int, y: int, z: int,
                   request: Request,
                   period: str = "MONTH",

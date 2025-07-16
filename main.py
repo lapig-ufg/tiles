@@ -44,10 +44,13 @@ Base.metadata.create_all(bind=engine)
 #     ['method', 'endpoint']
 # )
 
-# Rate limiter
+# Rate limiter - configuração adaptativa para Landsat/Sentinel
 limiter = Limiter(
     key_func=get_remote_address,
-    default_limits=[f"{settings.get('RATE_LIMIT_PER_MINUTE', 1000)}/minute"]
+    default_limits=[f"{settings.get('RATE_LIMIT_PER_MINUTE', 100000)}/minute"],
+    # Configuração específica para burst
+    storage_uri=settings.get('REDIS_URL', 'redis://valkey:6379'),
+    strategy="moving-window"  # Melhor para rajadas
 )
 
 class ORJSONResponse(JSONResponse):

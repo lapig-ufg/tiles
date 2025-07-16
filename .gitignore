@@ -149,7 +149,7 @@ tiles-client/node_modules/
 tiles-client/dist/
 tiles-client/.angular/
 app/.service-accounts/gee.json
-
+docker-configs
 # UV
 .uv/
 

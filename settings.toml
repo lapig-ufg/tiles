@@ -15,6 +15,10 @@ WORKER_CONNECTIONS = 2000
 MAX_REQUESTS = 20000
 MAX_REQUESTS_JITTER = 1000
 
-# Rate limiting
-RATE_LIMIT_PER_MINUTE = 5000  # Por IP
-RATE_LIMIT_BURST = 500
+# Rate limiting - aumentado para suportar carregamento de múltiplos anos/tiles
+RATE_LIMIT_PER_MINUTE = 100000  # Por IP - para tiles Landsat/Sentinel
+RATE_LIMIT_BURST = 10000
+
+# Celery Configuration
+CELERY_BROKER_URL = 'redis://valkey:6379/1'
+CELERY_RESULT_BACKEND = 'redis://valkey:6379/2'
