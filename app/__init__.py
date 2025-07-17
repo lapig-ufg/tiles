@@ -1,0 +1,1 @@
+# Garante que o módulo app seja um pacote Python

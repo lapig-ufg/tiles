@@ -119,10 +119,9 @@ def _create_s2_layer_sync(geom: ee.Geometry, dates: Dict[str, str], vis: dict) -
 def _create_landsat_layer_sync(geom: ee.Geometry,
                               dates: Dict[str, str],
                               visparam_name: str) -> str:
-    """Versão síncrona para Earth Engine"""
+    """Versão síncrona para Earth Engine com máscara de nuvens"""
     year = datetime.fromisoformat(dates["dtStart"]).year
     collection = get_landsat_collection(year)
-
     vis = get_landsat_vis_params(visparam_name, collection)
 
     for key in ("min", "max", "gamma"):
@@ -133,12 +132,21 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
         return img.addBands(img.select("SR_B.").multiply(0.0000275).add(-0.2),
                             None, True)
 
+    def mask_clouds(image):
+        # Usa QA_PIXEL para mascarar nuvens e sombras de nuvens
+        qa = image.select('QA_PIXEL')
+        cloud_bit_mask = 1 << 3
+        cloud_shadow_bit_mask = 1 << 4
+        mask = qa.bitwiseAnd(cloud_bit_mask).eq(0).And(
+               qa.bitwiseAnd(cloud_shadow_bit_mask).eq(0))
+        return image.updateMask(mask)
+
     landsat = (ee.ImageCollection(collection)
                .filterDate(dates["dtStart"], dates["dtEnd"])
                .filterBounds(geom)
+               .map(mask_clouds)  # Aplica a máscara de nuvens
                .map(scale)
                .select(vis["bands"])
-               .sort("CLOUD_COVER", False)
                .mosaic())
 
     map_id = ee.data.getMapId({"image": landsat, **vis})

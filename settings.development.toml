@@ -11,6 +11,7 @@ S3_BUCKET = 'tiles-cache'
 
 # Performance para desenvolvimento
 WORKERS = 4  # Menos workers para desenvolvimento
+MAX_WORKERS_EE = 10 # Threads para requisições ao GEE por worker
 WORKER_CONNECTIONS = 1000
 MAX_REQUESTS = 10000
 MAX_REQUESTS_JITTER = 1000

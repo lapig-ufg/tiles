@@ -7,10 +7,11 @@ Endpoints refatorados para usar DiskCache (FanoutCache)
 """
 from __future__ import annotations
 
-import io, json, calendar
+import io, json, calendar, asyncio
 from datetime import datetime
 from enum import Enum
 from typing import Dict, Any, Optional
+from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
 import ee
@@ -40,6 +41,10 @@ class Period(str, Enum):
 MIN_ZOOM, MAX_ZOOM = 6, 18                     # Permitir zoom de 6 a 18
 
 router = APIRouter()
+
+# Thread pool para operações do Earth Engine (síncronas)
+ee_executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS_EE)
+
 
 # --------------------------------------------------------------------------- #
 # Utils comuns                                                                #
@@ -99,7 +104,7 @@ def _vis_param(visparam: str) -> dict[str, Any]:
     return vis
 
 
-def _create_s2_layer(geom: ee.Geometry, dates: Dict[str, str], vis: dict) -> str:
+def _create_s2_layer_sync(geom: ee.Geometry, dates: Dict[str, str], vis: dict) -> str:
     s2 = (ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
           .filterDate(dates["dtStart"], dates["dtEnd"])
           .filterBounds(geom)
@@ -110,12 +115,11 @@ def _create_s2_layer(geom: ee.Geometry, dates: Dict[str, str], vis: dict) -> str
     return map_id["tile_fetcher"].url_format
 
 
-def _create_landsat_layer(geom: ee.Geometry,
-                          dates: Dict[str, str],
-                          visparam_name: str) -> str:
+def _create_landsat_layer_sync(geom: ee.Geometry,
+                               dates: Dict[str, str],
+                               visparam_name: str) -> str:
     year = datetime.fromisoformat(dates["dtStart"]).year
     collection = get_landsat_collection(year)
-
     vis = get_landsat_vis_params(visparam_name, collection)
 
     for key in ("min", "max", "gamma"):
@@ -126,14 +130,20 @@ def _create_landsat_layer(geom: ee.Geometry,
         return img.addBands(img.select("SR_B.").multiply(0.0000275).add(-0.2),
                             None, True)
 
-    logger.info(f"vis: {vis}")
+    def mask_clouds(image):
+        qa = image.select('QA_PIXEL')
+        cloud_bit_mask = 1 << 3
+        cloud_shadow_bit_mask = 1 << 4
+        mask = qa.bitwiseAnd(cloud_bit_mask).eq(0).And(
+               qa.bitwiseAnd(cloud_shadow_bit_mask).eq(0))
+        return image.updateMask(mask)
 
     landsat = (ee.ImageCollection(collection)
                .filterDate(dates["dtStart"], dates["dtEnd"])
                .filterBounds(geom)
+               .map(mask_clouds)
                .map(scale)
                .select(vis["bands"])
-               .sort("CLOUD_COVER", False)
                .mosaic())
 
     map_id = ee.data.getMapId({"image": landsat, **vis})
@@ -149,7 +159,7 @@ async def _serve_tile(layer: str,
                       year: int,
                       month: int,
                       visparam: str,
-                      builder):
+                      builder_sync):
     _check_zoom(z)
     _check_capability(layer, year, period, visparam)
 
@@ -175,9 +185,17 @@ async def _serve_tile(layer: str,
     if expired:
         geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
         try:
-            layer_url = builder(geom, dates, visparam if layer == "landsat" else vis)
+            loop = asyncio.get_event_loop()
+            if layer == "landsat":
+                 layer_url = await loop.run_in_executor(
+                    ee_executor, builder_sync, geom, dates, visparam
+                )
+            else:
+                layer_url = await loop.run_in_executor(
+                    ee_executor, builder_sync, geom, dates, vis
+                )
             await set_meta(path_cache, {"url": layer_url, "date": datetime.now().isoformat()})
-        except Exception as e:                           # noqa: BLE001
+        except Exception as e:
             logger.exception("Erro criar layer EE")
             return FileResponse("data/blank.png", media_type="image/png")
     else:

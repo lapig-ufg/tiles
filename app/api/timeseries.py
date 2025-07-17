@@ -26,8 +26,9 @@ def timeseries_landsat(
 
         def mask(image):
             qa = image.select('QA_PIXEL')
-            cloud = qa.bitwiseAnd(1 << 5).eq(0)
-            cloud_shadow = qa.bitwiseAnd(1 << 3).eq(0)
+            # Mantem pixels onde a confianca de nuvem e sombra de nuvem é no máximo média (valores 0 e 1)
+            cloud = qa.bitwiseAnd(1 << 3).eq(0)  # Bit 3: Cloud
+            cloud_shadow = qa.bitwiseAnd(1 << 4).eq(0) # Bit 4: Cloud Shadow
             return image.updateMask(cloud).updateMask(cloud_shadow)
 
         def apply_scale(image):
@@ -41,84 +42,92 @@ def timeseries_landsat(
             return image.addBands(ndvi)
 
         l4 = ee.ImageCollection('LANDSAT/LT04/C02/T1_L2').select(['SR_B3', 'SR_B4', 'QA_PIXEL'],
-                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask).map(apply_scale)
+                                                                 ['RED', 'NIR', 'QA_PIXEL'])
         l5 = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2').select(['SR_B3', 'SR_B4', 'QA_PIXEL'],
-                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask).map(apply_scale)
+                                                                 ['RED', 'NIR', 'QA_PIXEL'])
         l7 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2').select(['SR_B3', 'SR_B4', 'QA_PIXEL'],
-                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask).map(apply_scale)
+                                                                 ['RED', 'NIR', 'QA_PIXEL'])
         l8 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2').select(['SR_B4', 'SR_B5', 'QA_PIXEL'],
-                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask).map(apply_scale)
+                                                                 ['RED', 'NIR', 'QA_PIXEL'])
         l9 = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2').select(['SR_B4', 'SR_B5', 'QA_PIXEL'],
-                                                                 ['RED', 'NIR', 'QA_PIXEL']).map(mask).map(apply_scale)
+                                                                 ['RED', 'NIR', 'QA_PIXEL'])
 
-        collections = l4.merge(l5).merge(l7).merge(l8).merge(l9).filterBounds(point).filterDate(data_inicio,
-                                                                                                data_fim).map(
-            calculate_ndvi)
+        collections = l4.merge(l5).merge(l7).merge(l8).merge(l9) \
+            .filterBounds(point) \
+            .filterDate(data_inicio, data_fim) \
+            .map(mask) \
+            .map(apply_scale) \
+            .map(calculate_ndvi) \
+            .sort('system:time_start')
 
-        def select_best_quality_image(collection):
-            distinct_dates = collection.aggregate_array('system:time_start').distinct()
+        # Otimização: Usar getRegion para extrair todos os dados de uma vez
+        ndvi_data = collections.select(['NDVI']).getRegion(point, 10).getInfo()
 
-            def map_dates(date):
-                date = ee.Date(date)
-                date_collection = collection.filterDate(date, date.advance(1, 'day'))
-                return ee.Algorithms.If(date_collection.size(), date_collection.qualityMosaic('QA_PIXEL'), None)
-
-            best_images = distinct_dates.map(map_dates)
-            best_images = ee.ImageCollection(best_images).filter(ee.Filter.notNull(['system:time_start']))
-            return best_images
-
-        best_quality_collections = collections
-
-        def get_ndvi_time_series(image):
-            date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
-            ndvi = image.select('NDVI').reduceRegion(
-                ee.Reducer.mean(), point, 500
-            ).get('NDVI')
-            return ee.Feature(None, {'date': date, 'NDVI': ndvi})
-
-        ndvi_time_series = best_quality_collections.map(get_ndvi_time_series).filter(
-            ee.Filter.notNull(['NDVI'])).filter(ee.Filter.rangeContains('NDVI', 0, 1))
-
-        ndvi_data = ndvi_time_series.reduceColumns(
-            ee.Reducer.toList(2), ['date', 'NDVI']
-        ).get('list').getInfo()
-
-        if ndvi_data:
-            ndvi_dates, ndvi_values = zip(*ndvi_data)
-        else:
+        if not ndvi_data or len(ndvi_data) <= 1:
             ndvi_dates, ndvi_values = [], []
-
-        ndvi_df = pd.DataFrame({'date': ndvi_dates, 'NDVI': ndvi_values})
-        ndvi_df = ndvi_df.groupby('date').mean().reset_index()
+        else:
+            # Processar o resultado do getRegion
+            header = ndvi_data[0]
+            time_index = header.index('time')
+            ndvi_index = header.index('NDVI')
+            
+            # Extrai e filtra valores nulos
+            processed_data = [
+                (row[time_index], row[ndvi_index]) 
+                for row in ndvi_data[1:] if row[ndvi_index] is not None
+            ]
+            
+            if not processed_data:
+                 ndvi_dates, ndvi_values = [], []
+            else:
+                # Converte timestamp para data e agrupa pela data, tirando a média
+                df = pd.DataFrame(processed_data, columns=['time', 'NDVI'])
+                df['date'] = pd.to_datetime(df['time'], unit='ms').dt.strftime('%Y-%m-%d')
+                
+                # Agrupa por data e calcula a média do NDVI
+                ndvi_df_grouped = df.groupby('date')['NDVI'].mean().reset_index()
+                
+                # Filtra NDVI fora do range válido
+                ndvi_df_grouped = ndvi_df_grouped[
+                    (ndvi_df_grouped['NDVI'] >= 0) & (ndvi_df_grouped['NDVI'] <= 1)
+                ]
+                
+                ndvi_dates = ndvi_df_grouped['date'].tolist()
+                ndvi_values = ndvi_df_grouped['NDVI'].tolist()
 
         def apply_savgol_filter(values, window_size=11, poly_order=2):
             if len(values) > window_size:
                 return savgol_filter(values, window_length=window_size, polyorder=poly_order)
             return values
 
-        ndvi_dates = ndvi_df['date'].tolist()
-        ndvi_values = ndvi_df['NDVI'].tolist()
         ndvi_values_smoothed = apply_savgol_filter(np.array(ndvi_values))
 
         chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY').filterDate(data_inicio, data_fim).filterBounds(point)
 
-        def get_precipitation_time_series(image):
-            date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
-            precipitation = image.reduceRegion(
-                ee.Reducer.mean(), point, 500
-            ).get('precipitation')
-            return ee.Feature(None, {'date': date, 'precipitation': precipitation})
+        # Otimização para precipitação também
+        precip_data = chirps.getRegion(point, 500).getInfo()
 
-        precip_time_series = chirps.map(get_precipitation_time_series).filter(ee.Filter.notNull(['precipitation']))
-
-        precip_data = precip_time_series.reduceColumns(
-            ee.Reducer.toList(2), ['date', 'precipitation']
-        ).get('list').getInfo()
-
-        if precip_data:
-            precip_dates, precip_values = zip(*precip_data)
-        else:
+        if not precip_data or len(precip_data) <= 1:
             precip_dates, precip_values = [], []
+        else:
+            header = precip_data[0]
+            time_index = header.index('time')
+            precip_index = header.index('precipitation')
+
+            processed_precip = [
+                (row[time_index], row[precip_index])
+                for row in precip_data[1:] if row[precip_index] is not None
+            ]
+            if not processed_precip:
+                precip_dates, precip_values = [], []
+            else:
+                precip_df = pd.DataFrame(processed_precip, columns=['time', 'precipitation'])
+                precip_df['date'] = pd.to_datetime(precip_df['time'], unit='ms').dt.strftime('%Y-%m-%d')
+                
+                precip_df_grouped = precip_df.groupby('date')['precipitation'].sum().reset_index()
+
+                precip_dates = precip_df_grouped['date'].tolist()
+                precip_values = precip_df_grouped['precipitation'].tolist()
 
         plotly_data = [
             {
@@ -170,53 +179,44 @@ def timeseries_nddi(
     try:
         if not data_fim:
             data_fim = datetime.now().strftime('%Y-%m-%d')
-        if not data_inicio:
-            data_inicio = (datetime.now() - timedelta(days=365 * 20)).strftime('%Y-%m-%d')  # Ajuste conforme necessário
 
         point = ee.Geometry.Point([lon, lat])
 
-        # Carregar o mosaico do MapBiomas
         mosaic = ee.ImageCollection('projects/nexgenmap/MapBiomas2/LANDSAT/BRAZIL/mosaics-2')
 
-        # Função para calcular o NDDI (NDDI = (NDVI - NDWI) / (NDVI + NDWI))
         def calculate_nddi(image):
             nddi = image.normalizedDifference(['ndvi_median_wet', 'ndwi_median_wet']).rename('NDDI')
             year = ee.Number(image.get('year'))
             date = ee.Date.fromYMD(year, 1, 1)
             return image.addBands(nddi).set('system:time_start', date.millis())
 
-        # Aplicar a função NDDI à coleção
         nddi_collection = mosaic.map(calculate_nddi).filterDate(data_inicio, data_fim).filterBounds(point)
 
-        # Função para extrair a série temporal do NDDI
-        def get_nddi_time_series(image):
-            date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
-            nddi = image.select('NDDI').reduceRegion(
-                ee.Reducer.mean(), point, 500
-            ).get('NDDI')
-            return ee.Feature(None, {'date': date, 'NDDI': nddi})
+        # Otimização: Usar getRegion para extrair todos os dados de uma vez
+        nddi_data = nddi_collection.select('NDDI').getRegion(point, 30).getInfo()
 
-        # Gerar a série temporal do NDDI
-        nddi_time_series = nddi_collection.map(get_nddi_time_series).filter(ee.Filter.notNull(['NDDI']))
-
-        # Extrair os dados da série temporal
-        nddi_data = nddi_time_series.reduceColumns(
-            ee.Reducer.toList(2), ['date', 'NDDI']
-        ).get('list').getInfo()
-
-        if nddi_data:
-            nddi_dates, nddi_values = zip(*nddi_data)
-        else:
+        if not nddi_data or len(nddi_data) <= 1:
             nddi_dates, nddi_values = [], []
+        else:
+            header = nddi_data[0]
+            time_index = header.index('time')
+            nddi_index = header.index('NDDI')
 
-        # Criar um DataFrame com os dados do NDDI
-        nddi_df = pd.DataFrame({'date': nddi_dates, 'NDDI': nddi_values})
-        nddi_df = nddi_df.groupby('date').mean().reset_index()
+            processed_data = [
+                (row[time_index], row[nddi_index])
+                for row in nddi_data[1:] if row[nddi_index] is not None
+            ]
+            if not processed_data:
+                nddi_dates, nddi_values = [], []
+            else:
+                df = pd.DataFrame(processed_data, columns=['time', 'NDDI'])
+                df['date'] = pd.to_datetime(df['time'], unit='ms').dt.strftime('%Y-%m-%d')
+                
+                nddi_df_grouped = df.groupby('date')['NDDI'].mean().reset_index()
+                
+                nddi_dates = nddi_df_grouped['date'].tolist()
+                nddi_values = nddi_df_grouped['NDDI'].tolist()
 
-        nddi_dates = nddi_df['date'].tolist()
-        nddi_values = nddi_df['NDDI'].tolist()
-
-        # Preparar os dados para o Plotly
         plotly_data = [
             {
                 'x': list(nddi_dates),
@@ -252,64 +252,79 @@ def timeseries_modis(
         if not data_fim:
             data_fim = datetime.now().strftime('%Y-%m-%d')
         if not data_inicio:
-            data_inicio = (datetime.now() - timedelta(days=365 * 20)).strftime('%Y-%m-%d')  # MODIS tem dados desde 2000
+            data_inicio = (datetime.now() - timedelta(days=365 * 20)).strftime('%Y-%m-%d')
 
         point = ee.Geometry.Point([lon, lat])
 
         modis = ee.ImageCollection('MODIS/061/MOD13Q1').filterBounds(point).filterDate(data_inicio, data_fim)
 
-        def get_ndvi_time_series(image):
-            date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
-            ndvi = image.select('NDVI').reduceRegion(
-                ee.Reducer.mean(), point, 500
-            ).get('NDVI')
-            # Convert NDVI from MODIS scale to -1 to 1 scale
-            ndvi = ee.Number(ndvi).divide(10000)
-            return ee.Feature(None, {'date': date, 'NDVI': ndvi})
+        def scale_ndvi(image):
+            return image.select('NDVI').multiply(0.0001).copyProperties(image, ['system:time_start'])
 
-        ndvi_time_series = modis.map(get_ndvi_time_series).filter(
-            ee.Filter.notNull(['NDVI'])).filter(ee.Filter.rangeContains('NDVI', -1, 1))
+        modis_scaled = modis.map(scale_ndvi)
 
-        ndvi_data = ndvi_time_series.reduceColumns(
-            ee.Reducer.toList(2), ['date', 'NDVI']
-        ).get('list').getInfo()
+        # Otimização: Usar getRegion para extrair todos os dados de uma vez
+        ndvi_data = modis_scaled.getRegion(point, 250).getInfo()
 
-        if ndvi_data:
-            ndvi_dates, ndvi_values = zip(*ndvi_data)
-        else:
+        if not ndvi_data or len(ndvi_data) <= 1:
             ndvi_dates, ndvi_values = [], []
+        else:
+            header = ndvi_data[0]
+            time_index = header.index('time')
+            ndvi_index = header.index('NDVI')
 
-        ndvi_df = pd.DataFrame({'date': ndvi_dates, 'NDVI': ndvi_values})
-        ndvi_df = ndvi_df.groupby('date').mean().reset_index()
+            processed_data = [
+                (row[time_index], row[ndvi_index])
+                for row in ndvi_data[1:] if row[ndvi_index] is not None
+            ]
+            if not processed_data:
+                ndvi_dates, ndvi_values = [], []
+            else:
+                df = pd.DataFrame(processed_data, columns=['time', 'NDVI'])
+                df['date'] = pd.to_datetime(df['time'], unit='ms').dt.strftime('%Y-%m-%d')
+                
+                ndvi_df_grouped = df.groupby('date')['NDVI'].mean().reset_index()
+                
+                ndvi_df_grouped = ndvi_df_grouped[
+                    (ndvi_df_grouped['NDVI'] >= -1) & (ndvi_df_grouped['NDVI'] <= 1)
+                ]
+                
+                ndvi_dates = ndvi_df_grouped['date'].tolist()
+                ndvi_values = ndvi_df_grouped['NDVI'].tolist()
 
         def apply_savgol_filter(values, window_size=13, poly_order=2):
             if len(values) > window_size:
                 return savgol_filter(values, window_length=window_size, polyorder=poly_order)
             return values
 
-        ndvi_dates = ndvi_df['date'].tolist()
-        ndvi_values = ndvi_df['NDVI'].tolist()
         ndvi_values_smoothed = apply_savgol_filter(np.array(ndvi_values))
 
         chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY').filterDate(data_inicio, data_fim).filterBounds(point)
 
-        def get_precipitation_time_series(image):
-            date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
-            precipitation = image.reduceRegion(
-                ee.Reducer.mean(), point, 500
-            ).get('precipitation')
-            return ee.Feature(None, {'date': date, 'precipitation': precipitation})
+        # Otimização para precipitação também
+        precip_data = chirps.getRegion(point, 5000).getInfo()
 
-        precip_time_series = chirps.map(get_precipitation_time_series).filter(ee.Filter.notNull(['precipitation']))
-
-        precip_data = precip_time_series.reduceColumns(
-            ee.Reducer.toList(2), ['date', 'precipitation']
-        ).get('list').getInfo()
-
-        if precip_data:
-            precip_dates, precip_values = zip(*precip_data)
-        else:
+        if not precip_data or len(precip_data) <= 1:
             precip_dates, precip_values = [], []
+        else:
+            header = precip_data[0]
+            time_index = header.index('time')
+            precip_index = header.index('precipitation')
+
+            processed_precip = [
+                (row[time_index], row[precip_index])
+                for row in precip_data[1:] if row[precip_index] is not None
+            ]
+            if not processed_precip:
+                precip_dates, precip_values = [], []
+            else:
+                precip_df = pd.DataFrame(processed_precip, columns=['time', 'precipitation'])
+                precip_df['date'] = pd.to_datetime(precip_df['time'], unit='ms').dt.strftime('%Y-%m-%d')
+                
+                precip_df_grouped = precip_df.groupby('date')['precipitation'].sum().reset_index()
+
+                precip_dates = precip_df_grouped['date'].tolist()
+                precip_values = precip_df_grouped['precipitation'].tolist()
 
         plotly_data = [
             {
@@ -365,78 +380,83 @@ def timeseries_sentinel2(
 
         point = ee.Geometry.Point([lon, lat])
 
-        # Function to mask clouds using the QA60 band
         def maskS2clouds(image):
             qa = image.select('QA60')
             cloudBitMask = 1 << 10
             cirrusBitMask = 1 << 11
             mask = qa.bitwiseAnd(cloudBitMask).eq(0).And(qa.bitwiseAnd(cirrusBitMask).eq(0))
-            return image.updateMask(mask)
+            return image.updateMask(mask).divide(10000).copyProperties(image, ["system:time_start"])
 
-        # Function to calculate and add an NDVI band
         def addNDVI(image):
             ndvi = image.normalizedDifference(['B8', 'B4']).rename('NDVI')
             return image.addBands(ndvi)
 
-        # Load Sentinel-2 image collection
-        s2 = ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED') \
-            .filterDate(data_inicio, data_fim) \
-            .filterBounds(point) \
-            .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20)) \
-            .map(maskS2clouds) \
-            .map(addNDVI) \
-            .filter(ee.Filter.notNull(['system:time_start']))
+        s2 = (ee.ImageCollection('COPERNICUS/S2_SR_HARMONIZED')
+              .filterDate(data_inicio, data_fim)
+              .filterBounds(point)
+              .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 20))
+              .map(maskS2clouds))
 
-        # Create a time series of NDVI values
-        def get_ndvi_time_series(image):
-            date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
-            ndvi = image.select('NDVI').reduceRegion(
-                ee.Reducer.mean(), point, 500
-            ).get('NDVI')
-            return ee.Feature(None, {'date': date, 'NDVI': ndvi})
+        s2_ndvi = s2.map(addNDVI)
 
-        ndvi_time_series = s2.map(get_ndvi_time_series).filter(ee.Filter.notNull(['NDVI']))
+        # Otimização: Usar getRegion para extrair todos os dados de uma vez
+        ndvi_data = s2_ndvi.select('NDVI').getRegion(point, 10).getInfo()
 
-        ndvi_data_list = ndvi_time_series.reduceColumns(
-            ee.Reducer.toList(2), ['date', 'NDVI']
-        ).get('list').getInfo()
+        if not ndvi_data or len(ndvi_data) <= 1:
+            ndvi_dates, ndvi_values = [], []
+        else:
+            header = ndvi_data[0]
+            time_index = header.index('time')
+            ndvi_index = header.index('NDVI')
 
-        if not ndvi_data_list:
-            raise HTTPException(
-                status_code=404,
-                detail="No valid NDVI data found for the specified period and location."
-            )
-
-        ndvi_dates, ndvi_values = zip(*ndvi_data_list)
-
-        ndvi_df = pd.DataFrame({'date': ndvi_dates, 'NDVI': ndvi_values})
-        ndvi_df = ndvi_df.groupby('date').mean().reset_index()
+            processed_data = [
+                (row[time_index], row[ndvi_index])
+                for row in ndvi_data[1:] if row[ndvi_index] is not None
+            ]
+            if not processed_data:
+                ndvi_dates, ndvi_values = [], []
+            else:
+                df = pd.DataFrame(processed_data, columns=['time', 'NDVI'])
+                df['date'] = pd.to_datetime(df['time'], unit='ms').dt.strftime('%Y-%m-%d')
+                
+                ndvi_df_grouped = df.groupby('date')['NDVI'].mean().reset_index()
+                
+                ndvi_dates = ndvi_df_grouped['date'].tolist()
+                ndvi_values = ndvi_df_grouped['NDVI'].tolist()
 
         def apply_savgol_filter(values, window_size=7, poly_order=3):
             if len(values) > window_size:
                 return savgol_filter(values, window_length=window_size, polyorder=poly_order).tolist()
-            return values.tolist()
+            return values
 
-        ndvi_dates = ndvi_df['date'].tolist()
-        ndvi_values = ndvi_df['NDVI'].tolist()
         ndvi_values_smoothed = apply_savgol_filter(np.array(ndvi_values))
 
         chirps = ee.ImageCollection('UCSB-CHG/CHIRPS/DAILY').filterDate(data_inicio, data_fim).filterBounds(point)
 
-        def get_precipitation_time_series(image):
-            date = ee.Date(image.get('system:time_start')).format('YYYY-MM-dd')
-            precipitation = image.reduceRegion(
-                ee.Reducer.mean(), point, 500
-            ).get('precipitation')
-            return ee.Feature(None, {'date': date, 'precipitation': precipitation})
+        # Otimização para precipitação também
+        precip_data = chirps.getRegion(point, 5000).getInfo()
 
-        precip_time_series = chirps.map(get_precipitation_time_series).filter(ee.Filter.notNull(['precipitation']))
+        if not precip_data or len(precip_data) <= 1:
+            precip_dates, precip_values = [], []
+        else:
+            header = precip_data[0]
+            time_index = header.index('time')
+            precip_index = header.index('precipitation')
 
-        precip_data_list = precip_time_series.reduceColumns(
-            ee.Reducer.toList(2), ['date', 'precipitation']
-        ).get('list').getInfo()
+            processed_precip = [
+                (row[time_index], row[precip_index])
+                for row in precip_data[1:] if row[precip_index] is not None
+            ]
+            if not processed_precip:
+                precip_dates, precip_values = [], []
+            else:
+                precip_df = pd.DataFrame(processed_precip, columns=['time', 'precipitation'])
+                precip_df['date'] = pd.to_datetime(precip_df['time'], unit='ms').dt.strftime('%Y-%m-%d')
+                
+                precip_df_grouped = precip_df.groupby('date')['precipitation'].sum().reset_index()
 
-        precip_dates, precip_values = zip(*precip_data_list)
+                precip_dates = precip_df_grouped['date'].tolist()
+                precip_values = precip_df_grouped['precipitation'].tolist()
 
         plotly_data = [
             {
