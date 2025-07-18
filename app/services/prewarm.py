@@ -11,8 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 import aiohttp
 from loguru import logger
 
-from app.tile import latlon_to_tile
-from app.config import settings
+from app.services.tile import latlon_to_tile
+from app.core.config import settings
 
 
 class TilePreWarmer:

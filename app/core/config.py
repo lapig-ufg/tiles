@@ -42,7 +42,7 @@ except:
     )
 
 settings = Dynaconf(
-    envvar_prefix="ECOTILES",
+    envvar_prefix=False,  # Sem prefixo - usa variáveis de ambiente diretamente
     settings_files=[
         "settings.toml",
         ".secrets.toml",

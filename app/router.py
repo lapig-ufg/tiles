@@ -1,4 +1,4 @@
-from .api import layers, timeseries, tile_aggregation, cache_unified, vis_params_management
+from .api import layers, timeseries, tile_aggregation, cache_unified, vis_params_management, capabilities_endpoints
 
 
 def created_routes(app):
@@ -14,5 +14,8 @@ def created_routes(app):
     
     # Rota para gerenciamento de parâmetros de visualização
     app.include_router(vis_params_management.router, tags=["Visualization Parameters"])
+    
+    # Rota para capabilities dinâmicas
+    app.include_router(capabilities_endpoints.router, tags=["Capabilities"])
 
     return app

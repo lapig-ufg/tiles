@@ -5,9 +5,9 @@ Replaces the hardcoded VISPARAMS with database-driven configuration
 from typing import Dict, Optional, List, Any, Union
 from functools import lru_cache
 import asyncio
-from app.mongodb import get_database
+from app.core.mongodb import get_database
 from app.models.vis_params import VisParamDocument, LandsatCollectionMapping
-from app.config import logger
+from app.core.config import logger
 
 
 class VisParamsManager:

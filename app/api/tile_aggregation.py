@@ -8,8 +8,8 @@ import asyncio
 import io
 from PIL import Image
 from datetime import datetime
-from app.config import logger
-from app.cache_hybrid import tile_cache
+from app.core.config import logger
+from app.cache.cache_hybrid import tile_cache
 
 router = APIRouter(prefix="/aggregation", tags=["Agregação de Tiles"])
 
@@ -270,7 +270,7 @@ async def generate_sprite_sheet(
     Gera um sprite sheet com todos os tiles de uma região/período
     Cliente baixa 1 arquivo e faz recortes localmente
     """
-    from app.tile import latlon_to_tile
+    from app.services.tile import latlon_to_tile
     
     # Extrai dados do body
     layer = body.layer

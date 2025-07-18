@@ -13,11 +13,11 @@ from fastapi import APIRouter, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse, FileResponse
 
 
-from app.config import logger, settings
-from app.tile import tile2goehashBBOX
-from app.visParam import VISPARAMS
-from app.visParam import get_landsat_vis_params
-from app.errors import generate_error_image
+from app.core.config import logger, settings
+from app.services.tile import tile2goehashBBOX
+from app.visualization.visParam import VISPARAMS
+from app.visualization.visParam import get_landsat_vis_params
+from app.core.errors import generate_error_image
 router = APIRouter()
 
 

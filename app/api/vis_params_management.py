@@ -8,15 +8,15 @@ from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
-from app.auth import SuperAdminRequired
-from app.mongodb import get_database
+from app.core.auth import SuperAdminRequired
+from app.core.mongodb import get_database
 from app.models.vis_params import (
     VisParamDocument, BandConfig, VisParam, 
     SatelliteVisParam, LandsatCollectionMapping,
     SentinelCollectionMapping
 )
-from app.vis_params_db import vis_params_manager
-from app.config import logger, settings
+from app.visualization.vis_params_db import vis_params_manager
+from app.core.config import logger, settings
 
 
 router = APIRouter(
@@ -344,7 +344,7 @@ async def test_vis_params(request: VisParamTestRequest):
     """
     try:
         import ee
-        from app.tile import tile2goehashBBOX
+        from app.services.tile import tile2goehashBBOX
         
         # Get tile bounds
         _, bbox = tile2goehashBBOX(request.x, request.y, request.z)

@@ -17,7 +17,7 @@ import redis.asyncio as redis
 import orjson
 from botocore.exceptions import ClientError
 
-from app.config import logger, settings
+from app.core.config import logger, settings
 
 
 class HybridTileCache:
@@ -72,8 +72,8 @@ class HybridTileCache:
             async with self.s3_session.client(
                 's3',
                 endpoint_url=self.s3_endpoint,
-                aws_access_key_id=os.environ.get("S3_ACCESS_KEY", settings.get("S3_ACCESS_KEY", "minioadmin")),
-                aws_secret_access_key=os.environ.get("S3_SECRET_KEY", settings.get("S3_SECRET_KEY", "minioadmin")),
+                aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
+                aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
             ) as s3:
                 try:
                     await s3.head_bucket(Bucket=self.s3_bucket)
@@ -131,8 +131,8 @@ class HybridTileCache:
         async with self.s3_session.client(
             's3',
             endpoint_url=self.s3_endpoint,
-            aws_access_key_id=os.environ.get("S3_ACCESS_KEY", settings.get("S3_ACCESS_KEY", "minioadmin")),
-            aws_secret_access_key=os.environ.get("S3_SECRET_KEY", settings.get("S3_SECRET_KEY", "minioadmin")),
+            aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
+            aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
         ) as s3:
             try:
                 response = await s3.get_object(Bucket=self.s3_bucket, Key=s3_key)
@@ -181,8 +181,8 @@ class HybridTileCache:
         async with self.s3_session.client(
             's3',
             endpoint_url=self.s3_endpoint,
-            aws_access_key_id=os.environ.get("S3_ACCESS_KEY", settings.get("S3_ACCESS_KEY", "minioadmin")),
-            aws_secret_access_key=os.environ.get("S3_SECRET_KEY", settings.get("S3_SECRET_KEY", "minioadmin")),
+            aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
+            aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
         ) as s3:
             for attempt in range(3):
                 try:
@@ -321,8 +321,8 @@ class HybridTileCache:
         async with self.s3_session.client(
             's3',
             endpoint_url=self.s3_endpoint,
-            aws_access_key_id=os.environ.get("S3_ACCESS_KEY", settings.get("S3_ACCESS_KEY", "minioadmin")),
-            aws_secret_access_key=os.environ.get("S3_SECRET_KEY", settings.get("S3_SECRET_KEY", "minioadmin")),
+            aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
+            aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
         ) as s3:
             # S3 permite deletar até 1000 objetos por vez
             for i in range(0, len(s3_keys), 1000):
@@ -360,7 +360,7 @@ class HybridTileCache:
 # Instância global do cache
 # Usa variáveis de ambiente ou configurações como fallback
 tile_cache = HybridTileCache(
-    redis_url=os.environ.get("REDIS_URL", settings.get("REDIS_URL", "redis://localhost:6379")),
-    s3_endpoint=os.environ.get("S3_ENDPOINT", settings.get("S3_ENDPOINT", "http://localhost:9000")),
-    s3_bucket=os.environ.get("S3_BUCKET", settings.get("S3_BUCKET", "tiles-cache")),
+    redis_url=settings.get("REDIS_URL", "redis://localhost:6379"),
+    s3_endpoint=settings.get("S3_ENDPOINT", "http://localhost:9000"),
+    s3_bucket=settings.get("S3_BUCKET", "tiles-cache"),
 )

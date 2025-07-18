@@ -18,15 +18,15 @@ import ee
 from fastapi import APIRouter, HTTPException, Request, BackgroundTasks
 from fastapi.responses import StreamingResponse, FileResponse, Response
 
-from app.config import logger, settings
+from app.core.config import logger, settings
 from app.utils.capabilities import CAPABILITIES
-from app.tile import tile2goehashBBOX
-from app.vis_params_loader import VISPARAMS, get_landsat_vis_params, get_landsat_collection
-from app.errors import generate_error_image
-from app.cache_hybrid import tile_cache
-from app.rate_limiter import limit_sentinel, limit_landsat, limiter
-from app.adaptive_limiter import adaptive_limiter
-from app.batch_processor import batch_processor
+from app.services.tile import tile2goehashBBOX
+from app.visualization.vis_params_loader import VISPARAMS, get_landsat_vis_params, get_landsat_collection
+from app.core.errors import generate_error_image
+from app.cache.cache_hybrid import tile_cache
+from app.middleware.rate_limiter import limit_sentinel, limit_landsat, limiter
+from app.middleware.adaptive_limiter import adaptive_limiter
+from app.services.batch_processor import batch_processor
 
 # --------------------------------------------------------------------------- #
 # Constantes e tipos                                                          #

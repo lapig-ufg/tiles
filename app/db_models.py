@@ -5,7 +5,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from sqlalchemy import Column, DateTime, Integer, String
 
-from app.database import Base
+from app.core.database import Base
 
 
 class Layer(Base):

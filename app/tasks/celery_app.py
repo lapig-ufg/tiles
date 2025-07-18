@@ -2,7 +2,7 @@
 Configuração e inicialização do Celery
 """
 from celery import Celery
-from app.config import settings
+from app.core.config import settings
 from celery.schedules import crontab
 
 # Cria instância do Celery

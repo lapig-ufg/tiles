@@ -2,7 +2,7 @@ import typing
 import time
 from contextlib import asynccontextmanager
 
-from app.utils.capabilities import CAPABILITIES
+from app.utils.capabilities import get_capabilities_provider
 import ee
 import orjson
 from fastapi import FastAPI, HTTPException, Request
@@ -17,11 +17,15 @@ from slowapi.errors import RateLimitExceeded
 # from prometheus_client import Counter, Histogram, generate_latest
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.config import settings, logger, start_logger
-from app.database import Base, engine
+from app.core import settings, logger
+from app.core.config import start_logger
+from app.core.database import Base, engine
 from app.router import created_routes
 from app.utils.cors import origin_regex, allow_origins
-from app.cache_hybrid import tile_cache
+from app.cache import HybridTileCache
+
+# Instância global do cache
+tile_cache = HybridTileCache()
 
 # Inicializa New Relic se estiver em produção
 # try:
@@ -82,7 +86,7 @@ async def lifespan(app: FastAPI):
     
     # Inicializa MongoDB
     try:
-        from app.mongodb import connect_to_mongo
+        from app.core.mongodb import connect_to_mongo
         await connect_to_mongo()
         logger.info("MongoDB connected successfully")
     except Exception as e:
@@ -117,7 +121,7 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
-    from app.mongodb import close_mongo_connection
+    from app.core.mongodb import close_mongo_connection
     await close_mongo_connection()
     logger.info("MongoDB connection closed")
     
@@ -171,7 +175,24 @@ async def read_root(request: Request):
 @app.get('/api/capabilities')
 @limiter.limit("100/minute")
 async def get_capabilities(request: Request):
-    return CAPABILITIES
+    """Get dynamic capabilities based on available vis_params"""
+    provider = get_capabilities_provider()
+    capabilities = await provider.get_capabilities()
+    
+    # Return in legacy format for backward compatibility
+    legacy_collections = []
+    for coll in capabilities["collections"]:
+        legacy_coll = {
+            "name": coll["name"],
+            "visparam": coll["visparam"],
+            "period": coll.get("period", []),
+            "year": coll.get("year", [])
+        }
+        if "months" in coll:
+            legacy_coll["month"] = coll["months"]
+        legacy_collections.append(legacy_coll)
+    
+    return {"collections": legacy_collections}
 
 # Endpoint de métricas removido (Prometheus desabilitado)
 

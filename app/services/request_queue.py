@@ -5,7 +5,7 @@ import asyncio
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import heapq
-from app.config import logger
+from app.core.config import logger
 
 class PriorityRequestQueue:
     """

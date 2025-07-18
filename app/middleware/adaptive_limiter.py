@@ -6,7 +6,7 @@ import psutil
 from typing import Dict, Optional
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from app.config import settings
+from app.core.config import settings
 
 class AdaptiveLimiter:
     def __init__(self):

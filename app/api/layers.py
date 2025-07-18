@@ -18,16 +18,16 @@ import ee
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, FileResponse
 
-from app.config import logger, settings
+from app.core.config import logger, settings
 from app.utils.capabilities import CAPABILITIES
-from app.tile import tile2goehashBBOX
-from app.vis_params_loader import VISPARAMS, get_landsat_vis_params, get_landsat_collection
-from app.errors import generate_error_image
-from app.cache import (
+from app.services.tile import tile2goehashBBOX
+from app.visualization.vis_params_loader import VISPARAMS, get_landsat_vis_params, get_landsat_collection
+from app.core.errors import generate_error_image
+from app.cache.cache import (
     aget_png as get_png,  aset_png as set_png,          # bytes (tile)
     aget_meta as get_meta, aset_meta as set_meta          # {"url": str, "date": iso}
 )
-from app.rate_limiter import limit_sentinel, limit_landsat
+from app.middleware.rate_limiter import limit_sentinel, limit_landsat
 
 # --------------------------------------------------------------------------- #
 # Constantes e tipos                                                          #

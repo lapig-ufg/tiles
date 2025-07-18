@@ -8,8 +8,8 @@ from dataclasses import dataclass
 from enum import Enum
 import random
 from celery import group, chord
-from app.celery_app import celery_app
-from app.config import settings
+from app.tasks.celery_app import celery_app
+from app.core.config import settings
 from loguru import logger
 import asyncio
 from datetime import datetime, timedelta

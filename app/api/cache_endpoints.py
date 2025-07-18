@@ -8,10 +8,10 @@ from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app.auth import SuperAdminRequired
-from app.mongodb import get_points_collection, get_campaigns_collection
-from app.cache_tasks import cache_point_async, cache_campaign_async, get_cache_status
-from app.config import logger
+from app.core.auth import SuperAdminRequired
+from app.core.mongodb import get_points_collection, get_campaigns_collection
+from app.tasks.cache_tasks import cache_point_async, cache_campaign_async, get_cache_status
+from app.core.config import logger
 
 router = APIRouter(prefix="/api/v1/cache", tags=["cache-management"])
 

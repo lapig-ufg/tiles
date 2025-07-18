@@ -5,7 +5,7 @@ import asyncio
 from typing import List, Dict, Any
 from datetime import datetime
 import uuid
-from app.config import logger
+from app.core.config import logger
 
 class BatchProcessor:
     def __init__(self, batch_size: int = 50, max_wait_time: float = 0.5):

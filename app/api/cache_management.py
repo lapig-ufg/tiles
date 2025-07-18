@@ -7,11 +7,11 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 import asyncio
 
-from app.cache_warmer import (
+from app.cache.cache_warmer import (
     CacheWarmer, LoadingPattern, ViewportBounds,
     schedule_warmup_task, analyze_usage_patterns_task
 )
-from app.tasks import celery_app
+from app.tasks.tasks import celery_app
 from loguru import logger
 
 

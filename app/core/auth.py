@@ -4,8 +4,8 @@ Authentication middleware for TVI cache management endpoints
 import hashlib
 from fastapi import HTTPException, Depends, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from app.mongodb import get_users_collection
-from app.config import logger
+from app.core.mongodb import get_users_collection
+from app.core.config import logger
 
 security = HTTPBasic()
 

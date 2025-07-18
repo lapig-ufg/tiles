@@ -10,11 +10,11 @@ import aiohttp
 import io
 from loguru import logger
 
-from app.celery_app import celery_app
-from app.mongodb import get_points_collection, get_campaigns_collection
-from app.tile import tile2goehashBBOX
-from app.vis_params_loader import get_landsat_collection, get_landsat_vis_params, VISPARAMS
-from app.cache import aset_png as set_png, aset_meta as set_meta
+from app.tasks.celery_app import celery_app
+from app.core.mongodb import get_points_collection, get_campaigns_collection
+from app.services.tile import tile2goehashBBOX
+from app.visualization.vis_params_loader import get_landsat_collection, get_landsat_vis_params, VISPARAMS
+from app.cache.cache import aset_png as set_png, aset_meta as set_meta
 import motor.motor_asyncio
 
 # Rate limiting for GEE requests
@@ -183,7 +183,7 @@ def cache_point_async(self, point_id: str):
     async def _cache_point():
         try:
             # Connect to MongoDB
-            from app.mongodb import connect_to_mongo
+            from app.core.mongodb import connect_to_mongo
             await connect_to_mongo()
             
             points_collection = await get_points_collection()
@@ -278,7 +278,7 @@ def cache_campaign_async(self, campaign_id: str, batch_size: int = 5):
     async def _cache_campaign():
         try:
             # Connect to MongoDB
-            from app.mongodb import connect_to_mongo
+            from app.core.mongodb import connect_to_mongo
             await connect_to_mongo()
             
             points_collection = await get_points_collection()
@@ -347,7 +347,7 @@ def get_cache_status(point_id: str = None, campaign_id: str = None):
     """
     async def _get_status():
         try:
-            from app.mongodb import connect_to_mongo
+            from app.core.mongodb import connect_to_mongo
             await connect_to_mongo()
             
             points_collection = await get_points_collection()

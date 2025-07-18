@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Optional
 
-from app.cache_hybrid import tile_cache
+from app.cache.cache_hybrid import tile_cache
 
 # TTLs otimizados para alta performance
 PNG_TTL = 30 * 24 * 3600   # 30 dias para tiles (eram 24h)

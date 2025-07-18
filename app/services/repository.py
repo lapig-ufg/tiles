@@ -1,6 +1,5 @@
 from sqlalchemy.orm import Session
-
-from app.models import Layer
+from app.db_models import Layer
 
 
 class LayerRepository:

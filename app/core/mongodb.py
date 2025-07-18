@@ -6,7 +6,7 @@ from typing import List, Optional, Any, Dict
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
 from bson import ObjectId
-from app.config import settings
+from app.core.config import settings
 
 # MongoDB connection
 class MongoDB:

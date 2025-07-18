@@ -9,16 +9,16 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from celery.result import AsyncResult
 
-from app.auth import SuperAdminRequired
-from app.mongodb import get_points_collection, get_campaigns_collection
-from app.cache_tasks import cache_point_async, cache_campaign_async, get_cache_status
-from app.cache_warmer import (
+from app.core.auth import SuperAdminRequired
+from app.core.mongodb import get_points_collection, get_campaigns_collection
+from app.tasks.cache_tasks import cache_point_async, cache_campaign_async, get_cache_status
+from app.cache.cache_warmer import (
     CacheWarmer, LoadingPattern, ViewportBounds,
     schedule_warmup_task, analyze_usage_patterns_task
 )
-from app.tasks import celery_app
-from app.cache_hybrid import tile_cache
-from app.config import logger
+from app.tasks.tasks import celery_app
+from app.cache.cache_hybrid import tile_cache
+from app.core.config import logger
 
 router = APIRouter(
     prefix="/api/cache", 

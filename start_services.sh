@@ -15,7 +15,7 @@ trap cleanup SIGINT SIGTERM
 
 # Inicia Celery Worker em background
 echo "Iniciando Celery Worker..."
-celery -A app.celery_app worker \
+celery -A app.tasks.celery_app worker \
     --loglevel=info \
     --concurrency=8 \
     --max-tasks-per-child=1000 \

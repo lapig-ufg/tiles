@@ -4,7 +4,7 @@ Allows switching between MongoDB and hardcoded configurations
 """
 import os
 from typing import Dict, Any, Union
-from app.config import settings, logger
+from app.core.config import settings, logger
 
 
 # Check if we should use MongoDB for vis params
@@ -14,7 +14,7 @@ USE_MONGODB_VIS_PARAMS = settings.get("USE_MONGODB_VIS_PARAMS", True)
 if USE_MONGODB_VIS_PARAMS:
     try:
         # Try to import MongoDB-based implementation
-        from app.vis_params_db import (
+        from app.visualization.vis_params_db import (
             get_visparams_dict,
             get_landsat_collection,
             get_landsat_vis_params,
@@ -46,7 +46,7 @@ if USE_MONGODB_VIS_PARAMS:
 
 if not USE_MONGODB_VIS_PARAMS:
     # Use hardcoded implementation
-    from app.visParam import (
+    from app.visualization.visParam import (
         VISPARAMS,
         get_landsat_collection,
         get_landsat_vis_params,
@@ -84,10 +84,10 @@ def get_VISPARAMS_sync():
                     _VISPARAMS_CACHE = loop.run_until_complete(get_VISPARAMS())
             except:
                 # Fallback to hardcoded if async fails
-                from app.visParam import VISPARAMS as HARDCODED_VISPARAMS
+                from app.visualization.visParam import VISPARAMS as HARDCODED_VISPARAMS
                 _VISPARAMS_CACHE = HARDCODED_VISPARAMS
         else:
-            from app.visParam import VISPARAMS as HARDCODED_VISPARAMS
+            from app.visualization.visParam import VISPARAMS as HARDCODED_VISPARAMS
             _VISPARAMS_CACHE = HARDCODED_VISPARAMS
     
     return _VISPARAMS_CACHE

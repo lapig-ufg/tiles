@@ -1,5 +1,5 @@
 from datetime import datetime
-from app.config import logger
+from app.core.config import logger
 
 
 def getCacheUrl(cache):

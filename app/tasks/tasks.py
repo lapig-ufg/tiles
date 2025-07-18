@@ -5,7 +5,7 @@ import ee
 from typing import Dict, Any, List
 import asyncio
 from loguru import logger
-from app.celery_app import celery_app
+from app.tasks.celery_app import celery_app
 
 @celery_app.task(bind=True, max_retries=3)
 def process_landsat_tile(self, params: Dict[str, Any]):
@@ -54,7 +54,7 @@ def generate_tile_cache(z: int, x: int, y: int, layer: str, params: Dict[str, An
     """Gera e armazena tile no cache"""
     try:
         from app.api.layers import process_tile_request
-        from app.cache_hybrid import HybridCache
+        from app.cache.cache_hybrid import HybridCache
         
         # Gera chave do cache
         cache_key = f"tile:{layer}:{z}:{x}:{y}:{hash(str(params))}"
