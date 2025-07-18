@@ -80,6 +80,17 @@ async def lifespan(app: FastAPI):
     # Startup
     start_logger()
     
+    # Inicializa MongoDB
+    try:
+        from app.mongodb import connect_to_mongo
+        await connect_to_mongo()
+        logger.info("MongoDB connected successfully")
+    except Exception as e:
+        logger.error(f"Failed to connect to MongoDB: {e}")
+        if settings.get("TILES_ENV") != "development":
+            raise
+        logger.warning("Running in development mode without MongoDB")
+    
     # Inicializa cache híbrido
     await tile_cache.initialize()
     logger.info("Cache híbrido inicializado")
@@ -106,6 +117,10 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
+    from app.mongodb import close_mongo_connection
+    await close_mongo_connection()
+    logger.info("MongoDB connection closed")
+    
     await tile_cache.close()
     logger.info("Cache híbrido fechado")
 

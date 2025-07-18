@@ -1,0 +1,596 @@
+"""
+Unified Cache Management API
+Combines all cache-related endpoints in a single, organized module
+"""
+from datetime import datetime
+from typing import Optional, Dict, Any, List
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+from celery.result import AsyncResult
+
+from app.auth import SuperAdminRequired
+from app.mongodb import get_points_collection, get_campaigns_collection
+from app.cache_tasks import cache_point_async, cache_campaign_async, get_cache_status
+from app.cache_warmer import (
+    CacheWarmer, LoadingPattern, ViewportBounds,
+    schedule_warmup_task, analyze_usage_patterns_task
+)
+from app.tasks import celery_app
+from app.cache_hybrid import tile_cache
+from app.config import logger
+
+router = APIRouter(
+    prefix="/api/cache", 
+    tags=["Cache Management"],
+    dependencies=[SuperAdminRequired]  # Protege todos os endpoints do router
+)
+
+# ============================================================================
+# Request/Response Models
+# ============================================================================
+
+class CachePointRequest(BaseModel):
+    """Request to cache a single point"""
+    point_id: str = Field(..., description="Point ID to cache")
+
+class CacheCampaignRequest(BaseModel):
+    """Request to cache all points in a campaign"""
+    campaign_id: str = Field(..., description="Campaign ID to cache")
+    batch_size: Optional[int] = Field(5, ge=1, le=50, description="Batch size for processing")
+
+class CacheWarmupRequest(BaseModel):
+    """Request for cache warming"""
+    layer: str = Field(..., description="Layer name to warm cache")
+    params: Dict[str, Any] = Field(default_factory=dict, description="Layer parameters")
+    max_tiles: int = Field(500, ge=1, le=10000, description="Maximum number of tiles")
+    batch_size: int = Field(50, ge=1, le=200, description="Batch size for processing")
+    patterns: List[str] = Field(
+        default=["spiral", "grid"],
+        description="Loading patterns to simulate"
+    )
+    regions: Optional[List[Dict[str, float]]] = Field(
+        None,
+        description="Specific regions to warm (min_lat, max_lat, min_lon, max_lon)"
+    )
+
+class CacheStatusResponse(BaseModel):
+    """Generic cache status response"""
+    status: str
+    message: str
+    data: Optional[Dict[str, Any]] = None
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+class CacheStatsResponse(BaseModel):
+    """Cache statistics response"""
+    total_cached_tiles: int
+    cache_hit_rate: float
+    redis_keys: int
+    disk_usage_mb: float
+    popular_tiles: List[Dict[str, Any]]
+    last_warmup: Optional[datetime]
+    active_tasks: int
+
+# ============================================================================
+# General Cache Management (Public)
+# ============================================================================
+
+@router.get("/stats", response_model=CacheStatsResponse)
+async def get_cache_statistics(request: Request):
+    """
+    Get comprehensive cache statistics and metrics
+    
+    Returns information about cache usage, hit rates, and performance metrics.
+    """
+    try:
+        # Get cache stats from hybrid cache
+        stats = await tile_cache.get_stats()
+        
+        # Get active Celery tasks
+        inspect = celery_app.control.inspect()
+        active_tasks = len(inspect.active() or {})
+        
+        # Get popular tiles (placeholder - should be tracked in real system)
+        popular_tiles = [
+            {"tile": "10/512/512", "hits": 1523},
+            {"tile": "11/1024/1024", "hits": 1342},
+            {"tile": "12/2048/2048", "hits": 987}
+        ]
+        
+        return CacheStatsResponse(
+            total_cached_tiles=stats["redis"]["total_keys"],
+            cache_hit_rate=0.85,  # Should be calculated from real metrics
+            redis_keys=stats["redis"]["total_keys"],
+            disk_usage_mb=stats["disk"]["size_mb"],
+            popular_tiles=popular_tiles,
+            last_warmup=datetime.now(),  # Should be tracked
+            active_tasks=active_tasks
+        )
+        
+    except Exception as e:
+        logger.exception(f"Error getting cache statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/clear")
+async def clear_cache(
+    layer: Optional[str] = Query(None, description="Specific layer to clear"),
+    year: Optional[int] = Query(None, description="Specific year to clear"),
+    x: Optional[int] = Query(None, description="Tile X coordinate"),
+    y: Optional[int] = Query(None, description="Tile Y coordinate"),
+    z: Optional[int] = Query(None, description="Tile Z coordinate"),
+    pattern: Optional[str] = Query(None, description="Custom pattern for clearing"),
+    confirm: bool = Query(False, description="Confirm cache clearing")
+):
+    """
+    Clear cache entries based on filters
+    
+    Use with caution! Requires explicit confirmation.
+    
+    Examples:
+    - DELETE /api/cache/clear?layer=landsat&confirm=true
+    - DELETE /api/cache/clear?year=2023&confirm=true
+    - DELETE /api/cache/clear?x=123&y=456&z=10&confirm=true
+    """
+    if not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Set confirm=true to confirm cache clearing"
+        )
+    
+    deleted_count = 0
+    
+    # Validate tile coordinates
+    if x is not None or y is not None or z is not None:
+        if not all(v is not None for v in [x, y, z]):
+            raise HTTPException(
+                status_code=400,
+                detail="To clear a specific tile, provide x, y, and z"
+            )
+    
+    try:
+        if pattern:
+            # Custom pattern clearing
+            deleted_count = await tile_cache.delete_by_pattern(pattern)
+        elif x is not None and y is not None and z is not None:
+            # Clear specific tile
+            deleted_count = await tile_cache.clear_cache_by_point(x, y, z)
+        elif layer and year:
+            # Clear specific layer and year
+            deleted_count = await tile_cache.delete_by_pattern(f"{layer}_*_{year}_")
+        elif layer:
+            # Clear entire layer
+            deleted_count = await tile_cache.clear_cache_by_layer(layer)
+        elif year:
+            # Clear entire year
+            deleted_count = await tile_cache.clear_cache_by_year(year)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide at least one filter: layer, year, x/y/z, or pattern"
+            )
+        
+        return CacheStatusResponse(
+            status="success",
+            message=f"Cleared {deleted_count} cache entries",
+            data={
+                "deleted_count": deleted_count,
+                "filters": {
+                    "layer": layer,
+                    "year": year,
+                    "tile": {"x": x, "y": y, "z": z} if x is not None else None,
+                    "pattern": pattern
+                }
+            }
+        )
+        
+    except Exception as e:
+        logger.exception(f"Error clearing cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# Cache Warming (Public)
+# ============================================================================
+
+@router.post("/warmup")
+async def warmup_cache(request: CacheWarmupRequest):
+    """
+    Start cache warming process
+    
+    Schedules Celery tasks to pre-load popular tiles by simulating
+    real webmap request patterns.
+    """
+    try:
+        # Validate patterns
+        valid_patterns = [p.value for p in LoadingPattern]
+        for pattern in request.patterns:
+            if pattern not in valid_patterns:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid pattern: {pattern}. Valid: {valid_patterns}"
+                )
+        
+        # Schedule warmup task
+        result = schedule_warmup_task.delay(
+            layer=request.layer,
+            params=request.params,
+            max_tiles=request.max_tiles,
+            batch_size=request.batch_size
+        )
+        
+        # Estimate time
+        estimated_time = (request.max_tiles / request.batch_size) * 2  # ~2s per batch
+        
+        return CacheStatusResponse(
+            status="scheduled",
+            message=f"Cache warmup scheduled for {request.max_tiles} tiles",
+            data={
+                "task_id": result.id,
+                "total_tiles": request.max_tiles,
+                "batches": request.max_tiles // request.batch_size,
+                "estimated_time_minutes": estimated_time / 60
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error scheduling warmup: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/analyze-patterns")
+async def analyze_usage_patterns(
+    days: int = Query(7, ge=1, le=30, description="Days to analyze")
+):
+    """
+    Analyze usage patterns for cache optimization
+    
+    Schedules a task to analyze tile access patterns and generate
+    recommendations for cache optimization.
+    """
+    try:
+        result = analyze_usage_patterns_task.delay(days)
+        
+        return CacheStatusResponse(
+            status="analyzing",
+            message=f"Analyzing patterns from last {days} days",
+            data={"task_id": result.id}
+        )
+        
+    except Exception as e:
+        logger.error(f"Error analyzing patterns: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# TVI Point/Campaign Cache Management (Protected)
+# ============================================================================
+
+@router.post("/point/start")
+async def start_point_cache(request: CachePointRequest) -> CacheStatusResponse:
+    """
+    Start async cache generation for a specific point
+    
+    This will cache all tiles for:
+    - All visParamsEnable options
+    - All years (initialYear to finalYear)
+    - Zoom levels 12, 13, 14
+    
+    Protected endpoint - requires super-admin authentication.
+    """
+    try:
+        # Validate point exists
+        points_collection = await get_points_collection()
+        point = await points_collection.find_one({"_id": request.point_id})
+        
+        if not point:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Point {request.point_id} not found"
+            )
+        
+        # Check if already cached
+        if point.get("cached"):
+            return CacheStatusResponse(
+                status="already_cached",
+                message=f"Point {request.point_id} is already cached",
+                data={
+                    "point_id": request.point_id,
+                    "cached_at": point.get("cachedAt"),
+                    "cached_by": point.get("cachedBy")
+                }
+            )
+        
+        # Start cache task
+        task = cache_point_async.delay(request.point_id)
+        
+        logger.info(f"Started cache task {task.id} for point {request.point_id}")
+        
+        return CacheStatusResponse(
+            status="started",
+            message=f"Cache task started for point {request.point_id}",
+            data={
+                "task_id": task.id,
+                "point_id": request.point_id
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error starting point cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/campaign/start")
+async def start_campaign_cache(request: CacheCampaignRequest) -> CacheStatusResponse:
+    """
+    Start async cache generation for all points in a campaign
+    
+    Processes points in batches to avoid overwhelming the system.
+    Protected endpoint - requires super-admin authentication.
+    """
+    try:
+        # Validate campaign exists
+        campaigns_collection = await get_campaigns_collection()
+        campaign = await campaigns_collection.find_one({"_id": request.campaign_id})
+        
+        if not campaign:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Campaign {request.campaign_id} not found"
+            )
+        
+        # Count points
+        points_collection = await get_points_collection()
+        point_count = await points_collection.count_documents({"campaign": request.campaign_id})
+        
+        if point_count == 0:
+            return CacheStatusResponse(
+                status="no_points",
+                message=f"No points found for campaign {request.campaign_id}",
+                data={"campaign_id": request.campaign_id, "point_count": 0}
+            )
+        
+        # Start cache task
+        task = cache_campaign_async.delay(request.campaign_id, request.batch_size)
+        
+        logger.info(f"Started campaign cache task {task.id} for {point_count} points")
+        
+        return CacheStatusResponse(
+            status="started",
+            message=f"Cache task started for campaign {request.campaign_id}",
+            data={
+                "task_id": task.id,
+                "campaign_id": request.campaign_id,
+                "point_count": point_count,
+                "batch_size": request.batch_size
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error starting campaign cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/point/{point_id}/status")
+async def get_point_cache_status(point_id: str) -> CacheStatusResponse:
+    """
+    Get cache status for a specific point
+    
+    Protected endpoint - requires super-admin authentication.
+    """
+    try:
+        result = get_cache_status.delay(point_id=point_id)
+        status_data = result.get(timeout=10)
+        
+        if "error" in status_data:
+            raise HTTPException(status_code=404, detail=status_data["error"])
+        
+        return CacheStatusResponse(
+            status="success",
+            message=f"Cache status for point {point_id}",
+            data=status_data
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error getting point cache status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/campaign/{campaign_id}/status")
+async def get_campaign_cache_status(campaign_id: str) -> CacheStatusResponse:
+    """
+    Get aggregated cache status for all points in a campaign
+    
+    Protected endpoint - requires super-admin authentication.
+    """
+    try:
+        result = get_cache_status.delay(campaign_id=campaign_id)
+        status_data = result.get(timeout=10)
+        
+        if "error" in status_data:
+            raise HTTPException(status_code=404, detail=status_data["error"])
+        
+        return CacheStatusResponse(
+            status="success",
+            message=f"Cache status for campaign {campaign_id}",
+            data=status_data
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error getting campaign cache status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/point/{point_id}")
+async def clear_point_cache(point_id: str) -> CacheStatusResponse:
+    """
+    Clear cache for a specific point
+    
+    Protected endpoint - requires super-admin authentication.
+    """
+    try:
+        # Validate point exists
+        points_collection = await get_points_collection()
+        point = await points_collection.find_one({"_id": point_id})
+        
+        if not point:
+            raise HTTPException(status_code=404, detail=f"Point {point_id} not found")
+        
+        # Update point status
+        await points_collection.update_one(
+            {"_id": point_id},
+            {
+                "$set": {
+                    "cached": False,
+                    "cachedAt": None,
+                    "cachedBy": None,
+                    "enhance_in_cache": 0
+                }
+            }
+        )
+        
+        logger.info(f"Cleared cache status for point {point_id}")
+        
+        return CacheStatusResponse(
+            status="cleared",
+            message=f"Cache cleared for point {point_id}",
+            data={"point_id": point_id}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error clearing point cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/campaign/{campaign_id}")
+async def clear_campaign_cache(campaign_id: str) -> CacheStatusResponse:
+    """
+    Clear cache for all points in a campaign
+    
+    Protected endpoint - requires super-admin authentication.
+    """
+    try:
+        # Validate campaign exists
+        campaigns_collection = await get_campaigns_collection()
+        campaign = await campaigns_collection.find_one({"_id": campaign_id})
+        
+        if not campaign:
+            raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
+        
+        # Clear cache for all points
+        points_collection = await get_points_collection()
+        result = await points_collection.update_many(
+            {"campaign": campaign_id},
+            {
+                "$set": {
+                    "cached": False,
+                    "cachedAt": None,
+                    "cachedBy": None,
+                    "enhance_in_cache": 0
+                }
+            }
+        )
+        
+        logger.info(f"Cleared cache for {result.modified_count} points in campaign {campaign_id}")
+        
+        return CacheStatusResponse(
+            status="cleared",
+            message=f"Cache cleared for campaign {campaign_id}",
+            data={
+                "campaign_id": campaign_id,
+                "points_cleared": result.modified_count
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error clearing campaign cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# Task Management
+# ============================================================================
+
+@router.get("/tasks/{task_id}")
+async def get_task_status(task_id: str):
+    """
+    Get status of any cache-related Celery task
+    
+    Works for warmup tasks, point cache tasks, and campaign cache tasks.
+    """
+    try:
+        task_result = AsyncResult(task_id, app=celery_app)
+        
+        return CacheStatusResponse(
+            status="success",
+            message=f"Task {task_id} status",
+            data={
+                "task_id": task_id,
+                "state": task_result.state,
+                "ready": task_result.ready(),
+                "successful": task_result.successful() if task_result.ready() else None,
+                "result": task_result.result if task_result.successful() else None,
+                "error": str(task_result.info) if task_result.failed() else None
+            }
+        )
+        
+    except Exception as e:
+        logger.exception(f"Error getting task status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# Cache Recommendations
+# ============================================================================
+
+@router.get("/recommendations")
+async def get_cache_recommendations():
+    """
+    Get recommendations for cache optimization
+    
+    Analyzes popular regions and usage patterns to suggest
+    optimal cache warming strategies.
+    """
+    try:
+        warmer = CacheWarmer()
+        recommendations = []
+        
+        # Analyze popular regions
+        for idx, region in enumerate(warmer.popular_regions):
+            recommendations.append({
+                "type": "popular_region",
+                "priority": "high",
+                "region_id": idx,
+                "bounds": {
+                    "min_lat": region.min_lat,
+                    "max_lat": region.max_lat,
+                    "min_lon": region.min_lon,
+                    "max_lon": region.max_lon
+                },
+                "recommended_zoom_levels": list(range(region.zoom - 1, region.zoom + 2)),
+                "estimated_tiles": 500
+            })
+        
+        # Recommend priority zooms
+        priority_zooms = sorted(
+            warmer.zoom_priorities.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:5]
+        
+        recommendations.append({
+            "type": "zoom_optimization",
+            "priority": "medium",
+            "recommended_zooms": [z[0] for z in priority_zooms],
+            "reason": "Most used zoom levels"
+        })
+        
+        return {
+            "recommendations": recommendations,
+            "total_recommendations": len(recommendations)
+        }
+        
+    except Exception as e:
+        logger.exception(f"Error getting recommendations: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

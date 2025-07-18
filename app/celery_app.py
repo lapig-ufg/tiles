@@ -37,6 +37,7 @@ celery_app.conf.update(
     imports=[
         'app.tasks',
         'app.cache_warmer',
+        'app.cache_tasks',
     ],
 )
 

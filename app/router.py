@@ -1,4 +1,4 @@
-from .api import layers, timeseries, tile_aggregation, cache_management
+from .api import layers, timeseries, tile_aggregation, cache_unified, vis_params_management
 
 
 def created_routes(app):
@@ -9,7 +9,10 @@ def created_routes(app):
     # Rota para agregação de tiles
     app.include_router(tile_aggregation.router, prefix="/api", tags=["Aggregation"])
     
-    # Rota para gerenciamento de cache
-    app.include_router(cache_management.router, prefix="/api/cache", tags=["Cache Management"])
+    # Rota unificada para gerenciamento de cache (inclui todos os endpoints de cache)
+    app.include_router(cache_unified.router, tags=["Cache Management"])
+    
+    # Rota para gerenciamento de parâmetros de visualização
+    app.include_router(vis_params_management.router, tags=["Visualization Parameters"])
 
     return app

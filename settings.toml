@@ -23,3 +23,7 @@ RATE_LIMIT_BURST = 10000
 # Celery Configuration
 CELERY_BROKER_URL = 'redis://valkey:6379/1'
 CELERY_RESULT_BACKEND = 'redis://valkey:6379/2'
+
+MONGODB_URL='mongodb://localhost:27017'
+MONGODB_DB='tvi'
+USE_MONGODB_VIS_PARAMS=false  # Set to true after running migration script
