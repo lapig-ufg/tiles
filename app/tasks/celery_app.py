@@ -120,9 +120,9 @@ celery_app.conf.update(
     worker_pool='prefork',  # Best for CPU-bound tasks
     worker_max_memory_per_child=512000,  # 512MB max memory per worker
     
-    # Event configuration - disable by default to avoid dispatcher errors
-    worker_send_task_events=False,
-    task_send_sent_event=False,
+    # Event configuration - enable for Flower monitoring
+    worker_send_task_events=True,
+    task_send_sent_event=True,
     
     # Import task modules
     imports=[

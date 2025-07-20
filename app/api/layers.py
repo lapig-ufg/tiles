@@ -255,7 +255,7 @@ async def s2_harmonized(x: int, y: int, z: int,
     try:
         return await _serve_tile("s2_harmonized", x, y, z,
                                  period.value, year, month,
-                                 visparam, _create_s2_layer)
+                                 visparam, _create_s2_layer_sync)
     except HTTPException as exc:
         logger.error(f"Erro no tile s2_harmonized/{x}/{y}/{z}: {exc.detail}")
         error_img = generate_error_image(str(exc.detail))
@@ -285,7 +285,7 @@ async def landsat(x: int, y: int, z: int,
     try:
         return await _serve_tile("landsat", x, y, z,
                                  period, year, month,
-                                 visparam, _create_landsat_layer)
+                                 visparam, _create_landsat_layer_sync)
     except HTTPException as exc:
         logger.error(f"Erro no tile landsat/{x}/{y}/{z}: {exc.detail}")
         error_img = generate_error_image(str(exc.detail))
