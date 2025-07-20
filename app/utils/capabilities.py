@@ -161,7 +161,7 @@ class CapabilitiesProvider:
                         "tags": vp.get("tags", [])
                     }
 
-                    if vp.get("category") == "sentinel":
+                    if vp.get("category") in ["sentinel", "sentinel2"]:
                         sentinel_params.append(param_info)
                     elif vp.get("category") == "landsat":
                         landsat_params.append(param_info)

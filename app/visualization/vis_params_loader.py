@@ -27,7 +27,7 @@ if USE_MONGODB_VIS_PARAMS:
         logger.info("MongoDB vis params manager will initialize on first use")
         
         # Export async function to get VISPARAMS
-        async def get_VISPARAMS():
+        async def get_visparams():
             """Get VISPARAMS dictionary from MongoDB"""
             return await get_visparams_dict()
         
@@ -48,7 +48,7 @@ if not USE_MONGODB_VIS_PARAMS:
     )
     
     # Create async wrapper for consistency
-    async def get_VISPARAMS():
+    async def get_visparams():
         """Get hardcoded VISPARAMS dictionary"""
         return VISPARAMS
     
@@ -75,7 +75,7 @@ def get_VISPARAMS_sync():
                     logger.warning("Attempted to get VISPARAMS synchronously in async context")
                     return {}
                 else:
-                    _VISPARAMS_CACHE = loop.run_until_complete(get_VISPARAMS())
+                    _VISPARAMS_CACHE = loop.run_until_complete(get_visparams())
             except:
                 # Fallback to hardcoded if async fails
                 from app.visualization.visParam import VISPARAMS as HARDCODED_VISPARAMS
@@ -121,7 +121,7 @@ VISPARAMS = VISPARAMSProxy()
 # Export all functions
 __all__ = [
     'VISPARAMS',
-    'get_VISPARAMS',
+    'get_visparams',
     'get_VISPARAMS_sync',
     'get_landsat_collection',
     'get_landsat_vis_params',

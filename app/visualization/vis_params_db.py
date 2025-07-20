@@ -115,7 +115,18 @@ class VisParamsManager:
         # Find the matching satellite config
         for sat_config in vis_doc.satellite_configs:
             if sat_config.collection_id == collection_name:
-                return sat_config.vis_params.model_dump()
+                landsat_params = sat_config.vis_params.model_dump()
+                
+                # Convert all numeric parameters to strings as expected by Google Earth Engine
+                for key in ["min", "max", "gamma"]:
+                    if key in landsat_params:
+                        if isinstance(landsat_params[key], list):
+                            landsat_params[key] = ",".join(map(str, landsat_params[key]))
+                        else:
+                            # Convert single values to string as well
+                            landsat_params[key] = str(landsat_params[key])
+                
+                return landsat_params
         
         raise ValueError(f"No parameters found for {vis_type} and collection {collection_name}")
     
@@ -142,7 +153,18 @@ async def get_visparams_dict() -> Dict[str, Dict[str, Any]]:
     for name, doc in all_params.items():
         if doc.vis_params:
             # Sentinel-2 style
-            entry = {"visparam": doc.vis_params.model_dump()}
+            vis_params = doc.vis_params.model_dump()
+            
+            # Convert all numeric parameters to strings as expected by Google Earth Engine
+            for key in ["min", "max", "gamma"]:
+                if key in vis_params:
+                    if isinstance(vis_params[key], list):
+                        vis_params[key] = ",".join(map(str, vis_params[key]))
+                    else:
+                        # Convert single values to string as well
+                        vis_params[key] = str(vis_params[key])
+            
+            entry = {"visparam": vis_params}
             if doc.band_config:
                 if doc.band_config.mapped_bands:
                     entry["select"] = (doc.band_config.original_bands, doc.band_config.mapped_bands)
@@ -153,7 +175,18 @@ async def get_visparams_dict() -> Dict[str, Dict[str, Any]]:
             # Landsat style
             visparam = {}
             for sat_config in doc.satellite_configs:
-                visparam[sat_config.collection_id] = sat_config.vis_params.model_dump()
+                landsat_vis_params = sat_config.vis_params.model_dump()
+                
+                # Convert all numeric parameters to strings as expected by Google Earth Engine
+                for key in ["min", "max", "gamma"]:
+                    if key in landsat_vis_params:
+                        if isinstance(landsat_vis_params[key], list):
+                            landsat_vis_params[key] = ",".join(map(str, landsat_vis_params[key]))
+                        else:
+                            # Convert single values to string as well
+                            landsat_vis_params[key] = str(landsat_vis_params[key])
+                
+                visparam[sat_config.collection_id] = landsat_vis_params
             result[name] = {"visparam": visparam}
     
     return result

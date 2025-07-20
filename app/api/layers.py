@@ -10,18 +10,19 @@ from __future__ import annotations
 import io, json, calendar, asyncio
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Literal
 from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
 import ee
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse, FileResponse
 
 from app.core.config import logger, settings
-from app.utils.capabilities import CAPABILITIES
+from app.utils.capabilities import get_capabilities_provider
 from app.services.tile import tile2goehashBBOX
-from app.visualization.vis_params_loader import VISPARAMS, get_landsat_vis_params, get_landsat_collection
+from app.visualization.vis_params_loader import get_visparams, get_landsat_vis_params, get_landsat_collection
+from app.visualization.vis_params_db import get_landsat_vis_params_async
 from app.core.errors import generate_error_image
 from app.cache.cache import (
     aget_png as get_png,  aset_png as set_png,          # bytes (tile)
@@ -81,9 +82,12 @@ def _check_zoom(z: int):
         raise HTTPException(400, f"Zoom deve estar entre {MIN_ZOOM}-{MAX_ZOOM}")
 
 
-def _check_capability(name: str, year: int, period: str, visparam: str):
+async def _check_capability(name: str, year: int, period: str, visparam: str):
+    provider = get_capabilities_provider()
+    capabilities = await provider.get_capabilities()
+    
     meta = next(filter(lambda c: c["name"] == name,
-                       CAPABILITIES["collections"]), None)
+                       capabilities["collections"]), None)
     if not meta:
         raise HTTPException(404, f"Camada {name} não registrada")
     if year not in meta["year"]:
@@ -97,8 +101,9 @@ def _check_capability(name: str, year: int, period: str, visparam: str):
 # Builders específicos                                                        #
 # --------------------------------------------------------------------------- #
 
-def _vis_param(visparam: str) -> dict[str, Any]:
-    vis = VISPARAMS.get(visparam)
+async def _vis_param(visparam: str) -> dict[str, Any]:
+    visparams = await get_visparams()
+    vis = visparams.get(visparam)
     if vis is None:
         raise HTTPException(404, f"visparam não encontrado {visparam}")
     return vis
@@ -178,6 +183,65 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
     map_id = ee.data.getMapId({"image": landsat, **vis})
     return map_id["tile_fetcher"].url_format
 
+
+def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], vis: dict) -> str:
+    """Create Landsat layer with pre-processed vis params (no async calls)"""
+    def scale(img):
+        return img.addBands(img.select("SR_B.").multiply(0.0000275).add(-0.2),
+                            None, True)
+
+    def mask_clouds(image):
+        qa = image.select('QA_PIXEL')
+        cloud_bit_mask = 1 << 3
+        cloud_shadow_bit_mask = 1 << 4
+        mask = qa.bitwiseAnd(cloud_bit_mask).eq(0).And(
+               qa.bitwiseAnd(cloud_shadow_bit_mask).eq(0))
+        return image.updateMask(mask)
+
+    # Get collection from vis params (already determined)
+    year = datetime.fromisoformat(dates["dtStart"]).year
+    collection = get_landsat_collection(year)
+    
+    # vis params are already processed, no need to convert
+    landsat_collection = ee.ImageCollection(collection).filterDate(dates["dtStart"], dates["dtEnd"]).filterBounds(geom)
+    
+    # Check if collection has images
+    size = landsat_collection.size()
+    
+    # Only process if there are images in the collection
+    def process_with_bands():
+        # Get first image to check available bands
+        first = landsat_collection.first()
+        band_names = first.bandNames()
+        
+        # Check if requested bands exist
+        requested_bands = vis["bands"]
+        
+        # Filter to only available bands
+        available_bands = band_names.filter(ee.Filter.inList('item', requested_bands))
+        num_available = available_bands.size()
+        
+        # If no requested bands are available, use default bands based on satellite
+        processed = ee.Algorithms.If(
+            num_available.eq(0),
+            # No bands available - return empty image
+            ee.Image.constant(0).rename(['empty']),
+            # Process normally with available bands
+            landsat_collection.map(mask_clouds).map(scale).select(available_bands).mosaic()
+        )
+        
+        return processed
+    
+    # Only process if collection has images
+    landsat = ee.Algorithms.If(
+        size.gt(0),
+        process_with_bands(),
+        ee.Image.constant(0).rename(['empty'])
+    )
+
+    map_id = ee.data.getMapId({"image": landsat, **vis})
+    return map_id["tile_fetcher"].url_format
+
 # --------------------------------------------------------------------------- #
 # Fluxo genérico de tile                                                      #
 # --------------------------------------------------------------------------- #
@@ -190,10 +254,10 @@ async def _serve_tile(layer: str,
                       visparam: str,
                       builder_sync):
     _check_zoom(z)
-    _check_capability(layer, year, period, visparam)
+    await _check_capability(layer, year, period, visparam)
 
     dates   = _build_periods(period, year, month)
-    vis     = _vis_param(visparam)
+    vis     = await _vis_param(visparam)
 
     geohash, bbox = tile2goehashBBOX(x, y, z)
     path_cache = f"{layer}_{period}_{year}_{month}_{visparam}/{geohash}"
@@ -216,8 +280,13 @@ async def _serve_tile(layer: str,
         try:
             loop = asyncio.get_event_loop()
             if layer == "landsat":
-                 layer_url = await loop.run_in_executor(
-                    ee_executor, builder_sync, geom, dates, visparam
+                # Get Landsat vis params before entering thread executor
+                year = datetime.fromisoformat(dates["dtStart"]).year
+                collection = get_landsat_collection(year)
+                landsat_vis = await get_landsat_vis_params_async(visparam, collection)
+                
+                layer_url = await loop.run_in_executor(
+                    ee_executor, _create_landsat_layer_with_params, geom, dates, landsat_vis
                 )
             else:
                 layer_url = await loop.run_in_executor(
@@ -248,13 +317,13 @@ async def _serve_tile(layer: str,
 @limit_sentinel()
 async def s2_harmonized(x: int, y: int, z: int,
                         request: Request,
-                        period = Period.WET,
+                        period: Literal["WET", "DRY", "MONTH"] = "WET",
                         year: int = datetime.now().year,
                         month: int = datetime.now().month,
                         visparam: str = "tvi-red"):
     try:
         return await _serve_tile("s2_harmonized", x, y, z,
-                                 period.value, year, month,
+                                 period, year, month,
                                  visparam, _create_s2_layer_sync)
     except HTTPException as exc:
         logger.error(f"Erro no tile s2_harmonized/{x}/{y}/{z}: {exc.detail}")

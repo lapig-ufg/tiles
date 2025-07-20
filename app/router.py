@@ -1,4 +1,4 @@
-from .api import layers, timeseries, tile_aggregation, cache, vis_params, capabilities, tasks
+from .api import layers, timeseries, tile_aggregation, cache, vis_params, capabilities, tasks, admin
 
 
 def created_routes(app):
@@ -20,5 +20,8 @@ def created_routes(app):
     
     # Rota para gerenciamento e monitoramento de tasks do Celery
     app.include_router(tasks.router, tags=["Task Management"])
+    
+    # Rota para administração (limpar cache, corrigir dados, etc.)
+    app.include_router(admin.router, tags=["Administration"])
 
     return app
