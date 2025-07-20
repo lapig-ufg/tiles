@@ -26,7 +26,7 @@ VISPARAMS = {
             'gamma': '1.35'
         }
     },
-    'landsat-tvi-true': {
+     'landsat-tvi-true': {
         "visparam": {
             'LANDSAT/LT05/C02/T1_L2': {'bands': ['SR_B3', 'SR_B2', 'SR_B1'], 'min': [0.03, 0.03, 0.0], 'max': [0.25, 0.25, 0.25], 'gamma': [1.2]},
             'LANDSAT/LE07/C02/T1_L2': {'bands': ['SR_B3', 'SR_B2', 'SR_B1'], 'min': [0.03, 0.03, 0.0], 'max': [0.25, 0.25, 0.25], 'gamma': [1.2]},
@@ -44,10 +44,10 @@ VISPARAMS = {
     },
     'landsat-tvi-false': {
         "visparam": {
-            'LANDSAT/LT05/C02/T1_L2': {'bands': ['SR_B4', 'SR_B5', 'SR_B3'], 'min': [0.15, 0.05, 0.0], 'max': [0.65, 0.65, 0.3], 'gamma': [1.3]},
-            'LANDSAT/LE07/C02/T1_L2': {'bands': ['SR_B4', 'SR_B5', 'SR_B3'], 'min': [0.15, 0.05, 0.0], 'max': [0.65, 0.65, 0.3], 'gamma': [1.3]},
-            'LANDSAT/LC08/C02/T1_L2': {'bands': ['SR_B5', 'SR_B6', 'SR_B4'], 'min': [0.15, 0.05, 0.0], 'max': [0.65, 0.65, 0.3], 'gamma': [1.3]},
-            'LANDSAT/LC09/C02/T1_L2': {'bands': ['SR_B5', 'SR_B6', 'SR_B4'], 'min': [0.15, 0.05, 0.0], 'max': [0.65, 0.65, 0.3], 'gamma': [1.3]},
+            'LANDSAT/LT05/C02/T1_L2': {'bands': ['SR_B4', 'SR_B5', 'SR_B3'], 'min': [0.05, 0.05, 0.03],'max': [0.6, 0.55, 0.3], 'gamma': [1.2]},
+            'LANDSAT/LE07/C02/T1_L2': {'bands': ['SR_B4', 'SR_B5', 'SR_B3'], 'min': [0.05, 0.05, 0.03],'max': [0.6, 0.55, 0.3], 'gamma': [1.2]},
+            'LANDSAT/LC08/C02/T1_L2': {'bands': ['SR_B5', 'SR_B6', 'SR_B4'], 'min': [0.05, 0.05, 0.03],'max': [0.6, 0.55, 0.3], 'gamma': [1.2]},
+            'LANDSAT/LC09/C02/T1_L2': {'bands': ['SR_B5', 'SR_B6', 'SR_B4'], 'min': [0.05, 0.05, 0.03],'max': [0.6, 0.55, 0.3], 'gamma': [1.2]}
         }
     }
 }
