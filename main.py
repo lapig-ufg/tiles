@@ -159,7 +159,7 @@ async def health_check():
         health_status["services"]["cache"] = {
             "status": "healthy",
             "redis_keys": stats["redis"]["total_keys"],
-            "memory_usage": stats["redis"]["memory_usage"]
+            "memory_usage": stats["redis"]["used_memory_human"]
         }
     except Exception as e:
         health_status["services"]["cache"] = {
@@ -171,7 +171,7 @@ async def health_check():
     # 2. Verificar MongoDB
     try:
         from app.core.mongodb import mongodb
-        if mongodb.client and mongodb.database:
+        if mongodb.client is not None and mongodb.database is not None:
             # Tenta fazer um ping no MongoDB
             await mongodb.client.admin.command('ping')
             health_status["services"]["mongodb"] = {

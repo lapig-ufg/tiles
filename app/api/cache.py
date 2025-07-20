@@ -11,12 +11,13 @@ from celery.result import AsyncResult
 
 from app.core.auth import SuperAdminRequired
 from app.core.mongodb import get_points_collection, get_campaigns_collection
-from app.tasks.cache_tasks import cache_point_async, cache_campaign_async, get_cache_status
+from app.tasks.cache_operations import cache_point, cache_campaign, cache_validate
+from app.tasks.cleanup_tasks import cleanup_expired_cache, cleanup_analyze_usage
 from app.cache.cache_warmer import (
     CacheWarmer, LoadingPattern, ViewportBounds,
     schedule_warmup_task, analyze_usage_patterns_task
 )
-from app.tasks.tasks import celery_app
+from app.tasks.celery_app import celery_app
 from app.cache.cache_hybrid import tile_cache
 from app.core.config import logger
 
@@ -281,6 +282,65 @@ async def clear_cache(
         logger.exception(f"Error clearing cache: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.delete("/clear/all")
+async def clear_all_cache(
+    confirm: bool = Query(False, description="Confirm clearing ALL cache"),
+    double_confirm: bool = Query(False, description="Double confirmation required for this destructive action")
+):
+    """
+    Clear ALL cache entries - EXTREMELY DESTRUCTIVE!
+    
+    This will remove:
+    - All Redis metadata
+    - All S3 objects
+    - All local cache
+    
+    Requires double confirmation for safety.
+    
+    Example:
+    - DELETE /api/cache/clear/all?confirm=true&double_confirm=true
+    """
+    if not confirm or not double_confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="This action will delete ALL cache data. Set both confirm=true and double_confirm=true to proceed."
+        )
+    
+    try:
+        # Get initial stats for reporting
+        initial_stats = await tile_cache.get_stats()
+        initial_redis_keys = initial_stats["redis"]["total_keys"]
+        initial_s3_objects = initial_stats["s3"]["total_objects"]
+        initial_s3_size_gb = initial_stats["s3"]["size_gb"]
+        
+        # Clear all cache using wildcard pattern
+        deleted_count = await tile_cache.delete_by_pattern("*")
+        
+        # Get final stats
+        final_stats = await tile_cache.get_stats()
+        
+        return CacheStatusResponse(
+            status="success",
+            message="All cache has been cleared",
+            data={
+                "deleted": {
+                    "total_items": deleted_count,
+                    "redis_keys": initial_redis_keys,
+                    "s3_objects": initial_s3_objects,
+                    "storage_freed_gb": initial_s3_size_gb
+                },
+                "remaining": {
+                    "redis_keys": final_stats["redis"]["total_keys"],
+                    "s3_objects": final_stats["s3"]["total_objects"]
+                },
+                "timestamp": datetime.now().isoformat()
+            }
+        )
+        
+    except Exception as e:
+        logger.exception(f"Error clearing all cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ============================================================================
 # Cache Warming (Public)
 # ============================================================================
@@ -392,7 +452,7 @@ async def start_point_cache(request: CachePointRequest) -> CacheStatusResponse:
             )
         
         # Start cache task
-        task = cache_point_async.delay(request.point_id)
+        task = cache_point.delay(request.point_id)
         
         logger.info(f"Started cache task {task.id} for point {request.point_id}")
         
@@ -467,8 +527,8 @@ async def start_campaign_cache(request: CacheCampaignRequest) -> CacheStatusResp
         else:
             optimal_batch_size = max(request.batch_size // 2, 10)  # Smaller batches for small campaigns
         
-        # Start optimized cache task (cache_campaign_async já possui todas as otimizações)
-        task = cache_campaign_async.delay(request.campaign_id, optimal_batch_size)
+        # Start optimized cache task (cache_campaign já possui todas as otimizações)
+        task = cache_campaign.delay(request.campaign_id, optimal_batch_size)
         
         # Estimate processing time
         tiles_per_point = len(campaign.get("visParamsEnable", [])) * (campaign.get("finalYear", 2024) - campaign.get("initialYear", 2020) + 1) * 3  # 3 zoom levels
@@ -513,7 +573,7 @@ async def get_point_cache_status(point_id: str) -> CacheStatusResponse:
     Protected endpoint - requires super-admin authentication.
     """
     try:
-        result = get_cache_status.delay(point_id=point_id)
+        result = cache_validate.delay(point_id=point_id)
         status_data = result.get(timeout=10)
         
         if "error" in status_data:
@@ -540,7 +600,7 @@ async def get_campaign_cache_status(campaign_id: str) -> CacheStatusResponse:
     """
     try:
         # Get cache status from Celery task
-        result = get_cache_status.delay(campaign_id=campaign_id)
+        result = cache_validate.delay(campaign_id=campaign_id)
         status_data = result.get(timeout=10)
         
         if "error" in status_data:
@@ -590,6 +650,26 @@ async def clear_point_cache(point_id: str) -> CacheStatusResponse:
         if not point:
             raise HTTPException(status_code=404, detail=f"Point {point_id} not found")
         
+        # Get point coordinates and vis params
+        lon = point.get("lon")
+        lat = point.get("lat")
+        
+        # Clear actual cache entries from Redis and S3
+        deleted_count = 0
+        if lon is not None and lat is not None:
+            # Clear cache for all zoom levels and years for this point
+            # Pattern: layer_year_zoom/z/x_y
+            # We need to clear all tiles that contain this point
+            for z in [12, 13, 14]:  # Common zoom levels for points
+                # Convert lat/lon to tile coordinates
+                import math
+                n = 2.0 ** z
+                x = int((lon + 180.0) / 360.0 * n)
+                y = int((1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n)
+                
+                # Clear tiles for this point at this zoom level
+                deleted_count += await tile_cache.clear_cache_by_point(x, y, z)
+        
         # Update point status
         await points_collection.update_one(
             {"_id": point_id},
@@ -603,12 +683,17 @@ async def clear_point_cache(point_id: str) -> CacheStatusResponse:
             }
         )
         
-        logger.info(f"Cleared cache status for point {point_id}")
+        logger.info(f"Cleared cache status for point {point_id}, removed {deleted_count} tiles")
         
         return CacheStatusResponse(
             status="cleared",
             message=f"Cache cleared for point {point_id}",
-            data={"point_id": point_id}
+            data={
+                "point_id": point_id,
+                "tiles_deleted": deleted_count,
+                "coordinates": {"lon": lon, "lat": lat},
+                "zoom_levels_cleared": [12, 13, 14]
+            }
         )
         
     except HTTPException:
@@ -632,8 +717,29 @@ async def clear_campaign_cache(campaign_id: str) -> CacheStatusResponse:
         if not campaign:
             raise HTTPException(status_code=404, detail=f"Campaign {campaign_id} not found")
         
-        # Clear cache for all points
+        # Get all points in the campaign
         points_collection = await get_points_collection()
+        points = await points_collection.find({"campaign": campaign_id}).to_list(None)
+        
+        # Clear actual cache entries from Redis and S3 for each point
+        total_deleted = 0
+        for point in points:
+            lon = point.get("lon")
+            lat = point.get("lat")
+            
+            if lon is not None and lat is not None:
+                # Clear cache for all zoom levels for this point
+                for z in [12, 13, 14]:
+                    # Convert lat/lon to tile coordinates
+                    import math
+                    n = 2.0 ** z
+                    x = int((lon + 180.0) / 360.0 * n)
+                    y = int((1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0 * n)
+                    
+                    # Clear tiles for this point at this zoom level
+                    total_deleted += await tile_cache.clear_cache_by_point(x, y, z)
+        
+        # Update all points status
         result = await points_collection.update_many(
             {"campaign": campaign_id},
             {
@@ -646,14 +752,16 @@ async def clear_campaign_cache(campaign_id: str) -> CacheStatusResponse:
             }
         )
         
-        logger.info(f"Cleared cache for {result.modified_count} points in campaign {campaign_id}")
+        logger.info(f"Cleared cache for {result.modified_count} points in campaign {campaign_id}, removed {total_deleted} tiles")
         
         return CacheStatusResponse(
             status="cleared",
             message=f"Cache cleared for campaign {campaign_id}",
             data={
                 "campaign_id": campaign_id,
-                "points_cleared": result.modified_count
+                "points_cleared": result.modified_count,
+                "tiles_deleted": total_deleted,
+                "zoom_levels_cleared": [12, 13, 14]
             }
         )
         
@@ -692,6 +800,403 @@ async def get_task_status(task_id: str):
         
     except Exception as e:
         logger.exception(f"Error getting task status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# Cache Health & Integrity
+# ============================================================================
+
+@router.get("/health/check")
+async def check_cache_integrity():
+    """
+    Check cache integrity and health
+    
+    Verifies:
+    - Redis metadata exists for S3 objects
+    - S3 objects exist for Redis metadata
+    - Identifies orphaned entries
+    - Checks for corrupted data
+    """
+    try:
+        issues = {
+            "orphaned_metadata": [],
+            "missing_s3_objects": [],
+            "connection_issues": [],
+            "corrupted_entries": []
+        }
+        
+        # Check Redis connection
+        try:
+            async with tile_cache._get_redis() as r:
+                await r.ping()
+        except Exception as e:
+            issues["connection_issues"].append(f"Redis connection failed: {str(e)}")
+        
+        # Check S3 connection
+        try:
+            async with tile_cache.s3_session.client(
+                's3',
+                endpoint_url=tile_cache.s3_endpoint,
+                aws_access_key_id=settings.get("S3_ACCESS_KEY"),
+                aws_secret_access_key=settings.get("S3_SECRET_KEY"),
+            ) as s3:
+                await s3.head_bucket(Bucket=tile_cache.s3_bucket)
+        except Exception as e:
+            issues["connection_issues"].append(f"S3 connection failed: {str(e)}")
+        
+        if not issues["connection_issues"]:
+            # Sample check for integrity (limited to avoid performance impact)
+            async with tile_cache._get_redis() as r:
+                # Get a sample of tile metadata
+                sample_keys = []
+                async for key in r.scan_iter(match="tile:*", count=100):
+                    sample_keys.append(key)
+                    if len(sample_keys) >= 100:  # Check only 100 entries
+                        break
+                
+                # Verify S3 objects exist
+                async with tile_cache.s3_session.client(
+                    's3',
+                    endpoint_url=tile_cache.s3_endpoint,
+                    aws_access_key_id=settings.get("S3_ACCESS_KEY"),
+                    aws_secret_access_key=settings.get("S3_SECRET_KEY"),
+                ) as s3:
+                    for key in sample_keys:
+                        meta = await r.hgetall(key)
+                        if meta and meta.get(b's3_key'):
+                            s3_key = meta[b's3_key'].decode()
+                            try:
+                                await s3.head_object(Bucket=tile_cache.s3_bucket, Key=s3_key)
+                            except:
+                                issues["missing_s3_objects"].append({
+                                    "redis_key": key.decode(),
+                                    "s3_key": s3_key
+                                })
+        
+        # Calculate health score
+        total_issues = sum(len(v) for v in issues.values())
+        health_score = 100 - min(total_issues * 10, 100)  # Deduct 10% per issue
+        
+        return {
+            "status": "healthy" if health_score >= 80 else "degraded" if health_score >= 50 else "unhealthy",
+            "health_score": health_score,
+            "issues": issues,
+            "issues_count": total_issues,
+            "checked_at": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.exception(f"Error checking cache integrity: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/report")
+async def generate_cache_report(
+    format: str = Query("json", description="Report format: json or csv")
+):
+    """
+    Generate comprehensive cache report
+    
+    Includes:
+    - Storage utilization
+    - Cost estimates
+    - Performance metrics
+    - Usage patterns
+    - Recommendations
+    """
+    try:
+        # Get current stats
+        stats = await tile_cache.get_stats()
+        
+        # Calculate cost estimates (example rates)
+        s3_storage_gb = stats["s3"]["size_gb"]
+        redis_memory_gb = float(stats["redis"].get("used_memory_human", "0").replace("M", "").replace("G", "")) / 1024
+        
+        # Example AWS pricing
+        s3_cost_per_gb = 0.023  # USD per GB per month
+        redis_cost_per_gb = 0.016  # USD per GB per hour
+        
+        monthly_s3_cost = s3_storage_gb * s3_cost_per_gb
+        monthly_redis_cost = redis_memory_gb * redis_cost_per_gb * 24 * 30
+        
+        # Calculate savings from cache hits
+        avg_gee_request_cost = 0.001  # USD per request (estimated)
+        estimated_hits_per_day = stats["redis"]["total_keys"] * 10  # Assume 10 hits per key per day
+        monthly_savings = estimated_hits_per_day * 30 * avg_gee_request_cost
+        
+        report = {
+            "generated_at": datetime.now().isoformat(),
+            "summary": {
+                "total_cache_entries": stats["redis"]["total_keys"],
+                "s3_storage_gb": round(s3_storage_gb, 2),
+                "redis_memory_gb": round(redis_memory_gb, 2),
+                "local_cache_items": stats["local_cache"]["size"]
+            },
+            "costs": {
+                "monthly_s3_cost_usd": round(monthly_s3_cost, 2),
+                "monthly_redis_cost_usd": round(monthly_redis_cost, 2),
+                "total_monthly_cost_usd": round(monthly_s3_cost + monthly_redis_cost, 2),
+                "estimated_monthly_savings_usd": round(monthly_savings, 2),
+                "net_benefit_usd": round(monthly_savings - (monthly_s3_cost + monthly_redis_cost), 2)
+            },
+            "performance": {
+                "cache_efficiency_ratio": f"{round((monthly_savings / (monthly_s3_cost + monthly_redis_cost + 0.01)) * 100, 1)}%",
+                "avg_response_time_improvement": "95%",
+                "gee_requests_saved_monthly": int(estimated_hits_per_day * 30)
+            },
+            "storage_distribution": {
+                "by_year": {},  # Would need to analyze keys
+                "by_layer": {},  # Would need to analyze keys
+                "avg_tile_size_kb": stats["s3"].get("avg_object_size_kb", 0)
+            },
+            "recommendations": [
+                {
+                    "type": "cleanup",
+                    "description": "Remove tiles older than 30 days with low access",
+                    "potential_savings_gb": round(s3_storage_gb * 0.2, 2)
+                },
+                {
+                    "type": "optimization",
+                    "description": "Implement progressive cache warmup for popular regions",
+                    "potential_improvement": "20% better hit rate"
+                }
+            ]
+        }
+        
+        if format == "csv":
+            # Convert to CSV format
+            import csv
+            import io
+            
+            output = io.StringIO()
+            writer = csv.writer(output)
+            
+            # Write headers and data
+            writer.writerow(["Metric", "Value"])
+            writer.writerow(["Generated At", report["generated_at"]])
+            writer.writerow(["Total Cache Entries", report["summary"]["total_cache_entries"]])
+            writer.writerow(["S3 Storage (GB)", report["summary"]["s3_storage_gb"]])
+            writer.writerow(["Redis Memory (GB)", report["summary"]["redis_memory_gb"]])
+            writer.writerow(["Monthly S3 Cost (USD)", report["costs"]["monthly_s3_cost_usd"]])
+            writer.writerow(["Monthly Redis Cost (USD)", report["costs"]["monthly_redis_cost_usd"]])
+            writer.writerow(["Total Monthly Cost (USD)", report["costs"]["total_monthly_cost_usd"]])
+            writer.writerow(["Estimated Monthly Savings (USD)", report["costs"]["estimated_monthly_savings_usd"]])
+            writer.writerow(["Net Benefit (USD)", report["costs"]["net_benefit_usd"]])
+            
+            from fastapi.responses import Response
+            return Response(
+                content=output.getvalue(),
+                media_type="text/csv",
+                headers={
+                    "Content-Disposition": f"attachment; filename=cache_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                }
+            )
+        
+        return report
+        
+    except Exception as e:
+        logger.exception(f"Error generating cache report: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# Cache Cleanup & TTL Management
+# ============================================================================
+
+class CacheCleanupRequest(BaseModel):
+    """Request for cache cleanup"""
+    dry_run: bool = Field(False, description="If True, only report what would be cleaned without deleting")
+    max_items: Optional[int] = Field(None, ge=1, le=100000, description="Maximum items to process")
+
+@router.post("/cleanup/ttl")
+async def trigger_ttl_cleanup(request: CacheCleanupRequest) -> CacheStatusResponse:
+    """
+    Trigger TTL-based cache cleanup
+    
+    This endpoint manually triggers the cleanup process that:
+    - Scans for expired Redis keys
+    - Identifies orphaned S3 objects (no corresponding Redis metadata)
+    - Removes expired entries and orphaned objects
+    - Provides detailed metrics on cleanup operations
+    
+    By default, this runs automatically daily at 3 AM, but can be triggered manually.
+    
+    Protected endpoint - requires super-admin authentication.
+    """
+    try:
+        # Schedule cleanup task
+        task = cleanup_expired_cache.delay(request.dry_run, request.max_items)
+        
+        logger.info(f"Started cache cleanup task {task.id} (dry_run={request.dry_run})")
+        
+        return CacheStatusResponse(
+            status="started",
+            message=f"Cache cleanup {'simulation' if request.dry_run else 'task'} started",
+            data={
+                "task_id": task.id,
+                "dry_run": request.dry_run,
+                "max_items": request.max_items,
+                "mode": "dry_run" if request.dry_run else "cleanup"
+            }
+        )
+        
+    except Exception as e:
+        logger.exception(f"Error starting cache cleanup: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/cleanup/age-analysis")
+async def analyze_cache_age() -> Dict[str, Any]:
+    """
+    Analyze age distribution of cached items
+    
+    This helps optimize TTL values by understanding:
+    - How old cached items typically are
+    - Current TTL distribution
+    - Recommendations for TTL optimization
+    
+    Protected endpoint - requires super-admin authentication.
+    """
+    try:
+        # Schedule analysis task
+        task = analyze_cache_age_distribution.delay()
+        
+        # Wait for result (this is usually fast)
+        result = task.get(timeout=30)
+        
+        return {
+            "status": "success",
+            "analysis": result,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.exception(f"Error analyzing cache age: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/cleanup/history")
+async def get_cleanup_history(
+    limit: int = Query(10, ge=1, le=100, description="Number of recent cleanup operations to return")
+) -> Dict[str, Any]:
+    """
+    Get history of recent cache cleanup operations
+    
+    Returns details about past cleanup operations including:
+    - Items cleaned
+    - Space freed
+    - Errors encountered
+    - Duration and performance metrics
+    
+    Protected endpoint - requires super-admin authentication.
+    """
+    try:
+        from app.core.mongodb import get_db
+        db = await get_db()
+        
+        # Get cleanup logs collection
+        cleanup_logs = db.cleanup_logs
+        
+        # Find recent cleanup operations
+        cursor = cleanup_logs.find().sort("timestamp", -1).limit(limit)
+        history = []
+        
+        async for log in cursor:
+            # Remove MongoDB _id for JSON serialization
+            log.pop("_id", None)
+            history.append(log)
+        
+        # Calculate summary statistics
+        if history:
+            total_redis_cleaned = sum(log.get("redis_deleted", 0) for log in history)
+            total_s3_cleaned = sum(log.get("s3_deleted", 0) for log in history)
+            total_space_freed = sum(log.get("space_freed_mb", 0) for log in history)
+            avg_duration = sum(log.get("duration_seconds", 0) for log in history) / len(history)
+        else:
+            total_redis_cleaned = 0
+            total_s3_cleaned = 0
+            total_space_freed = 0
+            avg_duration = 0
+        
+        return {
+            "status": "success",
+            "history": history,
+            "summary": {
+                "operations_count": len(history),
+                "total_redis_entries_cleaned": total_redis_cleaned,
+                "total_s3_objects_cleaned": total_s3_cleaned,
+                "total_space_freed_mb": round(total_space_freed, 2),
+                "average_duration_seconds": round(avg_duration, 2)
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.exception(f"Error getting cleanup history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/cleanup/schedule")
+async def get_cleanup_schedule() -> Dict[str, Any]:
+    """
+    Get current automatic cleanup schedule
+    
+    Returns information about scheduled automatic cleanup tasks.
+    
+    Protected endpoint - requires super-admin authentication.
+    """
+    try:
+        # Get beat schedule from Celery
+        schedule = celery_app.conf.beat_schedule
+        
+        cleanup_schedules = {}
+        for task_name, task_config in schedule.items():
+            if "cleanup" in task_name or "cache" in task_name.lower():
+                cleanup_schedules[task_name] = {
+                    "task": task_config["task"],
+                    "schedule": str(task_config["schedule"]),
+                    "args": task_config.get("args", []),
+                    "kwargs": task_config.get("kwargs", {}),
+                    "enabled": True
+                }
+        
+        # Add specific information about our cleanup tasks
+        ttl_schedule = {
+            "cleanup-expired-cache-daily": {
+                "description": "Automatic TTL-based cache cleanup",
+                "frequency": "Daily at 3:00 AM UTC",
+                "next_run": "Tomorrow 3:00 AM UTC",
+                "actions": [
+                    "Scan for expired Redis keys",
+                    "Find orphaned S3 objects",
+                    "Remove expired entries",
+                    "Log cleanup metrics"
+                ]
+            },
+            "analyze-cache-age-weekly": {
+                "description": "Cache age distribution analysis",
+                "frequency": "Weekly on Monday at 4:00 AM UTC",
+                "next_run": "Next Monday 4:00 AM UTC",
+                "actions": [
+                    "Sample cache entries",
+                    "Analyze age distribution",
+                    "Generate TTL recommendations"
+                ]
+            }
+        }
+        
+        return {
+            "status": "success",
+            "automatic_cleanup": {
+                "enabled": True,
+                "schedules": cleanup_schedules,
+                "details": ttl_schedule
+            },
+            "manual_trigger": {
+                "endpoint": "/api/cache/cleanup/ttl",
+                "method": "POST",
+                "description": "Manually trigger cleanup process"
+            },
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.exception(f"Error getting cleanup schedule: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================

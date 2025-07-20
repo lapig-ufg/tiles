@@ -36,7 +36,7 @@ class HybridTileCache:
         local_cache_size: int = 1000,  # tiles em memória
     ):
         self.redis_url = redis_url
-        self.s3_endpoint = s3_endpoint or settings.get("S3_ENDPOINT", "http://minio:9000")
+        self.s3_endpoint = s3_endpoint or settings.get("S3_ENDPOINT")
         self.s3_bucket = s3_bucket
         self.s3_session = aioboto3.Session()
         
@@ -72,8 +72,8 @@ class HybridTileCache:
             async with self.s3_session.client(
                 's3',
                 endpoint_url=self.s3_endpoint,
-                aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
-                aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
+                aws_access_key_id=settings.get("S3_ACCESS_KEY"),
+                aws_secret_access_key=settings.get("S3_SECRET_KEY"),
             ) as s3:
                 try:
                     await s3.head_bucket(Bucket=self.s3_bucket)
@@ -273,8 +273,8 @@ class HybridTileCache:
             async with self.s3_session.client(
                 's3',
                 endpoint_url=self.s3_endpoint,
-                aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
-                aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
+                aws_access_key_id=settings.get("S3_ACCESS_KEY"),
+                aws_secret_access_key=settings.get("S3_SECRET_KEY"),
             ) as s3:
                 # Usar head_bucket para verificar se existe
                 await s3.head_bucket(Bucket=self.s3_bucket)

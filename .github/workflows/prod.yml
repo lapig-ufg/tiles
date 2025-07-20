@@ -184,3 +184,39 @@ jobs:
           --github "https://github.com/${{ github.repository }}" \
           --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
           ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Celery Worker 1" \
+          --container "celery_worker_1" \
+          --file "celery-worker-1" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Celery Worker 2" \
+          --container "celery_worker_2" \
+          --file "celery-worker-2" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Celery Worker 3" \
+          --container "celery_worker_3" \
+          --file "celery-worker-3" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Celery Worker 4" \
+          --container "celery_worker_4" \
+          --file "celery-worker-4" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Celery Beat" \
+          --container "celery_beat" \
+          --file "celery-beat" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}
+          /compose/resetapp.sh --title "Celery Flower" \
+          --container "celery_flower" \
+          --file "celery-flower" \
+          --github "https://github.com/${{ github.repository }}" \
+          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
+          ${{ needs.build.outputs.APPLICATION_NAME }}

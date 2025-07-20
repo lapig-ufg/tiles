@@ -11,13 +11,13 @@ from datetime import datetime
 sys.path.append(str(Path(__file__).parent.parent))
 
 from motor.motor_asyncio import AsyncIOMotorClient
-from app.config import settings
+from app.core.config import settings
 from app.models.vis_params import (
     VisParamDocument, BandConfig, VisParam, 
     SatelliteVisParam, LandsatCollectionMapping,
     SentinelCollectionMapping
 )
-from app.visParam import VISPARAMS
+from app.visualization.visParam import VISPARAMS
 
 
 async def migrate_vis_params():

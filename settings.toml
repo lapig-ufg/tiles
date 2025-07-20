@@ -26,4 +26,4 @@ CELERY_RESULT_BACKEND = 'redis://valkey:6379/2'
 
 MONGODB_URL='mongodb://localhost:27017'
 MONGODB_DB='tvi'
-USE_MONGODB_VIS_PARAMS=false  # Set to true after running migration script
+USE_MONGODB_VIS_PARAMS=true  # Set to true after running migration script
