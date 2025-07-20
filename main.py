@@ -147,8 +147,9 @@ async def health_light():
     Only performs basic connectivity checks without heavy operations.
     """
     try:
-        # Basic Redis ping
-        await tile_cache.redis_client.ping()
+        # Basic Redis ping using the cache's connection manager
+        async with tile_cache._get_redis() as r:
+            await r.ping()
         
         return {
             "status": "healthy",
