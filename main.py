@@ -22,13 +22,7 @@ from app.core.config import start_logger, REDIS_URL
 from app.core.database import Base, engine
 from app.router import created_routes
 from app.utils.cors import origin_regex, allow_origins
-from app.cache import HybridTileCache
-
-# Instância global do cache
-tile_cache = HybridTileCache(
-    redis_url=REDIS_URL,
-    s3_bucket=settings.get('S3_BUCKET', 'tiles-cache')
-)
+from app.cache import tile_cache
 
 Base.metadata.create_all(bind=engine)
 

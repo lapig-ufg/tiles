@@ -91,11 +91,11 @@ class HybridTileCache:
     @asynccontextmanager
     async def _get_redis(self):
         """Context manager para conexão Redis"""
-        client = redis.asyncio.Redis(connection_pool=self._redis_pool)
+        client = redis.Redis(connection_pool=self._redis_pool)
         try:
             yield client
         finally:
-            await client.close()
+            await client.aclose()
     
     def _generate_s3_key(self, tile_key: str) -> str:
         """Gera chave S3 com particionamento para melhor performance"""
