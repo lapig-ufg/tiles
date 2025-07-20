@@ -1,207 +1,208 @@
-# 🔧 Variáveis de Ambiente - Tiles API
+# 🔧 Environment Variables - Tiles API
 
-Este documento descreve todas as variáveis de ambiente disponíveis para configurar a Tiles API.
+This document describes all available environment variables for configuring the Tiles API.
 
-## 📋 Índice
+## 📋 Table of Contents
 
-- [Configuração Básica](#configuração-básica)
+- [Basic Configuration](#basic-configuration)
 - [Google Earth Engine](#google-earth-engine)
-- [Cache Redis/Valkey](#cache-redisvalkey)
-- [Cache S3/MinIO](#cache-s3minio)
+- [MongoDB](#mongodb)
+- [Cache Configuration](#cache-configuration)
 - [Performance](#performance)
 - [Rate Limiting](#rate-limiting)
-- [Cache TTL](#cache-ttl)
-- [CORS](#cors)
-- [Logging](#logging)
-- [Desenvolvimento](#desenvolvimento)
+- [Security](#security)
+- [Monitoring](#monitoring)
 
-## Configuração Básica
+## Basic Configuration
 
 ### TILES_ENV
-- **Descrição**: Define o ambiente de execução
-- **Valores**: `development`, `production`
-- **Padrão**: `development`
-- **Exemplo**: `TILES_ENV=production`
+- **Description**: Defines the execution environment
+- **Values**: `development`, `production`
+- **Default**: `development`
+- **Example**: `TILES_ENV=production`
+
+### HOST
+- **Description**: Host to bind the server
+- **Type**: String
+- **Default**: `0.0.0.0`
+- **Example**: `HOST=127.0.0.1`
 
 ### PORT
-- **Descrição**: Porta em que o servidor irá escutar
-- **Tipo**: Inteiro
-- **Padrão**: `8083`
-- **Exemplo**: `PORT=8000`
+- **Description**: Port where the server will listen
+- **Type**: Integer
+- **Default**: `8080`
+- **Example**: `PORT=8000`
 
 ## Google Earth Engine
 
-### GEE_SERVICE_ACCOUNT_FILE
-- **Descrição**: Caminho para o arquivo JSON com as credenciais de serviço do Google Earth Engine
-- **Tipo**: String (caminho de arquivo)
-- **Padrão**: `./.service-accounts/gee.json`
-- **Exemplo**: `GEE_SERVICE_ACCOUNT_FILE=/secrets/gee-credentials.json`
-- **Importante**: Este arquivo deve conter credenciais válidas do GEE
+### GEE_SERVICE_ACCOUNT
+- **Description**: Path to the JSON file with Google Earth Engine service account credentials
+- **Type**: String (file path)
+- **Default**: `.service-accounts/gee-sa.json`
+- **Example**: `GEE_SERVICE_ACCOUNT=/secrets/gee-credentials.json`
+- **Important**: This file must contain valid GEE credentials
 
-### SKIP_GEE_INIT
-- **Descrição**: Pula a inicialização do Google Earth Engine (útil para desenvolvimento sem credenciais)
-- **Valores**: `true`, `false`
-- **Padrão**: `false`
-- **Exemplo**: `SKIP_GEE_INIT=true`
+### GEE_PROJECT_ID
+- **Description**: Google Cloud Project ID for Earth Engine
+- **Type**: String
+- **Example**: `GEE_PROJECT_ID=my-gee-project`
 
-## Cache Redis/Valkey
+## MongoDB
+
+### MONGO_DB_URL
+- **Description**: MongoDB connection URL
+- **Format**: `mongodb://[username:password@]host:port/database`
+- **Default**: `mongodb://lapig:lapig@mongodb:27017/tvi`
+- **Example**: `MONGO_DB_URL=mongodb://user:pass@cluster.mongodb.net/tiles`
+
+### MONGO_DB_NAME
+- **Description**: MongoDB database name
+- **Type**: String
+- **Default**: `tvi`
+- **Example**: `MONGO_DB_NAME=tiles_production`
+
+## Cache Configuration
 
 ### REDIS_URL
-- **Descrição**: URL completa de conexão com o Redis/Valkey
-- **Formato**: `redis://[username:password@]host:port[/database]`
-- **Padrão**: `redis://localhost:6379`
-- **Exemplos**:
+- **Description**: Redis/Valkey connection URL
+- **Format**: `redis://[username:password@]host:port[/database]`
+- **Default**: `redis://valkey:6379`
+- **Examples**:
   - Local: `redis://localhost:6379`
-  - Com senha: `redis://:mypassword@redis-server:6379`
-  - Com database: `redis://localhost:6379/1`
-
-## Cache S3/MinIO
+  - With password: `redis://:mypassword@redis-server:6379`
+  - With database: `redis://localhost:6379/1`
 
 ### S3_ENDPOINT
-- **Descrição**: URL do endpoint S3 ou MinIO
-- **Tipo**: String (URL)
-- **Padrão**: `http://localhost:9000`
-- **Exemplos**:
-  - MinIO local: `http://localhost:9000`
+- **Description**: S3 or MinIO endpoint URL
+- **Type**: String (URL)
+- **Default**: `http://minio:9000`
+- **Examples**:
+  - Local MinIO: `http://localhost:9000`
   - AWS S3: `https://s3.amazonaws.com`
-  - MinIO produção: `https://minio.example.com`
+  - Production MinIO: `https://minio.example.com`
 
 ### S3_ACCESS_KEY
-- **Descrição**: Chave de acesso (Access Key ID) para S3/MinIO
-- **Tipo**: String
-- **Padrão**: `minioadmin`
-- **Exemplo**: `S3_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE`
+- **Description**: Access Key ID for S3/MinIO
+- **Type**: String
+- **Default**: `minioadmin`
+- **Example**: `S3_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE`
 
 ### S3_SECRET_KEY
-- **Descrição**: Chave secreta (Secret Access Key) para S3/MinIO
-- **Tipo**: String
-- **Padrão**: `minioadmin`
-- **Exemplo**: `S3_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY`
-- **Segurança**: Nunca commite esta chave no repositório
+- **Description**: Secret Access Key for S3/MinIO
+- **Type**: String
+- **Default**: `minioadmin`
+- **Example**: `S3_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY`
+- **Security**: Never commit this key to the repository
 
 ### S3_BUCKET
-- **Descrição**: Nome do bucket S3/MinIO para armazenar cache de tiles
-- **Tipo**: String
-- **Padrão**: `tiles-cache`
-- **Exemplo**: `S3_BUCKET=production-tiles-cache`
+- **Description**: S3/MinIO bucket name for storing tile cache
+- **Type**: String
+- **Default**: `tiles-cache`
+- **Example**: `S3_BUCKET=production-tiles-cache`
 
 ## Performance
 
 ### WORKERS
-- **Descrição**: Número de processos worker do Gunicorn
-- **Tipo**: Inteiro
-- **Padrão**: `32`
-- **Recomendação**: `(2 x número de CPUs) + 1`
-- **Exemplo**: `WORKERS=64`
+- **Description**: Number of worker processes (when using Gunicorn)
+- **Type**: Integer
+- **Default**: `1` (for uvicorn)
+- **Recommendation**: `(2 x number of CPUs) + 1`
+- **Example**: `WORKERS=4`
 
-### WORKER_CONNECTIONS
-- **Descrição**: Número máximo de conexões simultâneas por worker
-- **Tipo**: Inteiro
-- **Padrão**: `2000`
-- **Exemplo**: `WORKER_CONNECTIONS=4000`
+### CELERY_BROKER_URL
+- **Description**: Celery broker URL (Redis)
+- **Type**: String
+- **Default**: `redis://valkey:6379/0`
+- **Example**: `CELERY_BROKER_URL=redis://broker:6379/0`
 
-### MAX_REQUESTS
-- **Descrição**: Número de requisições antes de reiniciar um worker
-- **Tipo**: Inteiro
-- **Padrão**: `10000`
-- **Exemplo**: `MAX_REQUESTS=20000`
-- **Nota**: Ajuda a prevenir vazamentos de memória
-
-### MAX_REQUESTS_JITTER
-- **Descrição**: Variação aleatória no MAX_REQUESTS para evitar restart simultâneo
-- **Tipo**: Inteiro
-- **Padrão**: `1000`
-- **Exemplo**: `MAX_REQUESTS_JITTER=2000`
+### CELERY_RESULT_BACKEND
+- **Description**: Celery result backend URL
+- **Type**: String
+- **Default**: `redis://valkey:6379/0`
+- **Example**: `CELERY_RESULT_BACKEND=redis://broker:6379/0`
 
 ## Rate Limiting
 
 ### RATE_LIMIT_PER_MINUTE
-- **Descrição**: Número máximo de requisições por minuto por IP
-- **Tipo**: Inteiro
-- **Padrão**: `1000`
-- **Exemplo**: `RATE_LIMIT_PER_MINUTE=500`
+- **Description**: Maximum requests per minute per IP
+- **Type**: Integer
+- **Default**: `100000`
+- **Example**: `RATE_LIMIT_PER_MINUTE=50000`
 
-### RATE_LIMIT_BURST
-- **Descrição**: Número de requisições permitidas em burst
-- **Tipo**: Inteiro
-- **Padrão**: `100`
-- **Exemplo**: `RATE_LIMIT_BURST=200`
+## Security
 
-## Cache TTL
+### SECRET_KEY
+- **Description**: Secret key for session/token signing
+- **Type**: String
+- **Default**: Generated randomly
+- **Example**: `SECRET_KEY=your-secret-key-here`
+- **Important**: Generate a strong key for production
 
-### LIFESPAN_URL
-- **Descrição**: Tempo de vida da URL do Earth Engine em horas
-- **Tipo**: Inteiro (horas)
-- **Padrão**: `24`
-- **Exemplo**: `LIFESPAN_URL=48`
+### ALLOWED_HOSTS
+- **Description**: Allowed hosts for the application
+- **Type**: Comma-separated string
+- **Default**: `*` (all hosts)
+- **Example**: `ALLOWED_HOSTS=tiles.lapig.iesa.ufg.br,tm1.lapig.iesa.ufg.br`
 
-## CORS
+## Monitoring
 
-### ALLOW_ORIGINS
-- **Descrição**: Lista de origens permitidas para CORS
-- **Formato**: URLs separadas por vírgula
-- **Padrão**: `` (vazio = permite todas)
-- **Exemplos**:
-  - Produção: `ALLOW_ORIGINS=https://app.example.com,https://www.example.com`
-  - Desenvolvimento: `ALLOW_ORIGINS=http://localhost:3000,http://localhost:4200`
+### OTEL_EXPORTER_OTLP_ENDPOINT
+- **Description**: OpenTelemetry collector endpoint
+- **Type**: String (URL)
+- **Default**: `http://otel:4317`
+- **Example**: `OTEL_EXPORTER_OTLP_ENDPOINT=http://telemetry:4317`
 
-## Logging
+### OTEL_SERVICE_NAME
+- **Description**: Service name for telemetry
+- **Type**: String
+- **Default**: `tiles-api`
+- **Example**: `OTEL_SERVICE_NAME=tiles-api-production`
 
 ### LOG_LEVEL
-- **Descrição**: Nível mínimo de log a ser exibido
-- **Valores**: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
-- **Padrão**: `INFO`
-- **Exemplo**: `LOG_LEVEL=DEBUG`
+- **Description**: Minimum log level to display
+- **Values**: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
+- **Default**: `INFO`
+- **Example**: `LOG_LEVEL=DEBUG`
 
-## Desenvolvimento
+## 🚀 Configuration Examples
 
-### UV_NO_SYNC
-- **Descrição**: Desabilita sincronização automática de dependências do UV
-- **Valores**: `true`, `false`
-- **Padrão**: `false`
-- **Exemplo**: `UV_NO_SYNC=true`
-
-### UV_SYSTEM_PYTHON
-- **Descrição**: Usa Python do sistema ao invés do gerenciado pelo UV
-- **Valores**: `true`, `false`
-- **Padrão**: `false`
-- **Exemplo**: `UV_SYSTEM_PYTHON=true`
-
-## 🚀 Exemplos de Configuração
-
-### Desenvolvimento Local
+### Local Development
 ```bash
 TILES_ENV=development
-PORT=8083
-SKIP_GEE_INIT=true
+HOST=127.0.0.1
+PORT=8080
+GEE_SERVICE_ACCOUNT=.service-accounts/gee-sa.json
+MONGO_DB_URL=mongodb://localhost:27017/tvi
 REDIS_URL=redis://localhost:6379
 S3_ENDPOINT=http://localhost:9000
 S3_ACCESS_KEY=minioadmin
 S3_SECRET_KEY=minioadmin
-WORKERS=4
 LOG_LEVEL=DEBUG
 ```
 
-### Produção
+### Production
 ```bash
 TILES_ENV=production
-PORT=8083
-GEE_SERVICE_ACCOUNT_FILE=/secrets/gee.json
-REDIS_URL=redis://redis-cluster:6379
-S3_ENDPOINT=https://s3.amazonaws.com
+HOST=0.0.0.0
+PORT=8080
+GEE_SERVICE_ACCOUNT=/secrets/gee.json
+GEE_PROJECT_ID=my-gee-project
+MONGO_DB_URL=mongodb://user:pass@mongodb:27017/tiles
+REDIS_URL=redis://valkey:6379
+S3_ENDPOINT=http://minio:9000
 S3_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE
 S3_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
 S3_BUCKET=production-tiles
-WORKERS=64
-WORKER_CONNECTIONS=4000
-RATE_LIMIT_PER_MINUTE=2000
+RATE_LIMIT_PER_MINUTE=100000
 LOG_LEVEL=WARNING
-ALLOW_ORIGINS=https://app.example.com
+SECRET_KEY=your-production-secret-key
+ALLOWED_HOSTS=tiles.lapig.iesa.ufg.br
 ```
 
-## 📝 Notas
+## 📝 Notes
 
-1. **Segurança**: Nunca commite arquivos `.env` com credenciais reais
-2. **Docker**: As variáveis no `docker-compose.yml` sobrescrevem as do `.env`
-3. **Prioridade**: Variáveis de ambiente > arquivo `.env` > `settings.toml`
-4. **Validação**: A aplicação valida as configurações críticas na inicialização
+1. **Security**: Never commit `.env` files with real credentials
+2. **Docker**: Variables in `docker-compose.yml` override those in `.env`
+3. **Priority**: Environment variables > `.env` file > default values
+4. **Validation**: The application validates critical configurations at startup
+5. **Secrets**: Use proper secret management in production (e.g., Kubernetes secrets, AWS Secrets Manager)
