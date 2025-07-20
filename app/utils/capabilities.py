@@ -97,6 +97,12 @@ class CapabilitiesProvider:
         self._cache_timestamp = 0
         self._cache_lock = asyncio.Lock()
 
+    def clear_cache(self):
+        """Clear the capabilities cache"""
+        self._cache = None
+        self._cache_timestamp = 0
+        logger.info("Capabilities cache cleared")
+    
     async def get_capabilities(self) -> Dict[str, Any]:
         """Get dynamic capabilities based on available vis_params with caching"""
         # Check cache first

@@ -25,6 +25,11 @@ class VisParamsManager:
         
         try:
             db = get_database()
+            if db is None:
+                logger.warning("MongoDB database not initialized, using empty vis params cache")
+                self._initialized = True
+                return
+            
             collection = db.vis_params
             
             # Load all active vis params

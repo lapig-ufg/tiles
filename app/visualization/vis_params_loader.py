@@ -22,15 +22,9 @@ if USE_MONGODB_VIS_PARAMS:
             vis_params_manager
         )
         
-        # Initialize on import
-        import asyncio
-        try:
-            loop = asyncio.get_event_loop()
-            if not loop.is_running():
-                loop.run_until_complete(vis_params_manager.initialize())
-        except:
-            # If loop handling fails, it will be initialized on first use
-            pass
+        # Don't initialize on import - let it initialize on first use
+        # This ensures MongoDB is connected before trying to access it
+        logger.info("MongoDB vis params manager will initialize on first use")
         
         # Export async function to get VISPARAMS
         async def get_VISPARAMS():

@@ -214,13 +214,23 @@ async def refresh_capabilities():
     
     Forces a reload of vis_params from MongoDB.
     """
-    # Clear any cache if implemented
+    # Import vis_params_manager if using MongoDB
+    from app.visualization.vis_params_loader import USE_MONGODB_VIS_PARAMS
+    
+    # Clear capabilities cache
     provider = get_capabilities_provider()
+    provider.clear_cache()
+    
+    # Clear vis_params cache if using MongoDB
+    if USE_MONGODB_VIS_PARAMS:
+        from app.visualization.vis_params_loader import vis_params_manager
+        await vis_params_manager.refresh_cache()
     
     # Get fresh capabilities
     capabilities = await provider.get_capabilities()
     
     return {
-        "message": "Capabilities refreshed successfully",
+        "message": "Caches refreshed successfully",
+        "mongodb_vis_params": USE_MONGODB_VIS_PARAMS,
         "metadata": capabilities.get("metadata", {})
     }
