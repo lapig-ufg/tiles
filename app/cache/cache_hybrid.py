@@ -91,7 +91,7 @@ class HybridTileCache:
     @asynccontextmanager
     async def _get_redis(self):
         """Context manager para conexão Redis"""
-        client = redis.Redis(connection_pool=self._redis_pool)
+        client = redis.asyncio.Redis(connection_pool=self._redis_pool)
         try:
             yield client
         finally:
