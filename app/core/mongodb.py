@@ -102,6 +102,28 @@ class Point(BaseModel):
     class Config:
         populate_by_name = True
 
+class TileError(BaseModel):
+    id: Optional[str] = Field(default=None, alias="_id")
+    point_id: str = Field(alias="pointId")
+    campaign_id: str = Field(alias="campaignId")
+    tile_info: Dict[str, Any] = Field(alias="tileInfo")  # {x, y, z}
+    year: int
+    vis_param: str = Field(alias="visParam")
+    image_type: str = Field(alias="imageType")
+    error_type: str = Field(alias="errorType")  # 'gee_error', 'download_error', 'cache_error'
+    error_message: str = Field(alias="errorMessage")
+    error_details: Optional[Dict[str, Any]] = Field(alias="errorDetails")  # Stack trace, HTTP status, etc
+    gee_url: Optional[str] = Field(alias="geeUrl")
+    retry_count: int = Field(default=0, alias="retryCount")
+    created_at: datetime = Field(default_factory=datetime.now, alias="createdAt")
+    resolved: bool = False
+    resolved_at: Optional[datetime] = Field(default=None, alias="resolvedAt")
+    grid_key: Optional[str] = Field(default=None, alias="gridKey")  # For grid-based caching
+    context: Optional[Dict[str, Any]] = None  # Additional context like GEE circuit breaker state
+
+    class Config:
+        populate_by_name = True
+
 # Collection accessors
 async def get_users_collection():
     """Get users collection"""
@@ -111,9 +133,14 @@ async def get_users_collection():
 async def get_campaigns_collection():
     """Get campaigns collection"""
     db = get_database()
-    return db.campaigns
+    return db.campaign
 
 async def get_points_collection():
     """Get points collection"""
     db = get_database()
     return db.points
+
+async def get_tile_errors_collection():
+    """Get tile errors collection"""
+    db = get_database()
+    return db.tile_errors

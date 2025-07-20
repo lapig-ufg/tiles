@@ -21,23 +21,36 @@ celery_app.conf.update(
     enable_utc=True,
     # Configuração para evitar warning de deprecação
     broker_connection_retry_on_startup=True,
-    # Rate limiting
+    # Rate limiting otimizado
     task_annotations={
-        "tasks.process_landsat_tile": {"rate_limit": "100/m"},
-        "tasks.process_sentinel_tile": {"rate_limit": "100/m"},
-        "cache_warmer.warm_tiles": {"rate_limit": "200/m"},
+        "tasks.process_landsat_tile": {"rate_limit": "200/m"},
+        "tasks.process_sentinel_tile": {"rate_limit": "200/m"},
+        "cache_warmer.warm_tiles": {"rate_limit": "300/m"},
+        # Limites para tasks de cache
+        "cache_tasks.cache_campaign_async": {"rate_limit": "10/m"},
+        "cache_tasks.cache_point_async": {"rate_limit": "100/m"},
+        "cache_tasks.cache_point_optimized": {"rate_limit": "600/m"},
     },
-    # Configurações de workers
-    worker_prefetch_multiplier=4,
-    worker_max_tasks_per_child=1000,
-    # Timeouts
-    task_soft_time_limit=300,  # 5 minutos
-    task_time_limit=600,  # 10 minutos
+    # Configurações de workers otimizadas
+    worker_prefetch_multiplier=8,  # Mais tasks pre-fetched
+    worker_max_tasks_per_child=2000,  # Mais tasks por worker
+    # Timeouts ajustados
+    task_soft_time_limit=600,  # 10 minutos
+    task_time_limit=900,  # 15 minutos
+    # Configurações de routing para priorização
+    task_routes={
+        'cache_tasks.cache_campaign_async': {'queue': 'priority'},
+        'cache_tasks.cache_point_optimized': {'queue': 'priority'},
+        'cache_tasks.cache_point_async': {'queue': 'standard'},
+    },
+    # Configurações de concorrência
+    worker_concurrency=8,  # Número de processos worker
+    worker_pool='prefork',  # Melhor para CPU-bound tasks
     # Inclui módulos com tasks
     imports=[
-        'app.tasks',
-        'app.cache_warmer',
-        'app.cache_tasks',
+        'app.tasks.tasks',
+        'app.cache.cache_warmer',
+        'app.tasks.cache_tasks',
     ],
 )
 

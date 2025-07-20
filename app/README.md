@@ -10,11 +10,10 @@ app/
 ├── README.md
 │
 ├── api/                    # Endpoints da API
-│   ├── cache_endpoints.py  # Endpoints de cache
-│   ├── cache_management.py # Gerenciamento de cache
-│   ├── cache_unified.py    # Cache unificado
+│   ├── cache_unified.py    # Cache unificado (gerenciamento completo)
+│   ├── capabilities_endpoints.py # Endpoints de capabilities
 │   ├── layers.py          # Endpoints de layers
-│   ├── layers_optimized.py # Layers otimizados
+│   ├── tasks_endpoints.py  # Endpoints de gerenciamento de tasks
 │   ├── tile_aggregation.py # Agregação de tiles
 │   ├── timeseries.py      # Séries temporais
 │   └── vis_params_management.py # Gerenciamento de parâmetros de visualização

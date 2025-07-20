@@ -246,6 +246,9 @@ class HybridTileCache:
             info = await r.info()
             dbsize = await r.dbsize()
         
+        # Estatísticas do S3/MinIO
+        s3_stats = await self._get_s3_stats()
+        
         return {
             "redis": {
                 "connected_clients": info.get("connected_clients", 0),
@@ -260,8 +263,82 @@ class HybridTileCache:
                     key=lambda x: x[1],
                     reverse=True
                 )[:10]
-            }
+            },
+            "s3": s3_stats
         }
+    
+    async def _get_s3_stats(self) -> Dict[str, Any]:
+        """Coleta estatísticas gerais do bucket S3/MinIO"""
+        try:
+            async with self.s3_session.client(
+                's3',
+                endpoint_url=self.s3_endpoint,
+                aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
+                aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
+            ) as s3:
+                # Usar head_bucket para verificar se existe
+                await s3.head_bucket(Bucket=self.s3_bucket)
+                
+                # Fazer apenas uma consulta simples para estatísticas básicas
+                response = await s3.list_objects_v2(Bucket=self.s3_bucket, MaxKeys=1)
+                
+                # Se há objetos, fazer uma segunda consulta para estimar totais
+                if 'Contents' in response:
+                    # Para MinIO/S3 compatível, podemos usar uma amostragem simples
+                    sample_response = await s3.list_objects_v2(Bucket=self.s3_bucket, MaxKeys=1000)
+                    
+                    sample_objects = len(sample_response.get('Contents', []))
+                    sample_size = sum(obj.get('Size', 0) for obj in sample_response.get('Contents', []))
+                    
+                    if sample_response.get('IsTruncated', False):
+                        # Estimativa baseada na amostra
+                        # Para uma estimativa mais precisa, podemos multiplicar por um fator
+                        # ou usar uma abordagem de amostragem estatística
+                        estimated_total_objects = sample_objects * 1000  # Estimativa conservadora
+                        estimated_total_size = sample_size * 1000
+                    else:
+                        # Temos todos os objetos na amostra
+                        estimated_total_objects = sample_objects
+                        estimated_total_size = sample_size
+                    
+                    return {
+                        "connected": True,
+                        "total_objects": estimated_total_objects,
+                        "size_bytes": estimated_total_size,
+                        "size_mb": round(estimated_total_size / (1024 * 1024), 2),
+                        "size_gb": round(estimated_total_size / (1024 * 1024 * 1024), 2),
+                        "bucket": self.s3_bucket,
+                        "endpoint": self.s3_endpoint,
+                        "avg_object_size_kb": round((estimated_total_size / 1024) / max(estimated_total_objects, 1), 2),
+                        "estimation_method": "sample_based" if sample_response.get('IsTruncated', False) else "complete"
+                    }
+                else:
+                    # Bucket vazio
+                    return {
+                        "connected": True,
+                        "total_objects": 0,
+                        "size_bytes": 0,
+                        "size_mb": 0,
+                        "size_gb": 0,
+                        "bucket": self.s3_bucket,
+                        "endpoint": self.s3_endpoint,
+                        "avg_object_size_kb": 0,
+                        "estimation_method": "complete"
+                    }
+                
+        except Exception as e:
+            logger.error(f"Erro ao obter estatísticas do S3: {e}")
+            return {
+                "connected": False,
+                "error": str(e),
+                "total_objects": 0,
+                "size_bytes": 0,
+                "size_mb": 0,
+                "size_gb": 0,
+                "bucket": self.s3_bucket,
+                "endpoint": self.s3_endpoint,
+                "estimation_method": "failed"
+            }
     
     async def delete_by_pattern(self, pattern: str) -> int:
         """

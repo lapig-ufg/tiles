@@ -1,4 +1,4 @@
-from .api import layers, timeseries, tile_aggregation, cache_unified, vis_params_management, capabilities_endpoints
+from .api import layers, timeseries, tile_aggregation, cache_unified, vis_params_management, capabilities_endpoints, tasks_endpoints
 
 
 def created_routes(app):
@@ -17,5 +17,8 @@ def created_routes(app):
     
     # Rota para capabilities dinâmicas
     app.include_router(capabilities_endpoints.router, tags=["Capabilities"])
+    
+    # Rota para gerenciamento e monitoramento de tasks do Celery
+    app.include_router(tasks_endpoints.router, tags=["Task Management"])
 
     return app

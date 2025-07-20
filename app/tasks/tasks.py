@@ -12,8 +12,8 @@ def process_landsat_tile(self, params: Dict[str, Any]):
     """Processa tile Landsat de forma assíncrona"""
     try:
         # Inicializa GEE se necessário
-        if not ee.data._credentials:
-            ee.Initialize()
+        from app.core.gee_auth import initialize_earth_engine
+        initialize_earth_engine()
         
         # Aqui viria a lógica de processamento do tile
         # Por exemplo: gerar tile, salvar no cache, etc.

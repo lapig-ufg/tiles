@@ -16,14 +16,17 @@ async def verify_super_admin(credentials: HTTPBasicCredentials = Depends(securit
     try:
         users_collection = await get_users_collection()
         
-        # Find user by username
-        user = await users_collection.find_one({"username": credentials.username})
+        # Find users by username (pode haver múltiplos)
+        users_cursor = users_collection.find({"username": credentials.username})
+        users_list = await users_cursor.to_list(length=None)
         
-        if not user:
-            # Try by _id for admin user
-            user = await users_collection.find_one({"_id": credentials.username})
-        
-        if not user:
+        if not users_list:
+            # Debug: log available usernames to help diagnose the issue
+            all_users_cursor = users_collection.find({}, {"username": 1})
+            all_users = await all_users_cursor.to_list(length=10)  # Limit to 10 for safety
+            available_usernames = [u.get("username") for u in all_users if u.get("username")]
+            logger.debug(f"Available usernames in database: {available_usernames}")
+            
             logger.warning(f"Authentication failed: user {credentials.username} not found")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -31,18 +34,24 @@ async def verify_super_admin(credentials: HTTPBasicCredentials = Depends(securit
                 headers={"WWW-Authenticate": "Basic"},
             )
         
-        # Verify password (assuming it's hashed with SHA256 or plain text)
-        stored_password = user.get("password", "")
+        # Tentar autenticar com cada usuário encontrado
+        authenticated_user = None
+        for user in users_list:
+            stored_password = user.get("password", "")
+            
+            # Try direct comparison first (for plain text passwords)
+            password_valid = stored_password == credentials.password
+            
+            # If direct comparison fails, try SHA256 hash
+            if not password_valid:
+                hashed_password = hashlib.sha256(credentials.password.encode()).hexdigest()
+                password_valid = stored_password == hashed_password
+            
+            if password_valid:
+                authenticated_user = user
+                break
         
-        # Try direct comparison first (for plain text passwords)
-        password_valid = stored_password == credentials.password
-        
-        # If direct comparison fails, try SHA256 hash
-        if not password_valid:
-            hashed_password = hashlib.sha256(credentials.password.encode()).hexdigest()
-            password_valid = stored_password == hashed_password
-        
-        if not password_valid:
+        if not authenticated_user:
             logger.warning(f"Authentication failed: invalid password for user {credentials.username}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -51,8 +60,8 @@ async def verify_super_admin(credentials: HTTPBasicCredentials = Depends(securit
             )
         
         # Check role
-        user_role = user.get("role")
-        user_type = user.get("type")
+        user_role = authenticated_user.get("role")
+        user_type = authenticated_user.get("type")
         
         if user_role != "super-admin" and user_type != "admin":
             logger.warning(f"Authorization failed: user {credentials.username} does not have super-admin role")
@@ -61,8 +70,7 @@ async def verify_super_admin(credentials: HTTPBasicCredentials = Depends(securit
                 detail="Super-admin role required",
             )
         
-        logger.info(f"User {credentials.username} authenticated successfully with role {user_role or user_type}")
-        return user
+        return authenticated_user
         
     except HTTPException:
         raise

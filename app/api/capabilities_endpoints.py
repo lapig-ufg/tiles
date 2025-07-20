@@ -5,7 +5,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/capabilities", tags=["capabilities"])
+router = APIRouter(prefix="/api/capabilities", tags=["Capabilities"])
 
 @router.get("/")
 async def get_capabilities():

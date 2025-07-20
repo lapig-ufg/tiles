@@ -138,13 +138,42 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
                qa.bitwiseAnd(cloud_shadow_bit_mask).eq(0))
         return image.updateMask(mask)
 
-    landsat = (ee.ImageCollection(collection)
-               .filterDate(dates["dtStart"], dates["dtEnd"])
-               .filterBounds(geom)
-               .map(mask_clouds)
-               .map(scale)
-               .select(vis["bands"])
-               .mosaic())
+    # First get the collection and check available bands
+    landsat_collection = ee.ImageCollection(collection).filterDate(dates["dtStart"], dates["dtEnd"]).filterBounds(geom)
+    
+    # Check if collection has images
+    size = landsat_collection.size()
+    
+    # Only process if there are images in the collection
+    def process_with_bands():
+        # Get first image to check available bands
+        first = landsat_collection.first()
+        band_names = first.bandNames()
+        
+        # Check if requested bands exist
+        requested_bands = vis["bands"]
+        
+        # Filter to only available bands
+        available_bands = band_names.filter(ee.Filter.inList('item', requested_bands))
+        num_available = available_bands.size()
+        
+        # If no requested bands are available, use default bands based on satellite
+        processed = ee.Algorithms.If(
+            num_available.eq(0),
+            # No bands available - return empty image
+            ee.Image.constant(0).rename(['empty']),
+            # Process normally with available bands
+            landsat_collection.map(mask_clouds).map(scale).select(available_bands).mosaic()
+        )
+        
+        return processed
+    
+    # Only process if collection has images
+    landsat = ee.Algorithms.If(
+        size.gt(0),
+        process_with_bands(),
+        ee.Image.constant(0).rename(['empty'])
+    )
 
     map_id = ee.data.getMapId({"image": landsat, **vis})
     return map_id["tile_fetcher"].url_format

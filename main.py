@@ -1,8 +1,8 @@
 import typing
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
-from app.utils.capabilities import get_capabilities_provider
 import ee
 import orjson
 from fastapi import FastAPI, HTTPException, Request
@@ -27,28 +27,8 @@ from app.cache import HybridTileCache
 # Instância global do cache
 tile_cache = HybridTileCache()
 
-# Inicializa New Relic se estiver em produção
-# try:
-#     import newrelic.agent
-#     newrelic.agent.initialize()
-# except ImportError:
-#     pass
-
 Base.metadata.create_all(bind=engine)
 
-# Métricas simples (sem Prometheus por enquanto)
-# request_count = Counter(
-#     'tiles_requests_total',
-#     'Total de requisições',
-#     ['method', 'endpoint', 'status']
-# )
-# request_duration = Histogram(
-#     'tiles_request_duration_seconds',
-#     'Duração das requisições em segundos',
-#     ['method', 'endpoint']
-# )
-
-# Rate limiter - configuração adaptativa para Landsat/Sentinel
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=[f"{settings.get('RATE_LIMIT_PER_MINUTE', 100000)}/minute"],
@@ -100,23 +80,8 @@ async def lifespan(app: FastAPI):
     logger.info("Cache híbrido inicializado")
     
     # Inicializa Earth Engine
-    if settings.get("SKIP_GEE_INIT", False):
-        logger.warning("Skipping GEE initialization (SKIP_GEE_INIT=true)")
-    else:
-        try:
-            service_account_file = settings.GEE_SERVICE_ACCOUNT_FILE
-            logger.debug(f"Initializing service account {service_account_file}")
-            credentials = service_account.Credentials.from_service_account_file(
-                service_account_file,
-                scopes=["https://www.googleapis.com/auth/earthengine.readonly"],
-            )
-            ee.Initialize(credentials)
-            logger.info("GEE Initialized successfully.")
-        except Exception as e:
-            logger.error(f"Failed to initialize GEE: {e}")
-            if settings.get("TILES_ENV") != "development":
-                raise
-            logger.warning("Running in development mode without GEE")
+    from app.core.gee_auth import initialize_earth_engine
+    initialize_earth_engine()
     
     yield
     
@@ -172,45 +137,120 @@ async def read_root(request: Request):
         "docs": "/docs"
     }
 
-@app.get('/api/capabilities')
-@limiter.limit("100/minute")
-async def get_capabilities(request: Request):
-    """Get dynamic capabilities based on available vis_params"""
-    provider = get_capabilities_provider()
-    capabilities = await provider.get_capabilities()
-    
-    # Return in legacy format for backward compatibility
-    legacy_collections = []
-    for coll in capabilities["collections"]:
-        legacy_coll = {
-            "name": coll["name"],
-            "visparam": coll["visparam"],
-            "period": coll.get("period", []),
-            "year": coll.get("year", [])
-        }
-        if "months" in coll:
-            legacy_coll["month"] = coll["months"]
-        legacy_collections.append(legacy_coll)
-    
-    return {"collections": legacy_collections}
-
-# Endpoint de métricas removido (Prometheus desabilitado)
-
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with comprehensive service validation"""
+    health_status = {
+        "status": "healthy",
+        "services": {
+            "cache": {"status": "unknown"},
+            "mongodb": {"status": "unknown"},
+            "gee": {"status": "unknown"},
+            "s3": {"status": "unknown"}
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+    
+    errors = []
+    
+    # 1. Verificar cache (Redis/Valkey)
     try:
-        # Verifica conexões
         stats = await tile_cache.get_stats()
-        return {
+        health_status["services"]["cache"] = {
             "status": "healthy",
-            "cache": "connected",
-            "redis_keys": stats["redis"]["total_keys"]
+            "redis_keys": stats["redis"]["total_keys"],
+            "memory_usage": stats["redis"]["memory_usage"]
         }
     except Exception as e:
+        health_status["services"]["cache"] = {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+        errors.append(f"Cache: {str(e)}")
+    
+    # 2. Verificar MongoDB
+    try:
+        from app.core.mongodb import mongodb
+        if mongodb.client and mongodb.database:
+            # Tenta fazer um ping no MongoDB
+            await mongodb.client.admin.command('ping')
+            health_status["services"]["mongodb"] = {
+                "status": "healthy",
+                "database": mongodb.database.name
+            }
+        else:
+            health_status["services"]["mongodb"] = {
+                "status": "unhealthy",
+                "error": "MongoDB client not initialized"
+            }
+            errors.append("MongoDB: Client not initialized")
+    except Exception as e:
+        health_status["services"]["mongodb"] = {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+        errors.append(f"MongoDB: {str(e)}")
+    
+    # 3. Verificar Google Earth Engine
+    try:
+        import ee
+        if ee.data._credentials:
+            # Tenta fazer uma operação simples para verificar se está funcionando
+            test_image = ee.Image(1)
+            test_image.getInfo()
+            health_status["services"]["gee"] = {
+                "status": "healthy",
+                "initialized": True
+            }
+        else:
+            health_status["services"]["gee"] = {
+                "status": "unhealthy",
+                "error": "GEE not initialized"
+            }
+            errors.append("GEE: Not initialized")
+    except Exception as e:
+        health_status["services"]["gee"] = {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+        errors.append(f"GEE: {str(e)}")
+    
+    # 4. Verificar S3/MinIO
+    try:
+        # Usa o cliente S3 do cache híbrido
+        async with tile_cache.s3_session.client(
+            's3',
+            endpoint_url=tile_cache.s3_endpoint,
+            aws_access_key_id=settings.get('S3_ACCESS_KEY', 'minioadmin'),
+            aws_secret_access_key=settings.get('S3_SECRET_KEY', 'minioadmin'),
+            region_name='us-east-1'
+        ) as s3_client:
+            # Tenta listar buckets para verificar conectividade
+            response = await s3_client.list_buckets()
+            bucket_exists = any(b['Name'] == tile_cache.s3_bucket for b in response['Buckets'])
+            
+            health_status["services"]["s3"] = {
+                "status": "healthy",
+                "endpoint": tile_cache.s3_endpoint,
+                "bucket": tile_cache.s3_bucket,
+                "bucket_exists": bucket_exists
+            }
+    except Exception as e:
+        health_status["services"]["s3"] = {
+            "status": "unhealthy",
+            "error": str(e)
+        }
+        errors.append(f"S3: {str(e)}")
+    
+    # Determinar status geral
+    if errors:
+        health_status["status"] = "unhealthy"
+        health_status["errors"] = errors
         return JSONResponse(
             status_code=503,
-            content={"status": "unhealthy", "error": str(e)}
+            content=health_status
         )
+    
+    return health_status
 
 app = created_routes(app)
