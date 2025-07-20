@@ -211,6 +211,9 @@ def monitor_check_health() -> Dict[str, Any]:
         }
         
         try:
+            # Initialize tile cache if needed
+            await tile_cache.initialize()
+            
             # Check Redis
             health["components"]["redis"] = await _check_redis_health()
             
@@ -543,14 +546,21 @@ async def _check_s3_health() -> Dict[str, Any]:
 async def _check_mongodb_health() -> Dict[str, Any]:
     """Check MongoDB health"""
     try:
-        db = get_database()
+        from app.core.mongodb import mongodb
+        
+        # Check if MongoDB is initialized
+        if mongodb.client is None or mongodb.database is None:
+            return {
+                "status": "unhealthy",
+                "error": "MongoDB not connected"
+            }
         
         # Ping database
-        await db.command("ping")
+        await mongodb.database.command("ping")
         
         return {
             "status": "healthy",
-            "database": db.name
+            "database": mongodb.database.name
         }
     except Exception as e:
         return {

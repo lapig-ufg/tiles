@@ -82,12 +82,6 @@
             },
             {
                 "Type": "bind",
-                "Source": "/home/suporte/config/__aplications__/compose/app_tile/env/t2.ini",
-                "Target": "/app/newrelic.ini",
-                "ReadOnly": true
-            },
-            {
-                "Type": "bind",
                 "Source": "/home/suporte/config/service_account/blissful-axiom-314717.json",
                 "Target": "/app/.service-accounts/gee.json",
                 "ReadOnly": true

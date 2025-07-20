@@ -25,7 +25,10 @@ from app.utils.cors import origin_regex, allow_origins
 from app.cache import HybridTileCache
 
 # Instância global do cache
-tile_cache = HybridTileCache()
+tile_cache = HybridTileCache(
+    redis_url=settings.get('REDIS_URL', 'redis://valkey:6379'),
+    s3_bucket=settings.get('S3_BUCKET', 'tiles-cache')
+)
 
 Base.metadata.create_all(bind=engine)
 

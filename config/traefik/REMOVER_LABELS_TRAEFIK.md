@@ -67,12 +67,6 @@ Para **TODOS** os containers (app_tile_1 até app_tile_5), use apenas:
             },
             {
                 "Type": "bind",
-                "Source":"/home/suporte/config/__ aplications __/compose/app_tile/env/tX.ini",
-                "Target": "/app/newrelic.ini",
-                "ReadOnly": true
-            },
-            {
-                "Type": "bind",
                 "Source": "/home/suporte/config/service_account/blissful-axiom-314717.json",
                 "Target": "/app/.service-accounts/gee.json",
                 "ReadOnly": true
