@@ -130,7 +130,7 @@ app.add_middleware(
     max_age=3600,
 )
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 @limiter.limit("100/minute")
 async def read_root(request: Request):
     return {
@@ -140,7 +140,7 @@ async def read_root(request: Request):
         "docs": "/docs"
     }
 
-@app.get("/health/light")
+@app.get("/health/light", include_in_schema=False)
 async def health_light():
     """
     Lightweight health check endpoint for Traefik.
@@ -166,7 +166,7 @@ async def health_light():
             }
         )
 
-@app.get("/health")
+@app.get("/health", include_in_schema=False)
 async def health_check():
     """Health check endpoint with comprehensive service validation"""
     health_status = {
