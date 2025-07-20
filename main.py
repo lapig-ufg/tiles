@@ -18,7 +18,7 @@ from slowapi.errors import RateLimitExceeded
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core import settings, logger
-from app.core.config import start_logger
+from app.core.config import start_logger, REDIS_URL
 from app.core.database import Base, engine
 from app.router import created_routes
 from app.utils.cors import origin_regex, allow_origins
@@ -26,7 +26,7 @@ from app.cache import HybridTileCache
 
 # Instância global do cache
 tile_cache = HybridTileCache(
-    redis_url=settings.get('REDIS_URL', 'redis://valkey:6379'),
+    redis_url=REDIS_URL,
     s3_bucket=settings.get('S3_BUCKET', 'tiles-cache')
 )
 
@@ -36,7 +36,7 @@ limiter = Limiter(
     key_func=get_remote_address,
     default_limits=[f"{settings.get('RATE_LIMIT_PER_MINUTE', 100000)}/minute"],
     # Configuração específica para burst
-    storage_uri=settings.get('REDIS_URL', 'redis://valkey:6379'),
+    storage_uri=REDIS_URL,
     strategy="moving-window"  # Melhor para rajadas
 )
 

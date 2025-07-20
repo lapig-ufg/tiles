@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from datetime import datetime
 
 from app.tasks.celery_app import celery_app
-from app.core.config import logger
+from app.core.config import logger, REDIS_URL
 from app.core.auth import SuperAdminRequired
 
 router = APIRouter(
@@ -278,7 +278,7 @@ async def get_queue_length():
         from app.core.config import settings
         import redis
         
-        r = redis.from_url(settings.get('REDIS_URL', 'redis://valkey:6379'))
+        r = redis.from_url(REDIS_URL)
         
         # Busca todas as filas do Celery
         queues = {}

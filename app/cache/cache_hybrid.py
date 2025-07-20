@@ -17,7 +17,7 @@ import redis.asyncio as redis
 import orjson
 from botocore.exceptions import ClientError
 
-from app.core.config import logger, settings
+from app.core.config import logger, settings, REDIS_URL
 
 
 class HybridTileCache:
@@ -435,9 +435,9 @@ class HybridTileCache:
 
 
 # Instância global do cache
-# Usa variáveis de ambiente ou configurações como fallback
+# Usa a configuração centralizada de REDIS_URL
 tile_cache = HybridTileCache(
-    redis_url=settings.get("REDIS_URL", "redis://localhost:6379"),
-    s3_endpoint=settings.get("S3_ENDPOINT", "http://localhost:9000"),
+    redis_url=REDIS_URL,
+    s3_endpoint=settings.get("S3_ENDPOINT", "http://minio:9000"),
     s3_bucket=settings.get("S3_BUCKET", "tiles-cache"),
 )

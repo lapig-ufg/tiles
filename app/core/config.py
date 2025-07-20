@@ -52,3 +52,7 @@ settings = Dynaconf(
     environments=True,
     load_dotenv=True,
 )
+
+# Configuração unificada do Redis
+# Use REDIS_URL do ambiente ou padrão para container valkey
+REDIS_URL = settings.get("REDIS_URL", "redis://valkey:6379")
