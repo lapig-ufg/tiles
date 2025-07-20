@@ -1,11 +1,16 @@
 from fastapi import APIRouter, HTTPException
 from app.utils.capabilities import get_capabilities_provider
 from app.core.mongodb import get_database
+from app.core.auth import SuperAdminRequired
 import logging
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/admin", tags=["Admin"])
+router = APIRouter(
+    prefix="/api/admin",
+    tags=["Admin"],
+    dependencies=[SuperAdminRequired]
+)
 
 @router.post("/clear-capabilities-cache")
 async def clear_capabilities_cache():

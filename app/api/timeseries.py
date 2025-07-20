@@ -41,49 +41,28 @@ def timeseries_landsat(
             ndvi = image.normalizedDifference(['NIR', 'RED']).rename('NDVI')
             return image.addBands(ndvi)
 
-        # Helper function to safely select bands
-        def safe_select_bands(collection, band_map):
-            """Safely select bands with fallback"""
-            def select_if_available(image):
-                available_bands = image.bandNames()
-                
-                # Check which requested bands are available
-                requested_bands = ee.List(list(band_map.keys()))
-                rename_bands = ee.List(list(band_map.values()))
-                
-                # Create a list of available bands from requested
-                valid_bands = requested_bands.filter(ee.Filter.inList('item', available_bands))
-                valid_count = valid_bands.size()
-                
-                # If no valid bands, return image with dummy bands
-                return ee.Algorithms.If(
-                    valid_count.eq(0),
-                    image.select([]).addBands([
-                        ee.Image.constant(0).rename('RED'),
-                        ee.Image.constant(0).rename('NIR'),
-                        ee.Image.constant(0).rename('QA_PIXEL')
-                    ]),
-                    # Otherwise select available bands and rename
-                    image.select(valid_bands).rename(
-                        valid_bands.map(lambda b: band_map.get(b, b))
-                    )
-                )
+        # Create and process Landsat collections
+        # Landsat 4, 5, 7 use bands B3 (RED) and B4 (NIR)
+        l4 = ee.ImageCollection('LANDSAT/LT04/C02/T1_L2') \
+            .filterBounds(point).filterDate(data_inicio, data_fim) \
+            .select(['SR_B3', 'SR_B4', 'QA_PIXEL'], ['RED', 'NIR', 'QA_PIXEL'])
             
-            return collection.map(select_if_available)
-
-        # Create collections with safe band selection
-        l4_base = ee.ImageCollection('LANDSAT/LT04/C02/T1_L2').filterBounds(point).filterDate(data_inicio, data_fim)
-        l5_base = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2').filterBounds(point).filterDate(data_inicio, data_fim)
-        l7_base = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2').filterBounds(point).filterDate(data_inicio, data_fim)
-        l8_base = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2').filterBounds(point).filterDate(data_inicio, data_fim)
-        l9_base = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2').filterBounds(point).filterDate(data_inicio, data_fim)
-        
-        # Apply safe band selection for each satellite
-        l4 = safe_select_bands(l4_base, {'SR_B3': 'RED', 'SR_B4': 'NIR', 'QA_PIXEL': 'QA_PIXEL'})
-        l5 = safe_select_bands(l5_base, {'SR_B3': 'RED', 'SR_B4': 'NIR', 'QA_PIXEL': 'QA_PIXEL'})
-        l7 = safe_select_bands(l7_base, {'SR_B3': 'RED', 'SR_B4': 'NIR', 'QA_PIXEL': 'QA_PIXEL'})
-        l8 = safe_select_bands(l8_base, {'SR_B4': 'RED', 'SR_B5': 'NIR', 'QA_PIXEL': 'QA_PIXEL'})
-        l9 = safe_select_bands(l9_base, {'SR_B4': 'RED', 'SR_B5': 'NIR', 'QA_PIXEL': 'QA_PIXEL'})
+        l5 = ee.ImageCollection('LANDSAT/LT05/C02/T1_L2') \
+            .filterBounds(point).filterDate(data_inicio, data_fim) \
+            .select(['SR_B3', 'SR_B4', 'QA_PIXEL'], ['RED', 'NIR', 'QA_PIXEL'])
+            
+        l7 = ee.ImageCollection('LANDSAT/LE07/C02/T1_L2') \
+            .filterBounds(point).filterDate(data_inicio, data_fim) \
+            .select(['SR_B3', 'SR_B4', 'QA_PIXEL'], ['RED', 'NIR', 'QA_PIXEL'])
+            
+        # Landsat 8 and 9 use bands B4 (RED) and B5 (NIR)
+        l8 = ee.ImageCollection('LANDSAT/LC08/C02/T1_L2') \
+            .filterBounds(point).filterDate(data_inicio, data_fim) \
+            .select(['SR_B4', 'SR_B5', 'QA_PIXEL'], ['RED', 'NIR', 'QA_PIXEL'])
+            
+        l9 = ee.ImageCollection('LANDSAT/LC09/C02/T1_L2') \
+            .filterBounds(point).filterDate(data_inicio, data_fim) \
+            .select(['SR_B4', 'SR_B5', 'QA_PIXEL'], ['RED', 'NIR', 'QA_PIXEL'])
 
         collections = l4.merge(l5).merge(l7).merge(l8).merge(l9) \
             .map(mask) \

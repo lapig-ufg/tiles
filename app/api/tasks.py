@@ -9,10 +9,12 @@ from datetime import datetime
 
 from app.tasks.celery_app import celery_app
 from app.core.config import logger
+from app.core.auth import SuperAdminRequired
 
 router = APIRouter(
     prefix="/api/tasks",
-    tags=["Task Management"]
+    tags=["Task Management"],
+    dependencies=[SuperAdminRequired]
 )
 
 class TaskInfo(BaseModel):

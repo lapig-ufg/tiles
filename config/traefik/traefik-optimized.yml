@@ -89,7 +89,7 @@ http:
           - url: "http://app_tile_4:8080"
           - url: "http://app_tile_5:8080"
         healthCheck:
-          path: /health
+          path: /health/light
           interval: 10s
           timeout: 3s
           scheme: http

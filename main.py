@@ -140,6 +140,31 @@ async def read_root(request: Request):
         "docs": "/docs"
     }
 
+@app.get("/health/light")
+async def health_light():
+    """
+    Lightweight health check endpoint for Traefik.
+    Only performs basic connectivity checks without heavy operations.
+    """
+    try:
+        # Basic Redis ping
+        await tile_cache.redis_client.ping()
+        
+        return {
+            "status": "healthy",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Light health check failed: {e}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "error": "Service unavailable",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+        )
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint with comprehensive service validation"""
