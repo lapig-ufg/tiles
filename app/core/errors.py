@@ -1,8 +1,9 @@
 import io
-import traceback
 from typing import Optional
+
 from PIL import Image, ImageDraw, ImageFont
 from fastapi import HTTPException
+
 from app.core.config import logger
 
 

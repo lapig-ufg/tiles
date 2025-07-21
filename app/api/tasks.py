@@ -1,15 +1,16 @@
 """
 Endpoints para gerenciamento e monitoramento de tasks do Celery
 """
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, HTTPException, Query
-from celery.result import AsyncResult
-from pydantic import BaseModel
 from datetime import datetime
+from typing import Optional, List, Dict, Any
 
-from app.tasks.celery_app import celery_app
-from app.core.config import logger, REDIS_URL
+from celery.result import AsyncResult
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
+
 from app.core.auth import SuperAdminRequired
+from app.core.config import logger, REDIS_URL
+from app.tasks.celery_app import celery_app
 
 router = APIRouter(
     prefix="/api/tasks",

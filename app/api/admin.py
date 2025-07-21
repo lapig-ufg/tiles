@@ -1,8 +1,10 @@
-from fastapi import APIRouter, HTTPException
-from app.utils.capabilities import get_capabilities_provider
-from app.core.mongodb import get_database
-from app.core.auth import SuperAdminRequired
 import logging
+
+from fastapi import APIRouter, HTTPException
+
+from app.core.auth import SuperAdminRequired
+from app.core.mongodb import get_database
+from app.utils.capabilities import get_capabilities_provider
 
 logger = logging.getLogger(__name__)
 

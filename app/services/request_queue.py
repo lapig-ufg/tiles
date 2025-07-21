@@ -2,10 +2,12 @@
 Sistema de fila de requisições com priorização e throttling
 """
 import asyncio
-from typing import Dict, List, Any, Optional
-from datetime import datetime
 import heapq
+from datetime import datetime
+from typing import Dict, Any
+
 from app.core.config import logger
+
 
 class PriorityRequestQueue:
     """

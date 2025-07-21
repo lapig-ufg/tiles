@@ -2,8 +2,6 @@
 Loader for visualization parameters with fallback support
 Allows switching between MongoDB and hardcoded configurations
 """
-import os
-from typing import Dict, Any, Union
 from app.core.config import settings, logger
 
 

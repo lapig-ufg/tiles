@@ -1,11 +1,11 @@
 """
 Services module - business logic and processing services
 """
-from .tile import *
 from .batch_processor import BatchProcessor
+from .prewarm import TilePreWarmer
 from .repository import LayerRepository
 from .request_queue import PriorityRequestQueue
-from .prewarm import TilePreWarmer
+from .tile import *
 
 __all__ = [
     'BatchProcessor', 'LayerRepository', 'PriorityRequestQueue', 'TilePreWarmer',

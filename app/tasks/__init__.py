@@ -2,13 +2,12 @@
 Tasks module - Celery tasks and async processing
 Organized into logical categories for better maintainability
 """
-from .celery_app import celery_app
-
-# Import all task modules to register them with Celery
-from . import tile_tasks
 from . import cache_operations
 from . import cleanup_tasks
 from . import monitoring_tasks
+# Import all task modules to register them with Celery
+from . import tile_tasks
+from .celery_app import celery_app
 
 __all__ = [
     'celery_app',

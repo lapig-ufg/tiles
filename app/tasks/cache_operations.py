@@ -4,22 +4,21 @@ Handles campaign caching, point caching, and cache warming operations
 """
 import asyncio
 import math
-from datetime import datetime
-from typing import Dict, Any, List, Optional, Tuple
-from collections import defaultdict
 import random
+from collections import defaultdict
+from datetime import datetime
+from typing import Dict, Any, List, Optional
+
 from celery import group, chord
 from loguru import logger
 
-from app.tasks.celery_app import celery_app
-from app.tasks.tile_tasks import tile_generate_batch, tile_generate_mosaic
+from app.cache.cache_hybrid import tile_cache
 from app.core.mongodb import (
     get_points_collection, get_campaigns_collection,
-    get_tile_errors_collection, connect_to_mongo
+    connect_to_mongo
 )
-from app.cache.cache_hybrid import tile_cache
-from app.core.config import settings
-
+from app.tasks.celery_app import celery_app
+from app.tasks.tile_tasks import tile_generate_batch
 
 # Cache warming configuration
 POPULAR_REGIONS = [

@@ -3,6 +3,7 @@ Google Earth Engine authentication shared between FastAPI and Celery
 """
 import ee
 from google.oauth2 import service_account
+
 from app.core.config import settings, logger
 
 

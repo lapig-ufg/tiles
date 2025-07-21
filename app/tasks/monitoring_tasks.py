@@ -3,16 +3,17 @@ Monitoring and analytics tasks
 Handles metrics collection, pattern analysis, and reporting
 """
 import asyncio
+from collections import defaultdict, Counter
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
-from collections import defaultdict, Counter
+
 from celery.schedules import crontab
 from loguru import logger
 
-from app.tasks.celery_app import celery_app
-from app.core.mongodb import connect_to_mongo, get_database
 from app.cache.cache_hybrid import tile_cache
 from app.core.config import settings
+from app.core.mongodb import connect_to_mongo, get_database
+from app.tasks.celery_app import celery_app
 
 
 @celery_app.task(bind=True, queue='low_priority')

@@ -3,7 +3,7 @@ from enum import Enum
 from typing import List, Optional
 
 from pydantic import BaseModel
-from sqlalchemy import Column, DateTime, Integer, String
+from sqlalchemy import Column, DateTime, String
 
 from app.core.database import Base
 

@@ -2,17 +2,16 @@
 Sistema inteligente de cache warming para tiles
 Simula padrões de requisições de webmaps (Leaflet/OpenLayers)
 """
-from typing import List, Tuple, Dict, Any, Optional
 import math
+import random
 from dataclasses import dataclass
 from enum import Enum
-import random
-from celery import group, chord
-from app.tasks.celery_app import celery_app
-from app.core.config import settings
+from typing import List, Tuple, Dict, Any
+
+from celery import group
 from loguru import logger
-import asyncio
-from datetime import datetime, timedelta
+
+from app.tasks.celery_app import celery_app
 
 
 class LoadingPattern(Enum):

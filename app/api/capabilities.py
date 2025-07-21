@@ -1,7 +1,9 @@
-from fastapi import APIRouter, HTTPException, Query
-from typing import Optional, Dict, Any
-from app.utils.capabilities import get_capabilities_provider
 import logging
+from typing import Optional
+
+from fastapi import APIRouter, HTTPException, Query
+
+from app.utils.capabilities import get_capabilities_provider
 
 logger = logging.getLogger(__name__)
 

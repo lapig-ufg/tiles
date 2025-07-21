@@ -4,8 +4,8 @@ Optimized for high-performance tile processing and caching
 """
 from celery import Celery
 from kombu import Queue, Exchange
+
 from app.core.config import settings
-from celery.schedules import crontab
 
 # Create Celery instance
 celery_app = Celery(

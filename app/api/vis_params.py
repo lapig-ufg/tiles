@@ -4,20 +4,19 @@ Allows CRUD operations on vis_params stored in MongoDB
 """
 from datetime import datetime
 from typing import List, Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
-from fastapi.responses import JSONResponse
+
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.auth import SuperAdminRequired
+from app.core.config import logger
 from app.core.mongodb import get_database
 from app.models.vis_params import (
-    VisParamDocument, BandConfig, VisParam, 
+    VisParamDocument, BandConfig, VisParam,
     SatelliteVisParam, LandsatCollectionMapping,
     SentinelCollectionMapping
 )
 from app.visualization.vis_params_db import vis_params_manager
-from app.core.config import logger, settings
-
 
 router = APIRouter(
     prefix="/api/vis-params",

@@ -2,12 +2,12 @@
 MongoDB-based visualization parameters management
 Replaces the hardcoded VISPARAMS with database-driven configuration
 """
-from typing import Dict, Optional, List, Any, Union
-from functools import lru_cache
 import asyncio
+from typing import Dict, Optional, List, Any, Union
+
+from app.core.config import logger
 from app.core.mongodb import get_database
 from app.models.vis_params import VisParamDocument, LandsatCollectionMapping
-from app.core.config import logger
 
 
 class VisParamsManager:

@@ -3,10 +3,12 @@ MongoDB connection and models for TVI collections
 """
 from datetime import datetime
 from typing import List, Optional, Any, Dict
+
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field
-from bson import ObjectId
+
 from app.core.config import settings
+
 
 # MongoDB connection
 class MongoDB:

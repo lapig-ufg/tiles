@@ -3,16 +3,13 @@ Sistema de pre-warming de tiles para popular cache antecipadamente
 Essencial para suportar milhões de requisições por segundo
 """
 import asyncio
-import math
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
-from concurrent.futures import ThreadPoolExecutor
 
 import aiohttp
 from loguru import logger
 
 from app.services.tile import latlon_to_tile
-from app.core.config import settings
 
 
 class TilePreWarmer:

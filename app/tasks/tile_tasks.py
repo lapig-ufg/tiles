@@ -2,21 +2,19 @@
 Tile generation and processing tasks
 Handles all tile-related operations including generation, mosaics, and batch processing
 """
-import ee
-import math
 import asyncio
-from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime
+import math
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from typing import Dict, Any, List
+
 import aiohttp
+import ee
 from loguru import logger
 
-from app.tasks.celery_app import celery_app
-from app.services.tile import tile2goehashBBOX
-from app.visualization.vis_params_loader import get_landsat_collection, get_landsat_vis_params, VISPARAMS
 from app.cache.cache import aset_png as set_png
-from app.core.mongodb import get_tile_errors_collection
-
+from app.tasks.celery_app import celery_app
+from app.visualization.vis_params_loader import get_landsat_collection, get_landsat_vis_params, VISPARAMS
 
 # Configuration
 TILE_SIZE = 256

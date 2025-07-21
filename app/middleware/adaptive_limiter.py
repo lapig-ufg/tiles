@@ -2,11 +2,12 @@
 Rate limiter adaptativo que ajusta limites baseado na carga do sistema
 """
 import time
+from typing import Dict
+
 import psutil
-from typing import Dict, Optional
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from app.core.config import settings
+
 
 class AdaptiveLimiter:
     def __init__(self):

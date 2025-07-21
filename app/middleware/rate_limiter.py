@@ -3,7 +3,6 @@ Rate limiter customizado com diferentes limites por tipo de requisição
 """
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from functools import wraps
 
 # Limiter principal com configurações específicas
 limiter = Limiter(

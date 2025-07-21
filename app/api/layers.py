@@ -7,28 +7,31 @@ Endpoints refatorados para usar DiskCache (FanoutCache)
 """
 from __future__ import annotations
 
-import io, json, calendar, asyncio
+import asyncio
+import calendar
+import io
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from enum import Enum
-from typing import Dict, Any, Optional, Literal
-from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Any, Literal
 
 import aiohttp
 import ee
-from fastapi import APIRouter, HTTPException, Request, Query
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, FileResponse
 
-from app.core.config import logger, settings
-from app.utils.capabilities import get_capabilities_provider
-from app.services.tile import tile2goehashBBOX
-from app.visualization.vis_params_loader import get_visparams, get_landsat_vis_params, get_landsat_collection
-from app.visualization.vis_params_db import get_landsat_vis_params_async
-from app.core.errors import generate_error_image
 from app.cache.cache import (
-    aget_png as get_png,  aset_png as set_png,          # bytes (tile)
-    aget_meta as get_meta, aset_meta as set_meta          # {"url": str, "date": iso}
+    aget_png as get_png, aset_png as set_png,  # bytes (tile)
+    aget_meta as get_meta, aset_meta as set_meta  # {"url": str, "date": iso}
 )
+from app.core.config import logger, settings
+from app.core.errors import generate_error_image
 from app.middleware.rate_limiter import limit_sentinel, limit_landsat
+from app.services.tile import tile2goehashBBOX
+from app.utils.capabilities import get_capabilities_provider
+from app.visualization.vis_params_db import get_landsat_vis_params_async
+from app.visualization.vis_params_loader import get_visparams, get_landsat_vis_params, get_landsat_collection
+
 
 # --------------------------------------------------------------------------- #
 # Constantes e tipos                                                          #

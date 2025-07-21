@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta
+
+import ee
 import numpy as np
 import pandas as pd
-from scipy.signal import savgol_filter
-import ee
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
+from scipy.signal import savgol_filter
 
 router = APIRouter()
 

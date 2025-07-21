@@ -3,19 +3,17 @@ Cleanup and maintenance tasks
 Handles cache cleanup, orphaned object removal, and optimization
 """
 import asyncio
-from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
 from collections import defaultdict
-import aioboto3
-from botocore.exceptions import ClientError
+from datetime import datetime
+from typing import Dict, Any, List, Optional
+
 from celery.schedules import crontab
 from loguru import logger
 
-from app.tasks.celery_app import celery_app
 from app.cache.cache_hybrid import tile_cache
-from app.core.mongodb import connect_to_mongo, get_tile_errors_collection
 from app.core.config import settings
-import redis.asyncio as redis
+from app.core.mongodb import connect_to_mongo
+from app.tasks.celery_app import celery_app
 
 
 class CleanupStats:

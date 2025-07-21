@@ -4,22 +4,21 @@ Combines all cache-related endpoints in a single, organized module
 """
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
-from celery.result import AsyncResult
 
+from celery.result import AsyncResult
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
+
+from app.cache.cache_hybrid import tile_cache
+from app.cache.cache_warmer import (
+    CacheWarmer, LoadingPattern, schedule_warmup_task, analyze_usage_patterns_task
+)
 from app.core.auth import SuperAdminRequired
+from app.core.config import logger
 from app.core.mongodb import get_points_collection, get_campaigns_collection
 from app.tasks.cache_operations import cache_point, cache_campaign, cache_validate
-from app.tasks.cleanup_tasks import cleanup_expired_cache, cleanup_analyze_usage
-from app.cache.cache_warmer import (
-    CacheWarmer, LoadingPattern, ViewportBounds,
-    schedule_warmup_task, analyze_usage_patterns_task
-)
 from app.tasks.celery_app import celery_app
-from app.cache.cache_hybrid import tile_cache
-from app.core.config import logger
+from app.tasks.cleanup_tasks import cleanup_expired_cache
 
 router = APIRouter(
     prefix="/api/cache", 

@@ -1,15 +1,17 @@
 """
 Sistema de agregação de tiles para reduzir número de requisições
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks, Response, status, Query, Path
-from typing import List, Dict, Any
-from pydantic import BaseModel, Field
 import asyncio
 import io
-from PIL import Image
 from datetime import datetime
-from app.core.config import logger
+from typing import List
+
+from PIL import Image
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Response, status, Query, Path
+from pydantic import BaseModel, Field
+
 from app.cache.cache_hybrid import tile_cache
+from app.core.config import logger
 
 router = APIRouter(prefix="/aggregation", tags=["Agregação de Tiles"])
 
