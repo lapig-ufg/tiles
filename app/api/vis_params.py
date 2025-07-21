@@ -66,11 +66,19 @@ class VisParamUpdateRequest(BaseModel):
 
 class VisParamTestRequest(BaseModel):
     """Request to test visualization parameters"""
-    vis_params: VisParam
+    vis_params: Optional[VisParam] = None
+    vis_param_name: Optional[str] = Field(None, description="Name of existing vis param to test")
     x: int = Field(..., description="Tile X coordinate")
     y: int = Field(..., description="Tile Y coordinate")  
     z: int = Field(..., description="Zoom level")
     layer_type: str = Field("sentinel2", description="Layer type (sentinel2, landsat)")
+    
+    @field_validator('vis_params')
+    @classmethod
+    def validate_params(cls, v, info):
+        if not v and not info.data.get('vis_param_name'):
+            raise ValueError("Must provide either vis_params or vis_param_name")
+        return v
 
 
 # CRUD Endpoints
@@ -340,38 +348,148 @@ async def test_vis_params(request: VisParamTestRequest):
     Test visualization parameters by generating a sample tile URL
     
     This endpoint helps validate vis params before saving them.
+    You can either provide vis_params directly or reference an existing vis_param_name.
     """
     try:
         import ee
         from app.services.tile import tile2goehashBBOX
         
+        db = get_database()
+        collection = db.vis_params
+        
         # Get tile bounds
         _, bbox = tile2goehashBBOX(request.x, request.y, request.z)
         geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
         
-        # Generate based on layer type
-        if request.layer_type == "sentinel2":
-            # Test with Sentinel-2
-            s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED").filterBounds(geom).first()
+        # Get vis params either from request or database
+        if request.vis_param_name:
+            # Load from database
+            doc = await collection.find_one({"_id": request.vis_param_name})
+            if not doc:
+                raise HTTPException(status_code=404, detail=f"Vis param '{request.vis_param_name}' not found")
             
-            # Apply vis params
-            vis_dict = request.vis_params.model_dump()
-            # Convert string values to proper format
-            for key in ["min", "max"]:
-                if isinstance(vis_dict.get(key), str):
-                    vis_dict[key] = vis_dict[key].replace(" ", "")
-            
-            map_id = ee.data.getMapId({"image": s2, **vis_dict})
-            tile_url = map_id["tile_fetcher"].url_format
-            
+            # Determine if it's Sentinel-2 or Landsat style
+            if doc.get("band_config") and doc.get("vis_params"):
+                # Sentinel-2 style with band mapping
+                vis_params = doc["vis_params"]
+                band_config = doc["band_config"]
+                
+                # If using Sentinel-2, we need to get the actual image and apply band selection
+                if request.layer_type == "sentinel2":
+                    s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED").filterBounds(geom).first()
+                    
+                    # Apply band selection if configured
+                    if band_config.get("original_bands") and band_config.get("mapped_bands"):
+                        # Select and rename bands
+                        s2 = s2.select(band_config["original_bands"], band_config["mapped_bands"])
+                        # Use mapped band names in vis params
+                        vis_dict = vis_params.copy()
+                    else:
+                        # Use original bands
+                        vis_dict = vis_params.copy()
+                    
+                    # Convert parameters for Earth Engine
+                    for key in ["min", "max"]:
+                        value = vis_dict.get(key)
+                        if isinstance(value, list):
+                            vis_dict[key] = ",".join(str(v) for v in value)
+                        elif isinstance(value, str):
+                            vis_dict[key] = value.replace(" ", "")
+                    
+                    gamma = vis_dict.get("gamma")
+                    if isinstance(gamma, list):
+                        vis_dict["gamma"] = ",".join(str(v) for v in gamma)
+                    elif isinstance(gamma, (int, float)):
+                        vis_dict["gamma"] = str(gamma)
+                    
+                    map_id = ee.data.getMapId({"image": s2, **vis_dict})
+                    tile_url = map_id["tile_fetcher"].url_format
+                else:
+                    raise ValueError("This vis param is configured for Sentinel-2 but landsat was requested")
+                    
+            elif doc.get("satellite_configs"):
+                # Landsat style - find appropriate config for collection
+                if request.layer_type != "landsat":
+                    raise ValueError("This vis param is configured for Landsat but sentinel2 was requested")
+                
+                # Use LC08 as default for testing
+                collection_id = "LANDSAT/LC08/C02/T1_L2"
+                vis_dict = None
+                
+                for sat_config in doc["satellite_configs"]:
+                    if sat_config["collection_id"] == collection_id:
+                        vis_dict = sat_config["vis_params"].copy()
+                        break
+                
+                if not vis_dict:
+                    raise ValueError(f"No configuration found for collection {collection_id}")
+                
+                landsat = ee.ImageCollection(collection_id).filterBounds(geom).first()
+                
+                # Convert parameters for Earth Engine
+                for key in ["min", "max"]:
+                    value = vis_dict.get(key)
+                    if isinstance(value, list):
+                        vis_dict[key] = ",".join(str(v) for v in value)
+                    elif isinstance(value, str):
+                        vis_dict[key] = value.replace(" ", "")
+                
+                gamma = vis_dict.get("gamma")
+                if isinstance(gamma, list):
+                    vis_dict["gamma"] = ",".join(str(v) for v in gamma)
+                elif isinstance(gamma, (int, float)):
+                    vis_dict["gamma"] = str(gamma)
+                
+                map_id = ee.data.getMapId({"image": landsat, **vis_dict})
+                tile_url = map_id["tile_fetcher"].url_format
+            else:
+                raise ValueError("Invalid vis param configuration")
+                
         else:
-            # Test with Landsat
-            landsat = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(geom).first()
-            
-            # Apply vis params
+            # Use directly provided vis_params
             vis_dict = request.vis_params.model_dump()
-            map_id = ee.data.getMapId({"image": landsat, **vis_dict})
-            tile_url = map_id["tile_fetcher"].url_format
+            
+            if request.layer_type == "sentinel2":
+                # Test with Sentinel-2
+                s2 = ee.ImageCollection("COPERNICUS/S2_HARMONIZED").filterBounds(geom).first()
+                
+                # Convert parameters for Earth Engine
+                for key in ["min", "max"]:
+                    value = vis_dict.get(key)
+                    if isinstance(value, list):
+                        vis_dict[key] = ",".join(str(v) for v in value)
+                    elif isinstance(value, str):
+                        vis_dict[key] = value.replace(" ", "")
+                
+                gamma = vis_dict.get("gamma")
+                if isinstance(gamma, list):
+                    vis_dict["gamma"] = ",".join(str(v) for v in gamma)
+                elif isinstance(gamma, (int, float)):
+                    vis_dict["gamma"] = str(gamma)
+                
+                map_id = ee.data.getMapId({"image": s2, **vis_dict})
+                tile_url = map_id["tile_fetcher"].url_format
+                
+            else:
+                # Test with Landsat
+                landsat = ee.ImageCollection("LANDSAT/LC08/C02/T1_L2").filterBounds(geom).first()
+                
+                # Convert parameters for Earth Engine
+                for key in ["min", "max"]:
+                    value = vis_dict.get(key)
+                    if isinstance(value, list):
+                        vis_dict[key] = ",".join(str(v) for v in value)
+                    elif isinstance(value, str):
+                        vis_dict[key] = value.replace(" ", "")
+                
+                gamma = vis_dict.get("gamma")
+                if isinstance(gamma, list):
+                    vis_dict["gamma"] = ",".join(str(v) for v in gamma)
+                elif isinstance(gamma, (int, float)):
+                    vis_dict["gamma"] = str(gamma)
+                
+                map_id = ee.data.getMapId({"image": landsat, **vis_dict})
+                tile_url = map_id["tile_fetcher"].url_format
         
         return {
             "status": "success",
