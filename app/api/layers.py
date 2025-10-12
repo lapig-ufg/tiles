@@ -123,9 +123,23 @@ def _create_s2_layer_sync(geom: ee.Geometry, dates: Dict[str, str], vis: dict) -
     return map_id["tile_fetcher"].url_format
 
 
+def add_cloud_pixel_count_landsat(image, buffer_area):
+    """Adiciona contagem de pixels com nuvem à imagem Landsat"""
+    qa = image.select('QA_PIXEL')
+    cloud_mask = qa.bitwiseAnd(1 << 3).Or(qa.bitwiseAnd(1 << 5))
+    cloud_pixels = cloud_mask.reduceRegion(
+        reducer=ee.Reducer.sum(),
+        geometry=buffer_area,
+        scale=30,
+        maxPixels=1e13
+    ).get('QA_PIXEL')
+    return image.set('cloudPixels', cloud_pixels)
+
+
 def _create_landsat_layer_sync(geom: ee.Geometry,
                                dates: Dict[str, str],
-                               visparam_name: str) -> str:
+                               visparam_name: str,
+                               composite_mode: str = "BEST_IMAGE") -> str:
     year = datetime.fromisoformat(dates["dtStart"]).year
     collection = get_landsat_collection(year)
     vis = get_landsat_vis_params(visparam_name, collection)
@@ -146,48 +160,83 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
                qa.bitwiseAnd(cloud_shadow_bit_mask).eq(0))
         return image.updateMask(mask)
 
-    # First get the collection and check available bands
-    landsat_collection = ee.ImageCollection(collection).filterDate(dates["dtStart"], dates["dtEnd"]).filterBounds(geom)
-    
-    # Check if collection has images
-    size = landsat_collection.size()
-    
-    # Only process if there are images in the collection
-    def process_with_bands():
-        # Get first image to check available bands
-        first = landsat_collection.first()
-        band_names = first.bandNames()
+    # Process based on composite mode
+    if composite_mode == "BEST_IMAGE":
+        # Best image selection mode - select the best image based on cloud pixels
+        # Use the same date range as provided
+        landsat_collection = (ee.ImageCollection(collection)
+                            .filterDate(dates["dtStart"], dates["dtEnd"])
+                            .filterBounds(geom)
+                            .map(lambda img: add_cloud_pixel_count_landsat(img, geom))
+                            .sort('cloudPixels'))
         
-        # Check if requested bands exist
-        requested_bands = vis["bands"]
+        # Get the best image (least clouds)
+        size = landsat_collection.size()
         
-        # Filter to only available bands
-        available_bands = band_names.filter(ee.Filter.inList('item', requested_bands))
-        num_available = available_bands.size()
+        def process_best_image():
+            # Get the image with least clouds
+            best = landsat_collection.first()
+            
+            # Apply cloud masking and scaling
+            processed = mask_clouds(best)
+            processed = scale(processed)
+            
+            # Get available bands
+            band_names = processed.bandNames()
+            available_bands = band_names.filter(ee.Filter.inList('item', vis["bands"]))
+            
+            # Select bands
+            return processed.select(available_bands)
         
-        # If no requested bands are available, use default bands based on satellite
-        processed = ee.Algorithms.If(
-            num_available.eq(0),
-            # No bands available - return empty image
-            ee.Image.constant(0).rename(['empty']),
-            # Process normally with available bands
-            landsat_collection.map(mask_clouds).map(scale).select(available_bands).mosaic()
+        landsat = ee.Algorithms.If(
+            size.gt(0),
+            process_best_image(),
+            ee.Image.constant(0).rename(['empty'])
         )
         
-        return processed
-    
-    # Only process if collection has images
-    landsat = ee.Algorithms.If(
-        size.gt(0),
-        process_with_bands(),
-        ee.Image.constant(0).rename(['empty'])
-    )
+    else:
+        # Default MOSAIC mode - original behavior
+        landsat_collection = ee.ImageCollection(collection).filterDate(dates["dtStart"], dates["dtEnd"]).filterBounds(geom)
+        
+        # Check if collection has images
+        size = landsat_collection.size()
+        
+        # Only process if there are images in the collection
+        def process_with_bands():
+            # Get first image to check available bands
+            first = landsat_collection.first()
+            band_names = first.bandNames()
+            
+            # Check if requested bands exist
+            requested_bands = vis["bands"]
+            
+            # Filter to only available bands
+            available_bands = band_names.filter(ee.Filter.inList('item', requested_bands))
+            num_available = available_bands.size()
+            
+            # If no requested bands are available, use default bands based on satellite
+            processed = ee.Algorithms.If(
+                num_available.eq(0),
+                # No bands available - return empty image
+                ee.Image.constant(0).rename(['empty']),
+                # Process normally with available bands
+                landsat_collection.map(mask_clouds).map(scale).select(available_bands).mosaic()
+            )
+            
+            return processed
+        
+        # Only process if collection has images
+        landsat = ee.Algorithms.If(
+            size.gt(0),
+            process_with_bands(),
+            ee.Image.constant(0).rename(['empty'])
+        )
 
     map_id = ee.data.getMapId({"image": landsat, **vis})
     return map_id["tile_fetcher"].url_format
 
 
-def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], vis: dict) -> str:
+def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], vis: dict, composite_mode: str = "BEST_IMAGE") -> str:
     """Create Landsat layer with pre-processed vis params (no async calls)"""
     def scale(img):
         return img.addBands(img.select("SR_B.").multiply(0.0000275).add(-0.2),
@@ -205,42 +254,77 @@ def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], 
     year = datetime.fromisoformat(dates["dtStart"]).year
     collection = get_landsat_collection(year)
     
-    # vis params are already processed, no need to convert
-    landsat_collection = ee.ImageCollection(collection).filterDate(dates["dtStart"], dates["dtEnd"]).filterBounds(geom)
-    
-    # Check if collection has images
-    size = landsat_collection.size()
-    
-    # Only process if there are images in the collection
-    def process_with_bands():
-        # Get first image to check available bands
-        first = landsat_collection.first()
-        band_names = first.bandNames()
+    # Process based on composite mode
+    if composite_mode == "BEST_IMAGE":
+        # Best image selection mode - select the best image based on cloud pixels
+        # Use the same date range as provided
+        landsat_collection = (ee.ImageCollection(collection)
+                            .filterDate(dates["dtStart"], dates["dtEnd"])
+                            .filterBounds(geom)
+                            .map(lambda img: add_cloud_pixel_count_landsat(img, geom))
+                            .sort('cloudPixels'))
         
-        # Check if requested bands exist
-        requested_bands = vis["bands"]
+        # Get the best image (least clouds)
+        size = landsat_collection.size()
         
-        # Filter to only available bands
-        available_bands = band_names.filter(ee.Filter.inList('item', requested_bands))
-        num_available = available_bands.size()
+        def process_best_image():
+            # Get the image with least clouds
+            best = landsat_collection.first()
+            
+            # Apply cloud masking and scaling
+            processed = mask_clouds(best)
+            processed = scale(processed)
+            
+            # Get available bands
+            band_names = processed.bandNames()
+            available_bands = band_names.filter(ee.Filter.inList('item', vis["bands"]))
+            
+            # Select bands
+            return processed.select(available_bands)
         
-        # If no requested bands are available, use default bands based on satellite
-        processed = ee.Algorithms.If(
-            num_available.eq(0),
-            # No bands available - return empty image
-            ee.Image.constant(0).rename(['empty']),
-            # Process normally with available bands
-            landsat_collection.map(mask_clouds).map(scale).select(available_bands).mosaic()
+        landsat = ee.Algorithms.If(
+            size.gt(0),
+            process_best_image(),
+            ee.Image.constant(0).rename(['empty'])
         )
         
-        return processed
-    
-    # Only process if collection has images
-    landsat = ee.Algorithms.If(
-        size.gt(0),
-        process_with_bands(),
-        ee.Image.constant(0).rename(['empty'])
-    )
+    else:
+        # Default MOSAIC mode - original behavior
+        landsat_collection = ee.ImageCollection(collection).filterDate(dates["dtStart"], dates["dtEnd"]).filterBounds(geom)
+        
+        # Check if collection has images
+        size = landsat_collection.size()
+        
+        # Only process if there are images in the collection
+        def process_with_bands():
+            # Get first image to check available bands
+            first = landsat_collection.first()
+            band_names = first.bandNames()
+            
+            # Check if requested bands exist
+            requested_bands = vis["bands"]
+            
+            # Filter to only available bands
+            available_bands = band_names.filter(ee.Filter.inList('item', requested_bands))
+            num_available = available_bands.size()
+            
+            # If no requested bands are available, use default bands based on satellite
+            processed = ee.Algorithms.If(
+                num_available.eq(0),
+                # No bands available - return empty image
+                ee.Image.constant(0).rename(['empty']),
+                # Process normally with available bands
+                landsat_collection.map(mask_clouds).map(scale).select(available_bands).mosaic()
+            )
+            
+            return processed
+        
+        # Only process if collection has images
+        landsat = ee.Algorithms.If(
+            size.gt(0),
+            process_with_bands(),
+            ee.Image.constant(0).rename(['empty'])
+        )
 
     map_id = ee.data.getMapId({"image": landsat, **vis})
     return map_id["tile_fetcher"].url_format
@@ -255,7 +339,8 @@ async def _serve_tile(layer: str,
                       year: int,
                       month: int,
                       visparam: str,
-                      builder_sync):
+                      builder_sync,
+                      composite_mode: str = None):
     _check_zoom(z)
     await _check_capability(layer, year, period, visparam)
 
@@ -263,7 +348,11 @@ async def _serve_tile(layer: str,
     vis     = await _vis_param(visparam)
 
     geohash, bbox = tile2goehashBBOX(x, y, z)
-    path_cache = f"{layer}_{period}_{year}_{month}_{visparam}/{geohash}"
+    # Include composite_mode in cache path for landsat
+    if layer == "landsat" and composite_mode:
+        path_cache = f"{layer}_{period}_{year}_{month}_{visparam}_{composite_mode}/{geohash}"
+    else:
+        path_cache = f"{layer}_{period}_{year}_{month}_{visparam}/{geohash}"
     file_cache = f"{path_cache}/{z}/{x}_{y}.png"
 
     # 1 ▸ PNG já cacheado?
@@ -289,7 +378,7 @@ async def _serve_tile(layer: str,
                 landsat_vis = await get_landsat_vis_params_async(visparam, collection)
                 
                 layer_url = await loop.run_in_executor(
-                    ee_executor, _create_landsat_layer_with_params, geom, dates, landsat_vis
+                    ee_executor, _create_landsat_layer_with_params, geom, dates, landsat_vis, composite_mode or "BEST_IMAGE"
                 )
             else:
                 layer_url = await loop.run_in_executor(
@@ -353,11 +442,15 @@ async def landsat(x: int, y: int, z: int,
                   period: str = "MONTH",
                   year: int = datetime.now().year,
                   month: int = datetime.now().month,
-                  visparam: str = "landsat-tvi-false"):
+                  visparam: str = "landsat-tvi-false",
+                  compositeMode: Literal["MOSAIC", "BEST_IMAGE"] = "BEST_IMAGE"):
     try:
+        # Create a lambda to pass composite mode to the sync function
+        builder = lambda geom, dates, visparam_name: _create_landsat_layer_sync(geom, dates, visparam_name, compositeMode)
         return await _serve_tile("landsat", x, y, z,
                                  period, year, month,
-                                 visparam, _create_landsat_layer_sync)
+                                 visparam, builder,
+                                 compositeMode)
     except HTTPException as exc:
         logger.error(f"Erro no tile landsat/{x}/{y}/{z}: {exc.detail}")
         error_img = generate_error_image(str(exc.detail))
