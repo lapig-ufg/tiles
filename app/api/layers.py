@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import calendar
 import io
+import random
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from enum import Enum
@@ -55,10 +56,40 @@ ee_executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS_EE)
 # --------------------------------------------------------------------------- #
 
 async def _http_get_bytes(url: str) -> bytes:
-    async with aiohttp.ClientSession() as sess, sess.get(url) as resp:
-        if resp.status != 200:
-            raise HTTPException(resp.status, f"Erro ao buscar tile: {resp.reason}")
-        return await resp.read()
+    max_retries = 5
+    base_delay = 1.0  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            async with aiohttp.ClientSession() as sess, sess.get(url) as resp:
+                if resp.status == 200:
+                    return await resp.read()
+                elif resp.status == 429:
+                    # Rate limited - calculate exponential backoff
+                    if attempt < max_retries - 1:
+                        delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                        logger.warning(f"Rate limited (429). Retrying in {delay:.1f}s... (attempt {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(delay)
+                        continue
+                    else:
+                        logger.error(f"Max retries reached for rate limiting")
+                        raise HTTPException(
+                            status_code=503,
+                            detail="Earth Engine temporarily unavailable due to rate limiting. Please try again in a few seconds."
+                        )
+                else:
+                    raise HTTPException(resp.status, f"Erro ao buscar tile: {resp.reason}")
+        except aiohttp.ClientError as e:
+            if attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"Connection error: {e}. Retrying in {delay:.1f}s...")
+                await asyncio.sleep(delay)
+                continue
+            else:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Unable to connect to Earth Engine service"
+                )
 
 
 def _build_periods(period: str | Period, year: int, month: int) -> Dict[str, str]:
@@ -152,14 +183,7 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
         return img.addBands(img.select("SR_B.").multiply(0.0000275).add(-0.2),
                             None, True)
 
-    def mask_clouds(image):
-        qa = image.select('QA_PIXEL')
-        cloud_bit_mask = 1 << 3
-        cloud_shadow_bit_mask = 1 << 4
-        mask = qa.bitwiseAnd(cloud_bit_mask).eq(0).And(
-               qa.bitwiseAnd(cloud_shadow_bit_mask).eq(0))
-        return image.updateMask(mask)
-
+    logger.info(f'composite_mode: {composite_mode}')
     # Process based on composite mode
     if composite_mode == "BEST_IMAGE":
         # Best image selection mode - select the best image based on cloud pixels
@@ -178,8 +202,7 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
             best = landsat_collection.first()
             
             # Apply cloud masking and scaling
-            processed = mask_clouds(best)
-            processed = scale(processed)
+            processed = scale(best)
             
             # Get available bands
             band_names = processed.bandNames()
@@ -220,7 +243,7 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
                 # No bands available - return empty image
                 ee.Image.constant(0).rename(['empty']),
                 # Process normally with available bands
-                landsat_collection.map(mask_clouds).map(scale).select(available_bands).mosaic()
+                landsat_collection.map(scale).select(available_bands).mosaic()
             )
             
             return processed
@@ -232,8 +255,25 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
             ee.Image.constant(0).rename(['empty'])
         )
 
-    map_id = ee.data.getMapId({"image": landsat, **vis})
-    return map_id["tile_fetcher"].url_format
+    try:
+        map_id = ee.data.getMapId({"image": landsat, **vis})
+        return map_id["tile_fetcher"].url_format
+    except ee.EEException as e:
+        # Log detailed error for debugging
+        error_msg = str(e)
+        logger.error(f"Earth Engine error in {composite_mode} mode: {error_msg}")
+        
+        # Check if it's a band-related error
+        if "no band named" in error_msg.lower():
+            logger.error(f"Band mismatch error. Collection: {collection}, Required bands: {vis.get('bands', [])}")
+            # Raise a more informative error
+            raise HTTPException(
+                status_code=500,
+                detail=f"Band compatibility error in {composite_mode} mode. Some images in the collection do not have the required bands: {vis.get('bands', [])}. Try using MOSAIC mode instead."
+            )
+        else:
+            # Re-raise the original error
+            raise
 
 
 def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], vis: dict, composite_mode: str = "BEST_IMAGE") -> str:
@@ -254,6 +294,9 @@ def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], 
     year = datetime.fromisoformat(dates["dtStart"]).year
     collection = get_landsat_collection(year)
     
+    # Log the composite mode and required bands
+    logger.debug(f"Landsat composite mode: {composite_mode}, collection: {collection}, required bands: {vis.get('bands', [])}")
+    
     # Process based on composite mode
     if composite_mode == "BEST_IMAGE":
         # Best image selection mode - select the best image based on cloud pixels
@@ -268,19 +311,50 @@ def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], 
         size = landsat_collection.size()
         
         def process_best_image():
-            # Get the image with least clouds
-            best = landsat_collection.first()
+            # Required bands from vis params
+            required_bands = vis["bands"]
             
-            # Apply cloud masking and scaling
-            processed = mask_clouds(best)
-            processed = scale(processed)
+            # Function to check if an image has all required bands
+            def has_required_bands(image):
+                band_names = image.bandNames()
+                # Check if all required bands are present
+                has_all = ee.List(required_bands).map(
+                    lambda band: band_names.contains(band)
+                ).reduce(ee.Reducer.min())
+                return image.set('has_required_bands', has_all)
             
-            # Get available bands
-            band_names = processed.bandNames()
-            available_bands = band_names.filter(ee.Filter.inList('item', vis["bands"]))
+            # Filter collection to only images with required bands
+            valid_collection = landsat_collection.map(has_required_bands).filter(
+                ee.Filter.eq('has_required_bands', 1)
+            )
             
-            # Select bands
-            return processed.select(available_bands)
+            valid_size = valid_collection.size()
+            
+            # Process valid image or fallback to mosaic
+            def process_valid_best():
+                best = valid_collection.first()
+                processed = scale(best)
+                return processed.select(required_bands)
+            
+            # Fallback to mosaic mode if no valid images
+            def fallback_to_mosaic():
+                # Use mosaic approach with band checking
+                # First try to get any image with the required bands
+                return landsat_collection.map(scale).map(
+                    lambda img: ee.Algorithms.If(
+                        ee.List(required_bands).map(
+                            lambda band: img.bandNames().contains(band)
+                        ).reduce(ee.Reducer.min()),
+                        img.select(required_bands),
+                        ee.Image.constant(0).rename(['empty'])
+                    )
+                ).mosaic()
+            
+            return ee.Algorithms.If(
+                valid_size.gt(0),
+                process_valid_best(),
+                fallback_to_mosaic()
+            )
         
         landsat = ee.Algorithms.If(
             size.gt(0),
@@ -326,8 +400,25 @@ def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], 
             ee.Image.constant(0).rename(['empty'])
         )
 
-    map_id = ee.data.getMapId({"image": landsat, **vis})
-    return map_id["tile_fetcher"].url_format
+    try:
+        map_id = ee.data.getMapId({"image": landsat, **vis})
+        return map_id["tile_fetcher"].url_format
+    except ee.EEException as e:
+        # Log detailed error for debugging
+        error_msg = str(e)
+        logger.error(f"Earth Engine error in {composite_mode} mode: {error_msg}")
+        
+        # Check if it's a band-related error
+        if "no band named" in error_msg.lower():
+            logger.error(f"Band mismatch error. Collection: {collection}, Required bands: {vis.get('bands', [])}")
+            # Raise a more informative error
+            raise HTTPException(
+                status_code=500,
+                detail=f"Band compatibility error in {composite_mode} mode. Some images in the collection do not have the required bands: {vis.get('bands', [])}. Try using MOSAIC mode instead."
+            )
+        else:
+            # Re-raise the original error
+            raise
 
 # --------------------------------------------------------------------------- #
 # Fluxo genérico de tile                                                      #
