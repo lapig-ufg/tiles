@@ -154,17 +154,56 @@ def _create_s2_layer_sync(geom: ee.Geometry, dates: Dict[str, str], vis: dict) -
     return map_id["tile_fetcher"].url_format
 
 
-def add_cloud_pixel_count_landsat(image, buffer_area):
-    """Adiciona contagem de pixels com nuvem à imagem Landsat"""
+def add_cloud_score_fast(image, tile_geometry):
+    """Versão otimizada para scoring de nuvens usando propriedades nativas
+    
+    Usa uma combinação de:
+    1. CLOUD_COVER_LAND (propriedade nativa, sem cálculo)
+    2. Análise simplificada de QA_PIXEL apenas na área do tile
+    """
+    # Usar propriedade CLOUD_COVER_LAND existente como base
+    # Se não existir, usar CLOUD_COVER
+    cloud_cover_land = image.get('CLOUD_COVER_LAND')
+    cloud_cover = image.get('CLOUD_COVER')
+    
+    # Use CLOUD_COVER_LAND se disponível, senão use CLOUD_COVER
+    scene_cloud_score = ee.Algorithms.If(
+        ee.Number(cloud_cover_land).neq(-1),
+        cloud_cover_land,
+        cloud_cover
+    )
+    
+    # Análise rápida apenas na área do tile (sem buffer)
     qa = image.select('QA_PIXEL')
-    cloud_mask = qa.bitwiseAnd(1 << 3).Or(qa.bitwiseAnd(1 << 5))
-    cloud_pixels = cloud_mask.reduceRegion(
-        reducer=ee.Reducer.sum(),
-        geometry=buffer_area,
-        scale=30,
-        maxPixels=1e13
-    ).get('QA_PIXEL')
-    return image.set('cloudPixels', cloud_pixels)
+    
+    # Máscara simplificada: apenas nuvens de alta confiança
+    # Bit 3: Cloud com alta confiança (bits 8-9 = 3)
+    cloud_bit = qa.bitwiseAnd(1 << 3)
+    cloud_confidence = qa.rightShift(8).bitwiseAnd(3)
+    high_confidence_clouds = cloud_bit.And(cloud_confidence.eq(3))
+    
+    # Amostragem rápida: usar scale maior para performance
+    cloud_stats = high_confidence_clouds.reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=tile_geometry,
+        scale=300,  # 10x maior que 30m para performance
+        maxPixels=1e5  # Limite menor para cálculo rápido
+    )
+    
+    # Porcentagem de pixels com nuvem de alta confiança no tile
+    tile_cloud_fraction = ee.Number(cloud_stats.get('QA_PIXEL', 0)).multiply(100)
+    
+    # Score combinado: 70% peso para cena inteira, 30% para tile
+    # Isso balanceia performance com precisão local
+    combined_score = ee.Number(scene_cloud_score).multiply(0.7).add(
+        tile_cloud_fraction.multiply(0.3)
+    )
+    
+    return image.set({
+        'cloudScore': combined_score,
+        'sceneCloudCover': scene_cloud_score,
+        'tileCloudFraction': tile_cloud_fraction
+    })
 
 
 def _create_landsat_layer_sync(geom: ee.Geometry,
@@ -183,16 +222,17 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
         return img.addBands(img.select("SR_B.").multiply(0.0000275).add(-0.2),
                             None, True)
 
-    logger.info(f'composite_mode: {composite_mode}')
+    logger.info(f'Landsat layer creation - composite_mode: {composite_mode}, dates: {dates}')
     # Process based on composite mode
     if composite_mode == "BEST_IMAGE":
-        # Best image selection mode - select the best image based on cloud pixels
-        # Use the same date range as provided
+        # Best image selection mode - use native CLOUD_COVER_LAND property for performance
+        # This avoids expensive pixel-level calculations
         landsat_collection = (ee.ImageCollection(collection)
                             .filterDate(dates["dtStart"], dates["dtEnd"])
                             .filterBounds(geom)
-                            .map(lambda img: add_cloud_pixel_count_landsat(img, geom))
-                            .sort('cloudPixels'))
+                            .filter(ee.Filter.lt('CLOUD_COVER', 40))  # Pre-filter more aggressive
+                            .sort('CLOUD_COVER_LAND')  # Use native property, no calculation needed
+                            .sort('CLOUD_COVER', False))  # Secondary sort by CLOUD_COVER if CLOUD_COVER_LAND is -1
         
         # Get the best image (least clouds)
         size = landsat_collection.size()
@@ -299,13 +339,14 @@ def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], 
     
     # Process based on composite mode
     if composite_mode == "BEST_IMAGE":
-        # Best image selection mode - select the best image based on cloud pixels
-        # Use the same date range as provided
+        # Best image selection mode - use native CLOUD_COVER_LAND property for performance
+        # This avoids expensive pixel-level calculations
         landsat_collection = (ee.ImageCollection(collection)
                             .filterDate(dates["dtStart"], dates["dtEnd"])
                             .filterBounds(geom)
-                            .map(lambda img: add_cloud_pixel_count_landsat(img, geom))
-                            .sort('cloudPixels'))
+                            .filter(ee.Filter.lt('CLOUD_COVER', 40))  # Pre-filter more aggressive
+                            .sort('CLOUD_COVER_LAND')  # Use native property, no calculation needed
+                            .sort('CLOUD_COVER', False))  # Secondary sort by CLOUD_COVER if CLOUD_COVER_LAND is -1
         
         # Get the best image (least clouds)
         size = landsat_collection.size()
