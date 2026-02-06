@@ -1,4 +1,4 @@
-name: Build and Deploy in Server APP Tile
+name: Build and Deploy in Server OWS
 
 on:
   push:
@@ -9,214 +9,79 @@ jobs:
   build:
     runs-on: ubuntu-latest
     outputs:
-
-      APPLICATION_NAME: ${{ steps.creat_env.outputs.APPLICATION_NAME }}
-      DOCKER_PATH: ${{ steps.creat_env.outputs.DOCKER_PATH }}
-
-      START_TIME: ${{ steps.creat_env.outputs.START_TIME }}
-      LAST_COMMIT_HASH: ${{ steps.creat_env.outputs.LAST_COMMIT_HASH }}
-
-      LAPIG_AUTHOR_NAME: ${{ steps.creat_env.outputs.LAPIG_AUTHOR_NAME }}
-      LAPIG_AUTHOR_EMAIL: ${{ steps.creat_env.outputs.LAPIG_AUTHOR_EMAIL }}
-      LAPIG_AUTHOR_DATE: ${{ steps.creat_env.outputs.LAPIG_AUTHOR_DATE }}
-      LAPIG_PROJECT_NAME: ${{ steps.creat_env.outputs.LAPIG_PROJECT_NAME }}
-      LAPIG_COMMIT_DATE: ${{ steps.creat_env.outputs.LAPIG_COMMIT_DATE }}
-
-      CREATE_STATUS: ${{steps.deploy_container.outputs.CREATE_STATUS}}
-      DELETE_STATUS: ${{steps.delete_container.outputs.DELETE_STATUS}}
-      START_STATUS: ${{steps.start_container.outputs.START_STATUS}}
-
+      APPLICATION_NAME: ${{ steps.create_env.outputs.APPLICATION_NAME }}
+      DOCKER_PATH: ${{ steps.create_env.outputs.DOCKER_PATH }}
+      LAST_COMMIT_HASH: ${{ steps.create_env.outputs.LAST_COMMIT_HASH }}
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
-
-      - name: Define a variável application_name
-        id: creat_env
+      - name: Define environment variables
+        id: create_env
         run: |
-          echo "START_TIME=$(date -u +%s)" >> "$GITHUB_OUTPUT"
-          echo "DOCKER_PATH=prod" >> $GITHUB_ENV
-          echo "DOCKER_PATH=prod" >> $GITHUB_OUTPUT
-          repo_full_name=$GITHUB_REPOSITORY
-          repo_name=${repo_full_name##*/}
-          echo "Nome do repositório: $repo_name"
-
-          echo "application_name=app_tile" >> $GITHUB_ENV
-          echo "APPLICATION_NAME=app_tile" >> $GITHUB_OUTPUT
-
-          echo "LAST_COMMIT_HASH=$(git log --pretty=format:%h -n 1)" >> $GITHUB_ENV
+          # Função para definir variáveis no GITHUB_ENV e GITHUB_OUTPUT
+          set_var() {
+            echo "$1=$2" >> $GITHUB_ENV
+            echo "$1=$2" >> $GITHUB_OUTPUT
+          }
           
-          echo "LAST_COMMIT_HASH=$(git log --pretty=format:%h -n 1)" >> "$GITHUB_OUTPUT"
+          # Extrai o nome do repositório (sem o owner)
+          REPO_NAME="${{ github.event.repository.name }}"
           
-          echo "LAPIG_AUTHOR_NAME=$(git show -s --pretty=%an)" >> "$GITHUB_OUTPUT"
-          echo "LAPIG_AUTHOR_EMAIL=$(git show -s --pretty=%ae)" >> "$GITHUB_OUTPUT"
-          echo "LAPIG_AUTHOR_DATE=$(git log -1 --format=%cd --date=local)" >> "$GITHUB_OUTPUT"
-          echo "LAPIG_PROJECT_NAME=$repo_name" >> "$GITHUB_OUTPUT"
-          echo "LAPIG_COMMIT_DATE=$(git show -s --format=%ci)" >> "$GITHUB_OUTPUT"
+          # Define as variáveis
+          set_var "DOCKER_PATH" "prod"
+          set_var "APPLICATION_NAME" "$REPO_NAME"
+          set_var "LAST_COMMIT_HASH" "$(git log --pretty=format:%h -n 1)"
+          
+          # Log para debug
+          echo "Repository: $REPO_NAME"
+          echo "Docker Path: prod"
+          echo "Commit Hash: $(git log --pretty=format:%h -n 1)"
 
       - name: Create version.json
-        run: echo "{\"commitId\":\"$LAST_COMMIT_HASH\"}" > version.json
-
-      - name: Build Docker
         run: |
-          docker build -t lapig/$application_name:${DOCKER_PATH}_${LAST_COMMIT_HASH} -t lapig/$application_name:${DOCKER_PATH}_latest  -f docker/$DOCKER_PATH/Dockerfile . --no-cache
+          echo "{\"commitId\":\"$LAST_COMMIT_HASH\",\"repository\":\"$APPLICATION_NAME\",\"dockerPath\":\"$DOCKER_PATH\"}" > version.json
+          cat version.json
+
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Registry
-        run: echo "${{ secrets.DOCKERHUB_PASS }}" | docker login -u "lapig" --password-stdin
+        uses: docker/login-action@v3
+        with:
+          username: lapig
+          password: ${{ secrets.DOCKERHUB_PASS }}
 
-      - name: Push Image to Registry
-        run: |
-          docker push lapig/$application_name:${DOCKER_PATH}_${LAST_COMMIT_HASH}
-          docker push lapig/$application_name:${DOCKER_PATH}_latest
-
-      - name: Remove image locally
-        run: |
-          docker rmi lapig/$application_name:${DOCKER_PATH}_${LAST_COMMIT_HASH}
-          docker rmi lapig/$application_name:${DOCKER_PATH}_latest
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/${{ env.DOCKER_PATH }}/Dockerfile
+          push: true
+          tags: |
+            lapig/${{ env.APPLICATION_NAME }}:${{ env.DOCKER_PATH }}_${{ env.LAST_COMMIT_HASH }}
+            lapig/${{ env.APPLICATION_NAME }}:${{ env.DOCKER_PATH }}_latest
+          cache-from: type=registry,ref=lapig/${{ env.APPLICATION_NAME }}:${{ env.DOCKER_PATH }}_latest
+          cache-to: type=inline
+          no-cache: false
 
   deploy:
     needs: build
-    runs-on: self-hosted
+    runs-on: vm1
 
     steps:
-      - name: Load env
+      - name: Restart Application
         run: |
-          echo "application_name=${{needs.build.outputs.APPLICATION_NAME}}" >> $GITHUB_ENV
-          echo "DOCKER_PATH=${{needs.build.outputs.DOCKER_PATH}}" >> $GITHUB_ENV
+          zelador ${{ needs.build.outputs.APPLICATION_NAME }}  ${{ needs.build.outputs.DOCKER_PATH }} \
+            --title="Tiles"   \
+           --commit=${{ needs.build.outputs.LAST_COMMIT_HASH }} \
+           --repo=${{ github.repository }}                                              
 
-      - name: Pull Image on Server
-        run: |
-          docker pull lapig/$application_name:${DOCKER_PATH}_latest
-          docker pull redis:7
 
-      - name: Delete Container
-        id: delete_container
-        
+      - name: Verify deployment
         run: |
-          /compose/resetapp.sh --title "Tile 1" \
-          --container "app_tile_1" \
-          --file "tile-1" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 2" \
-          --container "app_tile_2" \
-          --file "tile-2" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 3" \
-          --file "tile-3" \
-          --container "app_tile_3" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 4" \
-          --file "tile-4" \
-          --container "app_tile_4" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 5" \
-          --file "tile-5" \
-          --container "app_tile_5" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 6" \
-          --file "tile-6" \
-          --container "app_tile_6" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 7" \
-          --file "tile-7" \
-          --container "app_tile_7" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 8" \
-          --file "tile-8" \
-          --container "app_tile_8" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 9" \
-          --file "tile-9" \
-          --container "app_tile_9" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 10" \
-          --file "tile-10" \
-          --container "app_tile_10" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 11" \
-          --file "tile-11" \
-          --container "app_tile_11" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 12" \
-          --file "tile-12" \
-          --container "app_tile_12" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 13" \
-          --file "tile-13" \
-          --container "app_tile_13" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 14" \
-          --file "tile-14" \
-          --container "app_tile_14" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Tile 15" \
-          --file "tile-15" \
-          --container "app_tile_15" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Celery Worker 1" \
-          --container "celery_worker_1" \
-          --file "celery-worker-1" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Celery Worker 2" \
-          --container "celery_worker_2" \
-          --file "celery-worker-2" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Celery Worker 3" \
-          --container "celery_worker_3" \
-          --file "celery-worker-3" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Celery Worker 4" \
-          --container "celery_worker_4" \
-          --file "celery-worker-4" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Celery Beat" \
-          --container "celery_beat" \
-          --file "celery-beat" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
-          /compose/resetapp.sh --title "Celery Flower" \
-          --container "celery_flower" \
-          --file "celery-flower" \
-          --github "https://github.com/${{ github.repository }}" \
-          --commit "${{ needs.build.outputs.LAST_COMMIT_HASH }}" \
-          ${{ needs.build.outputs.APPLICATION_NAME }}
+          echo "Deployment completed successfully"
+          echo "Application: ${{ needs.build.outputs.APPLICATION_NAME }}"
+          echo "Version: ${{ needs.build.outputs.DOCKER_PATH }}_${{ needs.build.outputs.LAST_COMMIT_HASH }}"
