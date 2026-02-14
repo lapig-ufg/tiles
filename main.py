@@ -86,9 +86,12 @@ async def lifespan(app: FastAPI):
     from app.core.mongodb import close_mongo_connection
     await close_mongo_connection()
     logger.info("MongoDB connection closed")
-    
+
     await tile_cache.close()
     logger.info("Cache híbrido fechado")
+
+    from app.core.otel import shutdown_otel_logging
+    shutdown_otel_logging()
 
 app = FastAPI(
     default_response_class=ORJSONResponse,
