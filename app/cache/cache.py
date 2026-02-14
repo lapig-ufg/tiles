@@ -72,3 +72,7 @@ async def aget_meta(key: str) -> Optional[dict[str, Any]]:
 async def aset_meta(key: str, meta: dict[str, Any], ttl: int = META_TTL) -> None:
     """Salva metadados no cache híbrido (assíncrono)"""
     await tile_cache.set_meta(key, meta, ttl)
+
+def atile_lock(key: str):
+    """Lock distribuído para geração de tile (assíncrono context manager)"""
+    return tile_cache.tile_lock(key)

@@ -23,7 +23,8 @@ from fastapi.responses import StreamingResponse, FileResponse
 
 from app.cache.cache import (
     aget_png as get_png, aset_png as set_png,  # bytes (tile)
-    aget_meta as get_meta, aset_meta as set_meta  # {"url": str, "date": iso}
+    aget_meta as get_meta, aset_meta as set_meta,  # {"url": str, "date": iso}
+    atile_lock as tile_lock,
 )
 from app.core.config import logger, settings
 from app.core.errors import generate_error_image
@@ -492,46 +493,55 @@ async def _serve_tile(layer: str,
     if png_bytes:
         return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
 
-    # 2 ▸ URL EE: meta cache + TTL
-    meta      = await get_meta(path_cache)
-    expired   = (
-        meta is None or
-        (datetime.now() - datetime.fromisoformat(meta["date"])).total_seconds()/3600
-        > settings.LIFESPAN_URL
-    )
-    if expired:
-        geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
-        try:
-            loop = asyncio.get_event_loop()
-            if layer == "landsat":
-                # Get Landsat vis params before entering thread executor
-                year = datetime.fromisoformat(dates["dtStart"]).year
-                collection = get_landsat_collection(year)
-                landsat_vis = await get_landsat_vis_params_async(visparam, collection)
-                
-                layer_url = await loop.run_in_executor(
-                    ee_executor, _create_landsat_layer_with_params, geom, dates, landsat_vis, composite_mode or "BEST_IMAGE"
-                )
-            else:
-                layer_url = await loop.run_in_executor(
-                    ee_executor, builder_sync, geom, dates, vis
-                )
-            await set_meta(path_cache, {"url": layer_url, "date": datetime.now().isoformat()})
-        except Exception as e:
-            logger.exception("Erro criar layer EE")
-            return FileResponse("data/blank.png", media_type="image/png")
-    else:
-        layer_url = meta["url"]
+    # 2 ▸ Lock distribuído: evita que dois workers gerem o mesmo tile
+    async with tile_lock(file_cache) as should_generate:
+        if not should_generate:
+            # Outro worker gerou enquanto esperávamos — tenta o cache
+            png_bytes = await get_png(file_cache)
+            if png_bytes:
+                return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
+            # Se ainda não tem, gera normalmente (lock expirou ou falhou)
 
-    # 3 ▸ Faz download do tile remoto
-    try:
-        png_bytes = await _http_get_bytes(layer_url.format(x=x, y=y, z=z))
-        await set_png(file_cache, png_bytes)
-        return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
-    except HTTPException as exc:
-        logger.exception("Erro ao baixar tile")
-        return StreamingResponse(generate_error_image(str(exc.detail)),
-                                 media_type="image/png")
+        # 3 ▸ URL EE: meta cache + TTL
+        meta      = await get_meta(path_cache)
+        expired   = (
+            meta is None or
+            (datetime.now() - datetime.fromisoformat(meta["date"])).total_seconds()/3600
+            > settings.LIFESPAN_URL
+        )
+        if expired:
+            geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
+            try:
+                loop = asyncio.get_event_loop()
+                if layer == "landsat":
+                    # Get Landsat vis params before entering thread executor
+                    year = datetime.fromisoformat(dates["dtStart"]).year
+                    collection = get_landsat_collection(year)
+                    landsat_vis = await get_landsat_vis_params_async(visparam, collection)
+
+                    layer_url = await loop.run_in_executor(
+                        ee_executor, _create_landsat_layer_with_params, geom, dates, landsat_vis, composite_mode or "BEST_IMAGE"
+                    )
+                else:
+                    layer_url = await loop.run_in_executor(
+                        ee_executor, builder_sync, geom, dates, vis
+                    )
+                await set_meta(path_cache, {"url": layer_url, "date": datetime.now().isoformat()})
+            except Exception as e:
+                logger.exception("Erro criar layer EE")
+                return FileResponse("data/blank.png", media_type="image/png")
+        else:
+            layer_url = meta["url"]
+
+        # 4 ▸ Faz download do tile remoto
+        try:
+            png_bytes = await _http_get_bytes(layer_url.format(x=x, y=y, z=z))
+            await set_png(file_cache, png_bytes)
+            return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
+        except HTTPException as exc:
+            logger.exception("Erro ao baixar tile")
+            return StreamingResponse(generate_error_image(str(exc.detail)),
+                                     media_type="image/png")
 
 # --------------------------------------------------------------------------- #
 # Endpoints                                                                   #
