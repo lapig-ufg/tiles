@@ -16,6 +16,16 @@ from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 
 _logger_provider = None
 
+_IGNORED_PATHS = ("/health/light", "/health")
+
+
+class _HealthCheckFilter(logging.Filter):
+    """Filtra logs de access do health check para não poluir o OTLP/Loki."""
+
+    def filter(self, record):
+        msg = record.getMessage()
+        return not any(path in msg for path in _IGNORED_PATHS)
+
 
 def setup_otel_logging():
     """Inicializa o OpenTelemetry Log Exporter se OTEL_EXPORTER_OTLP_ENDPOINT estiver definido."""
@@ -45,10 +55,12 @@ def setup_otel_logging():
     )
 
     # Handler que envia logs do stdlib logging para o OTLP
+    # Filtra rotas de health check para não poluir o Loki
     otel_handler = LoggingHandler(
         level=logging.INFO,
         logger_provider=_logger_provider,
     )
+    otel_handler.addFilter(_HealthCheckFilter())
 
     # Adiciona ao root logger - captura logs do Gunicorn, uvicorn, e app
     root_logger = logging.getLogger()
