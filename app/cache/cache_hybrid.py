@@ -48,6 +48,7 @@ class HybridTileCache:
         self.PNG_TTL = 30 * 24 * 3600   # 30 dias para tiles
         self.META_TTL = 7 * 24 * 3600    # 7 dias para metadados
         self.URL_TTL = 24 * 3600         # 24 horas para URLs do Earth Engine
+        self.LOCK_TTL = 60               # Lock expira em 60s (safety net)
         
         # Pool de conexões
         self._redis_pool = None
@@ -96,6 +97,37 @@ class HybridTileCache:
         finally:
             await client.aclose()
     
+    @asynccontextmanager
+    async def tile_lock(self, key: str):
+        """
+        Lock distribuído via Redis para geração de tile.
+        Se outro worker já está gerando, espera até o lock ser liberado.
+        Retorna True se adquiriu o lock (deve gerar), False se o tile
+        ficou disponível enquanto esperava.
+        """
+        lock_key = f"lock:{key}"
+        acquired = False
+        try:
+            async with self._get_redis() as r:
+                # SET NX = só seta se não existir (atômico)
+                acquired = await r.set(lock_key, "1", nx=True, ex=self.LOCK_TTL)
+
+            if acquired:
+                # Este worker é responsável por gerar o tile
+                yield True
+            else:
+                # Outro worker está gerando — espera ele terminar
+                for _ in range(self.LOCK_TTL * 2):  # poll a cada 0.5s
+                    await asyncio.sleep(0.5)
+                    async with self._get_redis() as r:
+                        if not await r.exists(lock_key):
+                            break
+                yield False
+        finally:
+            if acquired:
+                async with self._get_redis() as r:
+                    await r.delete(lock_key)
+
     def _generate_s3_key(self, tile_key: str) -> str:
         """Gera chave S3 com particionamento para melhor performance"""
         # Particiona por geohash para distribuir melhor no S3
@@ -154,11 +186,11 @@ class HybridTileCache:
             ttl = self.PNG_TTL
             
         s3_key = self._generate_s3_key(key)
-        
-        # Upload paralelo para S3
-        upload_task = self._upload_to_s3(s3_key, data)
-        
-        # Salva metadados no Redis
+
+        # Upload para S3 primeiro (garante que o objeto existe antes de registrar no Redis)
+        await self._upload_to_s3(s3_key, data)
+
+        # Só salva metadados no Redis após upload S3 concluído
         async with self._get_redis() as r:
             meta = {
                 's3_key': s3_key,
@@ -168,9 +200,6 @@ class HybridTileCache:
             }
             await r.hset(f"tile:{key}", mapping=meta)
             await r.expire(f"tile:{key}", ttl)
-        
-        # Aguarda upload S3
-        await upload_task
         
         # Atualiza cache local
         self._update_local_cache(key, data)

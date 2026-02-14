@@ -98,9 +98,20 @@ def create_loguru_otel_sink():
     def sink(message):
         record = message.record
         level = level_map.get(record["level"].name, logging.INFO)
+        
+        # Captura exceção se existir
+        exc_info = None
+        if record["exception"] is not None:
+            exc_info = (
+                record["exception"].type,
+                record["exception"].value,
+                record["exception"].traceback,
+            )
+        
         stdlib_logger.log(
             level,
             record["message"],
+            exc_info=exc_info,
             extra={
                 "loguru_module": record["module"],
                 "loguru_function": record["function"],
@@ -109,7 +120,6 @@ def create_loguru_otel_sink():
         )
 
     return sink
-
 
 def shutdown_otel_logging():
     """Flush e shutdown do OTLP exporter."""
