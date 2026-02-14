@@ -90,9 +90,9 @@ def create_loguru_otel_sink():
             level,
             record["message"],
             extra={
-                "module": record["module"],
-                "function": record["function"],
-                "line": record["line"],
+                "loguru_module": record["module"],
+                "loguru_function": record["function"],
+                "loguru_line": record["line"],
             },
         )
 
