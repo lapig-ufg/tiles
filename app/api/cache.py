@@ -838,6 +838,8 @@ async def check_cache_integrity():
                 endpoint_url=tile_cache.s3_endpoint,
                 aws_access_key_id=settings.get("S3_ACCESS_KEY"),
                 aws_secret_access_key=settings.get("S3_SECRET_KEY"),
+                use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
+                verify=settings.get("S3_VERIFY_SSL", True) 
             ) as s3:
                 await s3.head_bucket(Bucket=tile_cache.s3_bucket)
         except Exception as e:
@@ -859,6 +861,8 @@ async def check_cache_integrity():
                     endpoint_url=tile_cache.s3_endpoint,
                     aws_access_key_id=settings.get("S3_ACCESS_KEY"),
                     aws_secret_access_key=settings.get("S3_SECRET_KEY"),
+                    use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
+                    verify=settings.get("S3_VERIFY_SSL", True) 
                 ) as s3:
                     for key in sample_keys:
                         meta = await r.hgetall(key)

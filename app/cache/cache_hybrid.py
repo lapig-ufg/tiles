@@ -74,6 +74,8 @@ class HybridTileCache:
                 endpoint_url=self.s3_endpoint,
                 aws_access_key_id=settings.get("S3_ACCESS_KEY"),
                 aws_secret_access_key=settings.get("S3_SECRET_KEY"),
+                use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
+                verify=settings.get("S3_VERIFY_SSL", True)  # <-- ADICIONE ISSO
             ) as s3:
                 try:
                     await s3.head_bucket(Bucket=self.s3_bucket)
@@ -164,6 +166,8 @@ class HybridTileCache:
             endpoint_url=self.s3_endpoint,
             aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
             aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
+            use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
+            verify=settings.get("S3_VERIFY_SSL", True) 
         ) as s3:
             try:
                 response = await s3.get_object(Bucket=self.s3_bucket, Key=s3_key)
@@ -211,6 +215,8 @@ class HybridTileCache:
             endpoint_url=self.s3_endpoint,
             aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
             aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
+            use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
+            verify=settings.get("S3_VERIFY_SSL", True) 
         ) as s3:
             for attempt in range(3):
                 try:
@@ -303,6 +309,8 @@ class HybridTileCache:
                 endpoint_url=self.s3_endpoint,
                 aws_access_key_id=settings.get("S3_ACCESS_KEY"),
                 aws_secret_access_key=settings.get("S3_SECRET_KEY"),
+                use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
+                verify=settings.get("S3_VERIFY_SSL", True) 
             ) as s3:
                 # Usar head_bucket para verificar se existe
                 await s3.head_bucket(Bucket=self.s3_bucket)
@@ -428,6 +436,8 @@ class HybridTileCache:
             endpoint_url=self.s3_endpoint,
             aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
             aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
+            use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
+            verify=settings.get("S3_VERIFY_SSL", True) 
         ) as s3:
             # S3 permite deletar até 1000 objetos por vez
             for i in range(0, len(s3_keys), 1000):
