@@ -55,6 +55,22 @@
                             ],
                             "outputHashing": "all"
                         },
+                        "ghpages": {
+                            "budgets": [
+                                {
+                                    "type": "initial",
+                                    "maximumWarning": "2mb",
+                                    "maximumError": "5mb"
+                                },
+                                {
+                                    "type": "anyComponentStyle",
+                                    "maximumWarning": "2mb",
+                                    "maximumError": "5mb"
+                                }
+                            ],
+                            "outputHashing": "all",
+                            "baseHref": "/tiles/"
+                        },
                         "development": {
                             "buildOptimizer": false,
                             "optimization": false,
