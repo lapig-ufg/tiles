@@ -11,6 +11,7 @@ const routes: Routes = [
         path: '', component: AppLayoutComponent,
         children: [
             { path: '', data: { breadcrumb: 'Grid Maps' }, loadChildren: () => import('./grid-map/map-grid.module').then(m => m.MapGridModule) },
+            { path: 'imagery', data: { breadcrumb: 'Catálogo de Imagens' }, loadChildren: () => import('./image-catalog/image-catalog.module').then(m => m.ImageCatalogModule) },
         ]
     },
     { path: 'auth', data: { breadcrumb: 'Auth' }, loadChildren: () => import('./demo/components/auth/auth.module').then(m => m.AuthModule) },

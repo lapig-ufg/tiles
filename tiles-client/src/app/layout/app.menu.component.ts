@@ -25,6 +25,11 @@ export class AppMenuComponent implements OnInit {
                         icon: 'pi pi-fw pi-home',
                         routerLink: ['/landsat']
                     },
+                    {
+                        label: 'Catálogo',
+                        icon: 'pi pi-fw pi-search',
+                        routerLink: ['/imagery']
+                    },
                 ]
             },
             // {
