@@ -16,6 +16,7 @@ import {MapGridLandsatComponent} from "./map-grid-landsat/map-grid-landsat.compo
 import {DropdownModule} from "primeng/dropdown";
 import {TableModule} from "primeng/table";
 import {PanelModule} from "primeng/panel";
+import {ScreenStateModule} from "../screen-state/screen-state.module";
 
 PlotlyModule.plotlyjs = PlotlyJS;
 @NgModule({
@@ -32,7 +33,8 @@ PlotlyModule.plotlyjs = PlotlyJS;
         SelectButtonModule,
         DropdownModule,
         TableModule,
-        PanelModule
+        PanelModule,
+        ScreenStateModule
     ],
     declarations: [
         HomeComponent,

@@ -1,4 +1,5 @@
-import {Component, OnInit} from '@angular/core';
+import {Component, OnInit, OnDestroy} from '@angular/core';
+import {ActivatedRoute, Router} from '@angular/router';
 import Map from 'ol/Map';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/Tile';
@@ -15,6 +16,9 @@ import {Icon, Style} from "ol/style";
 import {Point} from "ol/geom";
 import {Feature} from "ol";
 import {marker} from "../../assets/layout/images/marker";
+import {ScreenStateConfig, ScreenStateBinder} from '../screen-state/interfaces/screen-state.interfaces';
+import {ScreenStateService} from '../screen-state/services/screen-state.service';
+import {bindState} from '../screen-state/helpers/manual-state.helper';
 
 const currentYear = new Date().getFullYear();
 const currentMonth = new Date().getMonth() + 1;
@@ -38,12 +42,25 @@ const CAPABILITIES = {
     ]
 };
 
+const MAP_GRID_STATE_CONFIG: ScreenStateConfig = {
+    screenKey: 'map-grid',
+    group: 'grid-maps',
+    strategy: 'storage-only',
+    debounceMs: 300,
+    schemaVersion: 1,
+    fields: {
+        selectedSentinelPeriod:   {type: 'string', defaultValue: 'WET'},
+        selectedSentinelYear:     {type: 'string', defaultValue: String(currentYear)},
+        selectedSentinelVisParam: {type: 'string', defaultValue: 'tvi-green'},
+    }
+};
+
 @Component({
     selector: 'app-map-grid',
     templateUrl: './map-grid.component.html',
     styleUrls: ['./map-grid.component.scss']
 })
-export class MapGridComponent implements OnInit {
+export class MapGridComponent implements OnInit, OnDestroy {
     public sentinelMaps: (PeriodMapItem | MonthMapItem)[] = [];
     public landsatMaps: (PeriodMapItem | MonthMapItem)[] = [];
     private centerCoordinates = fromLonLat([-57.149819, -21.329828]);
@@ -61,11 +78,42 @@ export class MapGridComponent implements OnInit {
     public selectedLandsatPeriod = this.landsatPeriods[0];
     public selectedSentinelVisParam = this.sentinelVisParams[0];
     public selectedLandsatVisParam = this.landsatVisParams[0];
+    private stateBinder!: ScreenStateBinder<any>;
 
-    constructor(public pointService: PointService) {
+    constructor(
+        public pointService: PointService,
+        private route: ActivatedRoute,
+        private router: Router,
+        private screenStateService: ScreenStateService,
+    ) {
     }
 
     ngOnInit(): void {
+        this.stateBinder = bindState(
+            MAP_GRID_STATE_CONFIG,
+            this.route,
+            this.router,
+            this.screenStateService,
+            {
+                selectedSentinelPeriod: 'WET',
+                selectedSentinelYear: String(currentYear),
+                selectedSentinelVisParam: 'tvi-green',
+            }
+        );
+
+        const restored = this.stateBinder.restore();
+        this.selectedSentinelPeriod = restored.selectedSentinelPeriod;
+        this.selectedSentinelYear = restored.selectedSentinelYear === String(currentYear)
+            ? currentYear
+            : restored.selectedSentinelYear;
+        this.selectedSentinelVisParam = restored.selectedSentinelVisParam;
+
+        const sentinelCapabilities = CAPABILITIES.collections.find(c => c.name === 's2_harmonized');
+        if (sentinelCapabilities) {
+            this.sentinelYears = [...sentinelCapabilities.year];
+        }
+        this.sentinelYears.unshift('Todos');
+
         this.initializeMaps();
         this.pointService.setPoint({lat: -21.329828, lon: -57.149819})
         this.pointService.point$.subscribe({
@@ -77,11 +125,10 @@ export class MapGridComponent implements OnInit {
                 }
             }
         });
-        const sentinelCapabilities = CAPABILITIES.collections.find(c => c.name === 's2_harmonized');
-        if (sentinelCapabilities) {
-            this.sentinelYears = sentinelCapabilities.year;
-        }
-        this.sentinelYears.unshift('Todos')
+    }
+
+    ngOnDestroy(): void {
+        this.stateBinder.destroy();
     }
 
     private addMarker(lat: number, lon: number, map: Map): void {
@@ -214,6 +261,21 @@ export class MapGridComponent implements OnInit {
 
     public updateSentinelMaps(): void {
         this.mapsInstances = this.mapsInstances.filter(mapInstance => !mapInstance.id.startsWith('sentinel-map'));
+        this.createMaps('sentinel', this.selectedSentinelPeriod, this.selectedSentinelVisParam);
+        this.stateBinder.patchAndPersist({
+            selectedSentinelPeriod: this.selectedSentinelPeriod,
+            selectedSentinelYear: String(this.selectedSentinelYear),
+            selectedSentinelVisParam: this.selectedSentinelVisParam,
+        });
+    }
+
+    public clearFilters(): void {
+        this.stateBinder.reset();
+        const s = this.stateBinder.state;
+        this.selectedSentinelPeriod = s.selectedSentinelPeriod;
+        this.selectedSentinelYear = currentYear;
+        this.selectedSentinelVisParam = s.selectedSentinelVisParam;
+        this.mapsInstances = this.mapsInstances.filter(m => !m.id.startsWith('sentinel-map'));
         this.createMaps('sentinel', this.selectedSentinelPeriod, this.selectedSentinelVisParam);
     }
 }

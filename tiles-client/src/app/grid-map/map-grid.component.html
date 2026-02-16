@@ -32,6 +32,12 @@
         ></p-selectButton>
     </span>
 
+    <span class="flex flex-column align-items-center justify-content-end">
+        <app-screen-state-clear
+            screenKey="map-grid"
+            (cleared)="clearFilters()"
+        ></app-screen-state-clear>
+    </span>
 </div>
 <div class="map-grid mt-3">
     <div *ngFor="let map of sentinelMaps" class="map-item">
