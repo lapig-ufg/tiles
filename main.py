@@ -86,9 +86,12 @@ async def lifespan(app: FastAPI):
     from app.core.mongodb import close_mongo_connection
     await close_mongo_connection()
     logger.info("MongoDB connection closed")
-    
+
     await tile_cache.close()
     logger.info("Cache híbrido fechado")
+
+    from app.core.otel import shutdown_otel_logging
+    shutdown_otel_logging()
 
 app = FastAPI(
     default_response_class=ORJSONResponse,
@@ -246,7 +249,8 @@ async def health_check():
             endpoint_url=tile_cache.s3_endpoint,
             aws_access_key_id=settings.get('S3_ACCESS_KEY', 'minioadmin'),
             aws_secret_access_key=settings.get('S3_SECRET_KEY', 'minioadmin'),
-            region_name='us-east-1'
+            use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
+            verify=settings.get("S3_VERIFY_SSL", True) 
         ) as s3_client:
             # Tenta listar buckets para verificar conectividade
             response = await s3_client.list_buckets()

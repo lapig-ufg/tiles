@@ -4,11 +4,23 @@ import sys
 from dynaconf import Dynaconf
 from loguru import logger
 
+from app.core.otel import setup_otel_logging, create_loguru_otel_sink
+
 
 def start_logger():
     type_logger = "development"
     if os.environ.get("TILES_ENV") == "production":
         type_logger = "production"
+
+    # Inicializa OTEL logging (exporta via OTLP se configurado)
+    setup_otel_logging()
+
+    # Adiciona sink do Loguru -> OTLP (se OTEL estiver ativo)
+    otel_sink = create_loguru_otel_sink()
+    if otel_sink is not None:
+        logger.add(otel_sink, level="INFO")
+        logger.info("OTEL logging ativado - exportando logs via OTLP")
+
     logger.info(f"The system is operating in mode {type_logger}")
 
 

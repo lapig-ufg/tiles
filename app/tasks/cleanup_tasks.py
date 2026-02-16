@@ -151,6 +151,8 @@ def cleanup_orphaned_objects(self, bucket_prefix: Optional[str] = None,
                 endpoint_url=tile_cache.s3_endpoint,
                 aws_access_key_id=settings.get("S3_ACCESS_KEY"),
                 aws_secret_access_key=settings.get("S3_SECRET_KEY"),
+                use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
+                verify=settings.get("S3_VERIFY_SSL", True) 
             ) as s3:
                 
                 # List objects
@@ -396,6 +398,8 @@ async def _find_orphaned_s3_objects(stats: CleanupStats,
             endpoint_url=tile_cache.s3_endpoint,
             aws_access_key_id=settings.get("S3_ACCESS_KEY"),
             aws_secret_access_key=settings.get("S3_SECRET_KEY"),
+            use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
+                verify=settings.get("S3_VERIFY_SSL", True) 
         ) as s3:
             paginator = s3.get_paginator('list_objects_v2')
             
@@ -462,6 +466,8 @@ async def _cleanup_s3_objects(stats: CleanupStats, orphaned_objects: List[Dict[s
         endpoint_url=tile_cache.s3_endpoint,
         aws_access_key_id=settings.get("S3_ACCESS_KEY"),
         aws_secret_access_key=settings.get("S3_SECRET_KEY"),
+        use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
+                verify=settings.get("S3_VERIFY_SSL", True) 
     ) as s3:
         batch_size = 1000
         
