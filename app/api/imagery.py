@@ -22,18 +22,14 @@ from app.cache.cache import (
     aset_meta as set_meta,
     aget_png as get_png,
     aset_png as set_png,
+    atile_lock as tile_lock,
 )
 from app.core.config import logger, settings
 from app.core.errors import generate_error_image
 from app.middleware.rate_limiter import limit_imagery
 from app.utils.http import http_get_bytes
 from app.visualization.vis_params_db import get_landsat_vis_params_async
-from app.visualization.vis_params_loader import (
-    get_visparams,
-    get_landsat_collection,
-    get_landsat_vis_params,
-    generate_landsat_list,
-)
+from app.visualization.vis_params_loader import get_visparams, generate_landsat_list
 
 # --------------------------------------------------------------------------- #
 # Constantes                                                                   #
@@ -409,7 +405,7 @@ async def image_tile(
 
     logger.info(f"Image tile request: layer={layer} imageId={imageId} visparam={visparam} x={x} y={y} z={z}")
 
-    # Cache do tile PNG
+    # 1 ▸ PNG já cacheado?
     tile_key = _tile_cache_key(layer, imageId, visparam, x, y, z)
     png_bytes = await get_png(tile_key)
     if png_bytes:
@@ -419,52 +415,63 @@ async def image_tile(
             headers={"X-Cache": "HIT", "X-Image-Id": imageId},
         )
 
-    # Meta cache (URL do EE para esta imagem + visparam)
-    meta_key = _tile_meta_key(layer, imageId, visparam)
-    meta = await get_meta(meta_key)
-    expired = (
-        meta is None
-        or (datetime.now() - datetime.fromisoformat(meta["date"])).total_seconds() / 3600
-        > settings.LIFESPAN_URL
-    )
+    # 2 ▸ Lock distribuído: evita que dois workers gerem o mesmo tile
+    async with tile_lock(tile_key) as should_generate:
+        if not should_generate:
+            png_bytes = await get_png(tile_key)
+            if png_bytes:
+                return StreamingResponse(
+                    io.BytesIO(png_bytes),
+                    media_type="image/png",
+                    headers={"X-Cache": "HIT", "X-Image-Id": imageId},
+                )
 
-    if expired:
+        # 3 ▸ URL EE: meta cache + TTL
+        meta_key = _tile_meta_key(layer, imageId, visparam)
+        meta = await get_meta(meta_key)
+        expired = (
+            meta is None
+            or (datetime.now() - datetime.fromisoformat(meta["date"])).total_seconds() / 3600
+            > settings.LIFESPAN_URL
+        )
+
+        if expired:
+            try:
+                loop = asyncio.get_event_loop()
+                if layer == "s2_harmonized":
+                    vis = await _vis_param_for_s2(visparam)
+                    layer_url = await loop.run_in_executor(
+                        ee_executor, _create_s2_image_layer_sync, imageId, vis,
+                    )
+                else:
+                    vis = await _vis_param_for_landsat(visparam, imageId)
+                    layer_url = await loop.run_in_executor(
+                        ee_executor, _create_landsat_image_layer_sync, imageId, vis,
+                    )
+                await set_meta(meta_key, {"url": layer_url, "date": datetime.now().isoformat()})
+            except Exception as e:
+                logger.exception(f"Erro ao criar layer EE para imagem {imageId}")
+                return FileResponse("data/blank.png", media_type="image/png",
+                                    headers={"X-Error": str(e), "X-Image-Id": imageId})
+        else:
+            layer_url = meta["url"]
+
+        # 4 ▸ Download do tile remoto
         try:
-            loop = asyncio.get_event_loop()
-            if layer == "s2_harmonized":
-                vis = await _vis_param_for_s2(visparam)
-                layer_url = await loop.run_in_executor(
-                    ee_executor, _create_s2_image_layer_sync, imageId, vis,
-                )
-            else:
-                vis = await _vis_param_for_landsat(visparam, imageId)
-                layer_url = await loop.run_in_executor(
-                    ee_executor, _create_landsat_image_layer_sync, imageId, vis,
-                )
-            await set_meta(meta_key, {"url": layer_url, "date": datetime.now().isoformat()})
-        except Exception as e:
-            logger.exception(f"Erro ao criar layer EE para imagem {imageId}")
-            return FileResponse("data/blank.png", media_type="image/png",
-                                headers={"X-Error": str(e), "X-Image-Id": imageId})
-    else:
-        layer_url = meta["url"]
-
-    # Download do tile
-    try:
-        png_bytes = await http_get_bytes(layer_url.format(x=x, y=y, z=z))
-        await set_png(tile_key, png_bytes)
-        return StreamingResponse(
-            io.BytesIO(png_bytes),
-            media_type="image/png",
-            headers={"X-Cache": "MISS", "X-Image-Id": imageId},
-        )
-    except HTTPException as exc:
-        logger.exception(f"Erro ao baixar tile da imagem {imageId}")
-        return StreamingResponse(
-            generate_error_image(str(exc.detail)),
-            media_type="image/png",
-            headers={"X-Error": str(exc.detail), "X-Image-Id": imageId},
-        )
+            png_bytes = await http_get_bytes(layer_url.format(x=x, y=y, z=z))
+            await set_png(tile_key, png_bytes)
+            return StreamingResponse(
+                io.BytesIO(png_bytes),
+                media_type="image/png",
+                headers={"X-Cache": "MISS", "X-Image-Id": imageId},
+            )
+        except HTTPException as exc:
+            logger.exception(f"Erro ao baixar tile da imagem {imageId}")
+            return StreamingResponse(
+                generate_error_image(str(exc.detail)),
+                media_type="image/png",
+                headers={"X-Error": str(exc.detail), "X-Image-Id": imageId},
+            )
 
 
 # --------------------------------------------------------------------------- #
