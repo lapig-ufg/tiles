@@ -8,8 +8,7 @@ import {MapGridLandsatComponent} from "./map-grid-landsat/map-grid-landsat.compo
     imports: [RouterModule.forChild([
         { path: '', data: {breadcrumb: 'Maps'}, component: HomeComponent },
         { path: 'sentinel', data: {breadcrumb: 'Maps'}, component: MapGridComponent },
-        { path: 'landsat', data: {breadcrumb: 'Maps'}, component: MapGridLandsatComponent },
-        { path: '**', redirectTo: '/notfound' }
+        { path: 'landsat', data: {breadcrumb: 'Maps'}, component: MapGridLandsatComponent }
     ])],
     exports: [RouterModule]
 })
