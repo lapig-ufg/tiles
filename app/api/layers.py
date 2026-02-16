@@ -10,13 +10,11 @@ from __future__ import annotations
 import asyncio
 import calendar
 import io
-import random
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from enum import Enum
 from typing import Dict, Any, Literal
 
-import aiohttp
 import ee
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse, FileResponse
@@ -30,6 +28,7 @@ from app.core.errors import generate_error_image
 from app.middleware.rate_limiter import limit_sentinel, limit_landsat
 from app.services.tile import tile2goehashBBOX
 from app.utils.capabilities import get_capabilities_provider
+from app.utils.http import http_get_bytes as _http_get_bytes
 from app.visualization.vis_params_db import get_landsat_vis_params_async
 from app.visualization.vis_params_loader import get_visparams, get_landsat_vis_params, get_landsat_collection
 
@@ -54,43 +53,6 @@ ee_executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS_EE)
 # --------------------------------------------------------------------------- #
 # Utils comuns                                                                #
 # --------------------------------------------------------------------------- #
-
-async def _http_get_bytes(url: str) -> bytes:
-    max_retries = 5
-    base_delay = 1.0  # seconds
-    
-    for attempt in range(max_retries):
-        try:
-            async with aiohttp.ClientSession() as sess, sess.get(url) as resp:
-                if resp.status == 200:
-                    return await resp.read()
-                elif resp.status == 429:
-                    # Rate limited - calculate exponential backoff
-                    if attempt < max_retries - 1:
-                        delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                        logger.warning(f"Rate limited (429). Retrying in {delay:.1f}s... (attempt {attempt + 1}/{max_retries})")
-                        await asyncio.sleep(delay)
-                        continue
-                    else:
-                        logger.error(f"Max retries reached for rate limiting")
-                        raise HTTPException(
-                            status_code=503,
-                            detail="Earth Engine temporarily unavailable due to rate limiting. Please try again in a few seconds."
-                        )
-                else:
-                    raise HTTPException(resp.status, f"Erro ao buscar tile: {resp.reason}")
-        except aiohttp.ClientError as e:
-            if attempt < max_retries - 1:
-                delay = base_delay * (2 ** attempt)
-                logger.warning(f"Connection error: {e}. Retrying in {delay:.1f}s...")
-                await asyncio.sleep(delay)
-                continue
-            else:
-                raise HTTPException(
-                    status_code=503,
-                    detail="Unable to connect to Earth Engine service"
-                )
-
 
 def _build_periods(period: str | Period, year: int, month: int) -> Dict[str, str]:
     periods = {
