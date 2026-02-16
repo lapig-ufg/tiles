@@ -21,6 +21,9 @@ RATE_LIMITS = {
     
     # Timeseries - ainda mais pesado mas precisa processar múltiplos anos
     "timeseries": "10000/minute;1000/second",
+
+    # Imagery (catálogo + preview) - mesmo peso do timeseries
+    "imagery": "10000/minute;1000/second",
     
     # Endpoints gerais
     "general": "5000/minute;500/second",
@@ -49,3 +52,7 @@ def limit_sentinel():
 def limit_timeseries():
     """Rate limit para requisições de timeseries"""
     return limiter.limit(RATE_LIMITS["timeseries"])
+
+def limit_imagery():
+    """Rate limit para requisições de imagery (catálogo + preview)"""
+    return limiter.limit(RATE_LIMITS["imagery"])
