@@ -17,6 +17,7 @@ import {PaginatorModule} from 'primeng/paginator';
 import {ProgressSpinnerModule} from 'primeng/progressspinner';
 import {TagModule} from 'primeng/tag';
 import {MessagesModule} from 'primeng/messages';
+import {TooltipModule} from 'primeng/tooltip';
 
 @NgModule({
     imports: [
@@ -36,6 +37,7 @@ import {MessagesModule} from 'primeng/messages';
         ProgressSpinnerModule,
         TagModule,
         MessagesModule,
+        TooltipModule,
     ],
     declarations: [
         ImageCatalogComponent
