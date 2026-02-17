@@ -20,6 +20,7 @@ import {MessagesModule} from 'primeng/messages';
 import {TooltipModule} from 'primeng/tooltip';
 import {InputNumberModule} from 'primeng/inputnumber';
 import {RippleModule} from 'primeng/ripple';
+import {BadgeModule} from 'primeng/badge';
 
 @NgModule({
     imports: [
@@ -42,6 +43,7 @@ import {RippleModule} from 'primeng/ripple';
         TooltipModule,
         InputNumberModule,
         RippleModule,
+        BadgeModule,
     ],
     declarations: [
         ImageCatalogComponent
