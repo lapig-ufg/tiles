@@ -148,7 +148,13 @@
     >
         <ng-template pTemplate="header">
             <tr>
-                <th style="width: 3rem"></th>
+                <th style="width: 3rem">
+                    <p-checkbox
+                        [binary]="true"
+                        [ngModel]="isAllPageSelected"
+                        (onChange)="toggleSelectAll()"
+                    ></p-checkbox>
+                </th>
                 <th>Data</th>
                 <th>Cloud %</th>
                 <th>Plataforma</th>

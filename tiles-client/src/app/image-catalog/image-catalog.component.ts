@@ -269,6 +269,25 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
         }
     }
 
+    get isAllPageSelected(): boolean {
+        return this.catalogItems.length > 0 && this.catalogItems.every(item => item.selected);
+    }
+
+    toggleSelectAll(): void {
+        const selectAll = !this.isAllPageSelected;
+        for (const item of this.catalogItems) {
+            if (selectAll && !item.selected) {
+                item.selected = true;
+                this.selectedImages.push(item);
+                this.createImageMap(item);
+            } else if (!selectAll && item.selected) {
+                item.selected = false;
+                this.selectedImages = this.selectedImages.filter(s => s.id !== item.id);
+                this.removeImageMap(item.id);
+            }
+        }
+    }
+
     clearSelection(): void {
         this.selectedImages = [];
         this.catalogItems.forEach(item => item.selected = false);
