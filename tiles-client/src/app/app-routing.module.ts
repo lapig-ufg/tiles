@@ -12,6 +12,7 @@ const routes: Routes = [
         children: [
             { path: '', data: { breadcrumb: 'Grid Maps' }, loadChildren: () => import('./grid-map/map-grid.module').then(m => m.MapGridModule) },
             { path: 'imagery', data: { breadcrumb: 'Catálogo de Imagens' }, loadChildren: () => import('./image-catalog/image-catalog.module').then(m => m.ImageCatalogModule) },
+            { path: 'embedding', data: { breadcrumb: 'Embedding Maps' }, loadChildren: () => import('./embedding-maps/embedding-maps.module').then(m => m.EmbeddingMapsModule) },
         ]
     },
     { path: 'auth', data: { breadcrumb: 'Auth' }, loadChildren: () => import('./demo/components/auth/auth.module').then(m => m.AuthModule) },

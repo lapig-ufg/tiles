@@ -32,6 +32,17 @@ export class AppMenuComponent implements OnInit {
                     },
                 ]
             },
+            {
+                label: 'ANALYSIS',
+                icon: 'pi pi-chart-bar',
+                items: [
+                    {
+                        label: 'Embedding Maps',
+                        icon: 'pi pi-fw pi-th-large',
+                        routerLink: ['/embedding']
+                    }
+                ]
+            },
             // {
             //     label: 'Apps',
             //     icon: 'pi pi-th-large',
