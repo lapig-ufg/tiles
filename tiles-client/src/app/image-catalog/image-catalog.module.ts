@@ -19,6 +19,7 @@ import {TagModule} from 'primeng/tag';
 import {MessagesModule} from 'primeng/messages';
 import {TooltipModule} from 'primeng/tooltip';
 import {InputNumberModule} from 'primeng/inputnumber';
+import {RippleModule} from 'primeng/ripple';
 
 @NgModule({
     imports: [
@@ -40,6 +41,7 @@ import {InputNumberModule} from 'primeng/inputnumber';
         MessagesModule,
         TooltipModule,
         InputNumberModule,
+        RippleModule,
     ],
     declarations: [
         ImageCatalogComponent

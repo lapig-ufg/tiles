@@ -288,6 +288,15 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
         }
     }
 
+    removeSelectedImage(item: CatalogItem): void {
+        this.selectedImages = this.selectedImages.filter(s => s.id !== item.id);
+        this.removeImageMap(item.id);
+        const catalogItem = this.catalogItems.find(c => c.id === item.id);
+        if (catalogItem) {
+            catalogItem.selected = false;
+        }
+    }
+
     clearSelection(): void {
         this.selectedImages = [];
         this.catalogItems.forEach(item => item.selected = false);

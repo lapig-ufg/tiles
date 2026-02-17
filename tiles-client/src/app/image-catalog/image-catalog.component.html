@@ -209,6 +209,15 @@
                     [severity]="getCloudSeverity(img.cloud)"
                     class="ml-2"
                 ></p-tag>
+                <button
+                    pButton
+                    pRipple
+                    icon="pi pi-times"
+                    class="p-button-rounded p-button-danger p-button-text p-button-sm ml-2"
+                    (click)="removeSelectedImage(img)"
+                    pTooltip="Remover imagem"
+                    tooltipPosition="top"
+                ></button>
             </div>
             <div [id]="getMapId(img)" class="map-container"></div>
         </div>
