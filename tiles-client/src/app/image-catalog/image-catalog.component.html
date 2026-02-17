@@ -114,6 +114,14 @@
         [rows]="limit"
         [totalRecords]="totalImages"
         [loading]="loading"
+        [paginator]="true"
+        [lazy]="true"
+        [lazyLoadOnInit]="false"
+        (onLazyLoad)="onPageChange($event)"
+        [rowsPerPageOptions]="[25, 50, 100]"
+        [showCurrentPageReport]="true"
+        currentPageReportTemplate="Mostrando {first} a {last} de {totalRecords} imagens"
+        [first]="offset"
         styleClass="p-datatable-sm"
         *ngIf="catalogItems.length > 0"
     >
@@ -151,14 +159,6 @@
             </tr>
         </ng-template>
     </p-table>
-
-    <p-paginator
-        *ngIf="totalImages > limit"
-        [rows]="limit"
-        [totalRecords]="totalImages"
-        [first]="offset"
-        (onPageChange)="onPageChange($event)"
-    ></p-paginator>
 
     <div *ngIf="catalogItems.length === 0 && !loading" class="text-center p-4 text-500">
         Nenhuma imagem encontrada para os critérios selecionados.

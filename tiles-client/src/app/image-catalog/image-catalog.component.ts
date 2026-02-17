@@ -37,7 +37,7 @@ const IMAGE_CATALOG_STATE_CONFIG: ScreenStateConfig = {
         selectedSort:     {type: 'string', defaultValue: 'date_desc'},
         bufferMeters:     {type: 'number', defaultValue: 1000},
         offset:           {type: 'number', defaultValue: 0},
-        limit:            {type: 'number', defaultValue: 50},
+        limit:            {type: 'number', defaultValue: 25},
     }
 };
 
@@ -61,7 +61,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
     selectedImages: CatalogItem[] = [];
     totalImages: number = 0;
     offset: number = 0;
-    limit: number = 50;
+    limit: number = 25;
     loading: boolean = false;
     searched: boolean = false;
 
@@ -127,7 +127,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
                 selectedSort: 'date_desc',
                 bufferMeters: 1000,
                 offset: 0,
-                limit: 50,
+                limit: 25,
             }
         );
 
