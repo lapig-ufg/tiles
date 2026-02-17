@@ -22,6 +22,13 @@ import {InputNumberModule} from 'primeng/inputnumber';
 import {RippleModule} from 'primeng/ripple';
 import {BadgeModule} from 'primeng/badge';
 
+import {PlotlyModule} from 'angular-plotly.js';
+import * as PlotlyJS from 'plotly.js/dist/plotly.min.js';
+import {SentinelTimeseriesComponent} from '../grid-map/sentinel-timeseries/sentinel-timeseries.component';
+import {LandsatTimeseriesComponent} from '../grid-map/landsat-timeseries/landsat-timeseries.component';
+
+PlotlyModule.plotlyjs = PlotlyJS;
+
 @NgModule({
     imports: [
         CommonModule,
@@ -44,6 +51,9 @@ import {BadgeModule} from 'primeng/badge';
         InputNumberModule,
         RippleModule,
         BadgeModule,
+        PlotlyModule,
+        SentinelTimeseriesComponent,
+        LandsatTimeseriesComponent,
     ],
     declarations: [
         ImageCatalogComponent

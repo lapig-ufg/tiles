@@ -66,6 +66,9 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
     searched: boolean = false;
     errorMessage: string | null = null;
 
+    // Timeseries
+    showTimeseries: boolean = true;
+
     // Maps
     private mapsInstances: {id: string, map: Map}[] = [];
     private centerCoordinates: Coordinate = fromLonLat([-49.2646, -16.6799]);
