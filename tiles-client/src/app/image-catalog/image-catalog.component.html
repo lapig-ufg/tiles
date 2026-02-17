@@ -51,6 +51,20 @@
         </span>
 
         <span class="flex flex-column">
+            <label for="buffer-input" class="mb-1 font-semibold">Buffer</label>
+            <p-inputNumber
+                id="buffer-input"
+                [(ngModel)]="bufferMeters"
+                [min]="100"
+                [max]="10000"
+                [step]="100"
+                suffix=" m"
+                [style]="{'width': '120px'}"
+                (onBlur)="onFilterChange()"
+            ></p-inputNumber>
+        </span>
+
+        <span class="flex flex-column">
             <label for="visparam-select" class="mb-1 font-semibold">Vis Param</label>
             <p-selectButton
                 id="visparam-select"
