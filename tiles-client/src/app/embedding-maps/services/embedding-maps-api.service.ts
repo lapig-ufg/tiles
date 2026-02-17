@@ -13,7 +13,7 @@ import {
 
 @Injectable({providedIn: 'root'})
 export class EmbeddingMapsApiService {
-  private apiUrl = '/api/embedding-maps';
+  private apiUrl = 'https://tiles.lapig.iesa.ufg.br/api/embedding-maps';
 
   constructor(private http: HttpClient) {}
 
