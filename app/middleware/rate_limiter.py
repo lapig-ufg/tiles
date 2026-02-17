@@ -28,6 +28,9 @@ RATE_LIMITS = {
     # Endpoints gerais
     "general": "5000/minute;500/second",
     
+    # Embedding Maps - tiles e processamento
+    "embedding": "30000/minute;3000/second",
+
     # Health/metrics
     "health": "1000/minute"
 }
@@ -56,3 +59,7 @@ def limit_timeseries():
 def limit_imagery():
     """Rate limit para requisições de imagery (catálogo + preview)"""
     return limiter.limit(RATE_LIMITS["imagery"])
+
+def limit_embedding():
+    """Rate limit para requisições de embedding maps"""
+    return limiter.limit(RATE_LIMITS["embedding"])

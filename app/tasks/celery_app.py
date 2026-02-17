@@ -93,6 +93,10 @@ celery_app.conf.update(
         'app.tasks.monitoring_tasks.monitor_analyze_patterns': {'queue': 'low_priority'},
         'app.tasks.monitoring_tasks.monitor_generate_report': {'queue': 'low_priority'},
         'app.tasks.monitoring_tasks.monitor_check_health': {'queue': 'maintenance'},
+
+        # Embedding Maps tasks
+        'embedding_maps.run_job': {'queue': 'standard'},
+        'embedding_maps.export_job': {'queue': 'low_priority'},
     },
     
     # Rate limiting per task
@@ -113,6 +117,10 @@ celery_app.conf.update(
         
         # Monitoring tasks - no limits
         'app.tasks.monitoring_tasks.monitor_check_health': {'rate_limit': None},
+
+        # Embedding Maps tasks
+        'embedding_maps.run_job': {'rate_limit': '20/m'},
+        'embedding_maps.export_job': {'rate_limit': '10/m'},
     },
     
     # Worker configuration
@@ -130,6 +138,7 @@ celery_app.conf.update(
         'app.tasks.cache_operations',
         'app.tasks.cleanup_tasks',
         'app.tasks.monitoring_tasks',
+        'app.modules.embedding_maps.tasks',
     ],
 )
 

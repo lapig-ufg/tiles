@@ -1,4 +1,5 @@
 from .api import layers, timeseries, tile_aggregation, cache, vis_params, capabilities, tasks, admin, imagery
+from .modules.embedding_maps.router import router as embedding_maps_router
 
 
 def created_routes(app):
@@ -24,5 +25,8 @@ def created_routes(app):
     
     # Rota para administração - OCULTA DA DOCUMENTAÇÃO
     app.include_router(admin.router, tags=["Administration"], include_in_schema=False)
+
+    # Embedding Maps - análise de embeddings de satélite
+    app.include_router(embedding_maps_router, prefix="/api/embedding-maps", tags=["Embedding Maps"])
 
     return app
