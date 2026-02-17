@@ -64,6 +64,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
     limit: number = 25;
     loading: boolean = false;
     searched: boolean = false;
+    errorMessage: string | null = null;
 
     // Maps
     private mapsInstances: {id: string, map: Map}[] = [];
@@ -238,11 +239,13 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
                 }));
                 this.totalImages = response.total;
                 this.loading = false;
+                this.errorMessage = null;
             },
             error: () => {
                 this.loading = false;
                 this.catalogItems = [];
                 this.totalImages = 0;
+                this.errorMessage = 'Erro ao buscar imagens. Verifique sua conexão e tente novamente.';
             }
         });
     }

@@ -96,7 +96,14 @@
     </div>
 </div>
 
-<p-card class="mt-3" *ngIf="searched && !loading">
+<p-messages
+    *ngIf="errorMessage"
+    [value]="[{severity: 'error', summary: 'Erro', detail: errorMessage}]"
+    [closable]="true"
+    class="mt-3"
+></p-messages>
+
+<p-card class="mt-3" *ngIf="searched && !loading && !errorMessage">
     <div class="flex justify-content-between align-items-center mb-2">
         <span class="font-semibold">{{ totalImages }} imagens encontradas</span>
         <button

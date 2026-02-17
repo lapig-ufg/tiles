@@ -16,6 +16,7 @@ import {CheckboxModule} from 'primeng/checkbox';
 import {PaginatorModule} from 'primeng/paginator';
 import {ProgressSpinnerModule} from 'primeng/progressspinner';
 import {TagModule} from 'primeng/tag';
+import {MessagesModule} from 'primeng/messages';
 
 @NgModule({
     imports: [
@@ -34,6 +35,7 @@ import {TagModule} from 'primeng/tag';
         PaginatorModule,
         ProgressSpinnerModule,
         TagModule,
+        MessagesModule,
     ],
     declarations: [
         ImageCatalogComponent
