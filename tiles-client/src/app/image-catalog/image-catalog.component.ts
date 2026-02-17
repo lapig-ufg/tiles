@@ -21,8 +21,6 @@ import {ScreenStateConfig, ScreenStateBinder} from '../screen-state/interfaces/s
 import {ScreenStateService} from '../screen-state/services/screen-state.service';
 import {bindState} from '../screen-state/helpers/manual-state.helper';
 
-const MAX_SELECTED_IMAGES = 20;
-
 const IMAGE_CATALOG_STATE_CONFIG: ScreenStateConfig = {
     screenKey: 'image-catalog',
     group: 'catalog',
@@ -260,10 +258,6 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
         item.selected = !item.selected;
 
         if (item.selected) {
-            if (this.selectedImages.length >= MAX_SELECTED_IMAGES) {
-                item.selected = false;
-                return;
-            }
             this.selectedImages.push(item);
             this.createImageMap(item);
         } else {
