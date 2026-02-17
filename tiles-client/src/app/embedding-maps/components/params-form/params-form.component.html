@@ -1,0 +1,37 @@
+<div class="grid">
+  <div class="col-12">
+    <label for="emb-name" class="font-bold block mb-2">Nome do Job</label>
+    <input id="emb-name" type="text" pInputText class="w-full"
+           [ngModel]="name" (ngModelChange)="nameChange.emit($event)"
+           placeholder="Ex: Analise Goiania 2023" />
+  </div>
+
+  <div class="col-12">
+    <label for="emb-desc" class="font-bold block mb-2">Descricao (opcional)</label>
+    <textarea id="emb-desc" pInputTextarea class="w-full" rows="2"
+              [ngModel]="description" (ngModelChange)="descriptionChange.emit($event)"
+              placeholder="Descricao do job..."></textarea>
+  </div>
+
+  <div class="col-12 md:col-4">
+    <label for="emb-year" class="font-bold block mb-2">Ano</label>
+    <p-dropdown id="emb-year" [options]="yearOptions" optionLabel="label" optionValue="value"
+                [ngModel]="selectedYear" (ngModelChange)="selectedYearChange.emit($event)"
+                styleClass="w-full"></p-dropdown>
+  </div>
+
+  <div class="col-12 md:col-4">
+    <label for="emb-preset" class="font-bold block mb-2">Preset</label>
+    <p-selectButton [options]="presetOptions" optionLabel="label" optionValue="value"
+                    [ngModel]="selectedPreset" (ngModelChange)="onPresetChange($event)">
+    </p-selectButton>
+  </div>
+
+  <div class="col-12 md:col-4">
+    <label for="emb-scale" class="font-bold block mb-2">Escala (m)</label>
+    <p-inputNumber id="emb-scale" [ngModel]="selectedScale"
+                   (ngModelChange)="selectedScaleChange.emit($event)"
+                   [min]="10" [max]="1000" [step]="10"
+                   styleClass="w-full"></p-inputNumber>
+  </div>
+</div>

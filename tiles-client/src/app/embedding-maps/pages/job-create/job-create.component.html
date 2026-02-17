@@ -1,0 +1,91 @@
+<div class="grid">
+  <!-- Form de criacao -->
+  <div class="col-12">
+    <p-card header="Novo Job de Embedding Maps" subheader="Configure os parametros para analise de embeddings de satelite">
+      <!-- Params -->
+      <app-emb-params-form
+        [(name)]="name"
+        [(description)]="description"
+        [(selectedYear)]="selectedYear"
+        [(selectedScale)]="selectedScale"
+        [(selectedPreset)]="selectedPreset"
+        [(sampleSize)]="sampleSize"
+        (selectedYearChange)="onFilterChange()"
+        (selectedScaleChange)="onFilterChange()"
+        (selectedPresetChange)="onFilterChange()">
+      </app-emb-params-form>
+
+      <p-divider></p-divider>
+
+      <!-- ROI -->
+      <h3>Regiao de Interesse</h3>
+      <app-emb-roi-selector #roiSelector
+        [roiMode]="roiMode"
+        (roiModeChange)="roiMode = $event; onFilterChange()">
+      </app-emb-roi-selector>
+
+      <p-divider></p-divider>
+
+      <!-- Products -->
+      <h3>Produtos</h3>
+      <app-emb-product-selector #productSelector
+        [multiSelect]="true"
+        [(selectedProducts)]="selectedProducts"
+        [(rgbBands)]="rgbBands"
+        [(pcaComponents)]="pcaComponents"
+        [(kmeansK)]="kmeansK"
+        [(yearB)]="yearB">
+      </app-emb-product-selector>
+
+      <p-divider></p-divider>
+
+      <!-- Submit -->
+      <div class="flex justify-content-end gap-2">
+        <button pButton type="button" label="Criar Job" icon="pi pi-plus"
+                (click)="createJob()" [loading]="creating"
+                [disabled]="!name.trim() || selectedProducts.length === 0">
+        </button>
+      </div>
+    </p-card>
+  </div>
+
+  <!-- Jobs recentes -->
+  <div class="col-12">
+    <p-card header="Jobs Recentes">
+      <div *ngIf="loadingJobs" class="flex justify-content-center p-4">
+        <p-progressSpinner [style]="{width: '40px', height: '40px'}"></p-progressSpinner>
+      </div>
+
+      <p-table *ngIf="!loadingJobs && recentJobs.length > 0"
+               [value]="recentJobs" [responsive]="true"
+               styleClass="p-datatable-sm" selectionMode="single"
+               (onRowSelect)="navigateToJob($event.data)">
+        <ng-template pTemplate="header">
+          <tr>
+            <th>Nome</th>
+            <th>Ano</th>
+            <th>Status</th>
+            <th>Progresso</th>
+            <th>Criado em</th>
+          </tr>
+        </ng-template>
+        <ng-template pTemplate="body" let-job>
+          <tr [pSelectableRow]="job" class="cursor-pointer">
+            <td>{{job.name}}</td>
+            <td>{{job.config['year']}}</td>
+            <td><p-tag [value]="job.status" [severity]="getStatusSeverity(job.status)"></p-tag></td>
+            <td>
+              <p-progressBar [value]="job.progress" [showValue]="true"
+                             [style]="{height: '20px'}"></p-progressBar>
+            </td>
+            <td>{{job.created_at | date:'short'}}</td>
+          </tr>
+        </ng-template>
+      </p-table>
+
+      <div *ngIf="!loadingJobs && recentJobs.length === 0" class="p-3 text-color-secondary text-center">
+        Nenhum job encontrado.
+      </div>
+    </p-card>
+  </div>
+</div>

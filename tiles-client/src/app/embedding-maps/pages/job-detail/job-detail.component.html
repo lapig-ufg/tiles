@@ -1,0 +1,113 @@
+<div *ngIf="loading" class="flex justify-content-center p-6">
+  <p-progressSpinner></p-progressSpinner>
+</div>
+
+<div *ngIf="!loading && job" class="grid">
+  <!-- Header -->
+  <div class="col-12">
+    <p-card>
+      <div class="flex justify-content-between align-items-center flex-wrap gap-3">
+        <div>
+          <h2 class="m-0">{{job.name}}</h2>
+          <p class="text-color-secondary mt-1 mb-0" *ngIf="job.description">{{job.description}}</p>
+        </div>
+        <div class="flex gap-2">
+          <p-tag [value]="job.status" [severity]="getStatusSeverity(job.status)" styleClass="text-lg"></p-tag>
+        </div>
+      </div>
+    </p-card>
+  </div>
+
+  <!-- Actions -->
+  <div class="col-12">
+    <div class="flex gap-2 flex-wrap">
+      <button pButton label="Executar" icon="pi pi-play" class="p-button-success"
+              *ngIf="canRun" (click)="runJob()"></button>
+      <button pButton label="Cancelar" icon="pi pi-stop" class="p-button-warning"
+              *ngIf="canCancel" (click)="cancelJob()"></button>
+      <button pButton label="Visualizar" icon="pi pi-map" class="p-button-info"
+              *ngIf="canVisualize" (click)="navigateToVisualize()"></button>
+      <button pButton label="Exportar" icon="pi pi-download"
+              *ngIf="canVisualize" (click)="navigateToExport()"></button>
+      <button pButton label="Deletar" icon="pi pi-trash" class="p-button-danger p-button-outlined"
+              (click)="deleteJob()"></button>
+    </div>
+  </div>
+
+  <!-- Progress -->
+  <div class="col-12" *ngIf="job.status === 'RUNNING'">
+    <p-card header="Progresso">
+      <p-progressBar [value]="job.progress" [showValue]="true"></p-progressBar>
+      <p class="mt-2 text-color-secondary" *ngIf="job.message">{{job.message}}</p>
+    </p-card>
+  </div>
+
+  <!-- Timeline -->
+  <div class="col-12 md:col-6">
+    <p-card header="Timeline">
+      <p-timeline [value]="timelineEvents" layout="vertical">
+        <ng-template pTemplate="content" let-event>
+          <div class="flex align-items-center gap-2">
+            <span class="font-bold">{{event.status}}</span>
+          </div>
+          <small class="text-color-secondary">{{event.date | date:'medium'}}</small>
+        </ng-template>
+        <ng-template pTemplate="marker" let-event>
+          <span class="flex align-items-center justify-content-center border-circle"
+                [style.background-color]="event.color"
+                style="width: 2rem; height: 2rem;">
+            <i [class]="event.icon" style="color: white;"></i>
+          </span>
+        </ng-template>
+      </p-timeline>
+    </p-card>
+  </div>
+
+  <!-- Config -->
+  <div class="col-12 md:col-6">
+    <p-card header="Configuracao">
+      <div class="grid">
+        <div class="col-6">
+          <div class="text-sm text-color-secondary">Ano</div>
+          <div class="font-bold">{{job.config['year']}}</div>
+        </div>
+        <div class="col-6">
+          <div class="text-sm text-color-secondary">Escala</div>
+          <div class="font-bold">{{job.config['processing']?.['scale'] || 10}}m</div>
+        </div>
+        <div class="col-6">
+          <div class="text-sm text-color-secondary">ROI</div>
+          <div class="font-bold">{{job.config['roi']?.['roi_type'] | uppercase}}</div>
+        </div>
+        <div class="col-6">
+          <div class="text-sm text-color-secondary">Produtos</div>
+          <div class="font-bold">{{job.products.length}}</div>
+        </div>
+      </div>
+    </p-card>
+  </div>
+
+  <!-- Products -->
+  <div class="col-12">
+    <p-card header="Produtos">
+      <div class="grid">
+        <div class="col-12 md:col-6 lg:col-4" *ngFor="let product of job.products">
+          <div class="surface-ground border-round p-3">
+            <div class="flex justify-content-between align-items-center mb-2">
+              <span class="font-bold">{{product.product}}</span>
+              <p-tag [value]="product.status" [severity]="getStatusSeverity(product.status)"></p-tag>
+            </div>
+            <p class="text-sm text-color-secondary m-0" *ngIf="product.tile_url_template">
+              Tiles disponiveis
+            </p>
+          </div>
+        </div>
+      </div>
+    </p-card>
+  </div>
+</div>
+
+<div *ngIf="!loading && !job" class="p-6 text-center">
+  <h3>Job nao encontrado</h3>
+  <button pButton label="Voltar" icon="pi pi-arrow-left" routerLink="/embedding"></button>
+</div>

@@ -1,0 +1,74 @@
+<div *ngIf="loading" class="flex justify-content-center p-6">
+  <p-progressSpinner></p-progressSpinner>
+</div>
+
+<div *ngIf="!loading && job" class="grid">
+  <div class="col-12">
+    <h2>Exportar - {{job.name}}</h2>
+  </div>
+
+  <!-- Selecao de produtos -->
+  <div class="col-12 md:col-6">
+    <p-card header="Produtos para Exportar">
+      <div class="flex flex-column gap-2">
+        <div *ngFor="let opt of productOptions"
+             class="flex align-items-center gap-2 p-2 border-round"
+             [class.surface-ground]="true">
+          <p-checkbox [binary]="true"
+                      [ngModel]="isProductSelected(opt.value)"
+                      (ngModelChange)="toggleProduct(opt.value)"
+                      [disabled]="!availableProducts.includes(opt.value)">
+          </p-checkbox>
+          <i class="pi {{opt.icon}}"></i>
+          <span [class.text-color-secondary]="!availableProducts.includes(opt.value)">
+            {{opt.label}}
+          </span>
+          <p-tag *ngIf="!availableProducts.includes(opt.value)"
+                 value="Indisponivel" severity="warning" styleClass="ml-auto"></p-tag>
+        </div>
+      </div>
+    </p-card>
+  </div>
+
+  <!-- Selecao de formatos -->
+  <div class="col-12 md:col-6">
+    <p-card header="Formatos">
+      <div class="flex flex-column gap-2">
+        <div *ngFor="let fmt of formatOptions"
+             class="flex align-items-center gap-2 p-2 border-round surface-ground">
+          <p-checkbox [binary]="true"
+                      [ngModel]="isFormatSelected(fmt.value)"
+                      (ngModelChange)="toggleFormat(fmt.value)">
+          </p-checkbox>
+          <span>{{fmt.label}}</span>
+        </div>
+      </div>
+
+      <p-divider></p-divider>
+
+      <label class="font-bold block mb-2">Escala de Export (opcional)</label>
+      <p-inputNumber [(ngModel)]="exportScale" [min]="10" [max]="1000"
+                     placeholder="Usar escala do job" styleClass="w-full"></p-inputNumber>
+    </p-card>
+  </div>
+
+  <!-- Botao de export -->
+  <div class="col-12">
+    <div class="flex gap-2 align-items-center">
+      <button pButton label="Iniciar Exportacao" icon="pi pi-download"
+              (click)="startExport()" [loading]="exporting"
+              [disabled]="selectedProducts.length === 0 || selectedFormats.length === 0">
+      </button>
+      <span *ngIf="exportSuccess" class="text-green-500 font-bold">
+        <i class="pi pi-check mr-1"></i> Exportacao iniciada com sucesso!
+      </span>
+    </div>
+  </div>
+
+  <!-- Artefatos existentes -->
+  <div class="col-12">
+    <p-card header="Artefatos">
+      <app-emb-artifacts-list [jobId]="jobId"></app-emb-artifacts-list>
+    </p-card>
+  </div>
+</div>

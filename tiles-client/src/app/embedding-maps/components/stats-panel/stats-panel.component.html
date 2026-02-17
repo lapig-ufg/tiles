@@ -1,0 +1,53 @@
+<p-panel header="Estatisticas" [toggleable]="true">
+  <div *ngIf="loading" class="flex justify-content-center p-4">
+    <p-progressSpinner [style]="{width: '40px', height: '40px'}"></p-progressSpinner>
+  </div>
+
+  <div *ngIf="error" class="p-3 text-red-500">
+    <i class="pi pi-exclamation-triangle mr-2"></i>{{error}}
+  </div>
+
+  <div *ngIf="stats && !loading">
+    <div class="grid">
+      <div class="col-6 md:col-3">
+        <div class="text-sm text-color-secondary">Produto</div>
+        <div class="font-bold">{{stats.product}}</div>
+      </div>
+      <div class="col-6 md:col-3">
+        <div class="text-sm text-color-secondary">Total Pixels</div>
+        <div class="font-bold">{{stats.total_pixels | number}}</div>
+      </div>
+      <div class="col-6 md:col-3">
+        <div class="text-sm text-color-secondary">Cobertura</div>
+        <div class="font-bold">{{stats.coverage | percent:'1.1-1'}}</div>
+      </div>
+      <div class="col-6 md:col-3">
+        <div class="text-sm text-color-secondary">Bandas</div>
+        <div class="font-bold">{{stats.bands.length}}</div>
+      </div>
+    </div>
+
+    <p-divider></p-divider>
+
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr>
+            <th class="text-left p-2">Banda</th>
+            <th class="text-right p-2">Valor</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let band of stats.bands">
+            <td class="p-2">{{band['band']}}</td>
+            <td class="text-right p-2">{{band['value'] | number:'1.4-4'}}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div *ngIf="!stats && !loading && !error" class="p-3 text-color-secondary">
+    Selecione um produto para ver as estatisticas.
+  </div>
+</p-panel>

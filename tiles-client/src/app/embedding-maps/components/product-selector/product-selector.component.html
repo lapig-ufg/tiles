@@ -1,0 +1,51 @@
+<div class="grid">
+  <div class="col-12 md:col-6 lg:col-4" *ngFor="let opt of productOptions">
+    <div class="p-card p-3 cursor-pointer border-round-lg"
+         [class.border-primary]="isSelected(opt.value)"
+         [class.border-2]="isSelected(opt.value)"
+         [class.surface-ground]="!isSelected(opt.value)"
+         (click)="toggleProduct(opt.value)">
+      <div class="flex align-items-center gap-2 mb-2">
+        <i class="pi {{opt.icon}} text-xl" [class.text-primary]="isSelected(opt.value)"></i>
+        <span class="font-bold">{{opt.label}}</span>
+      </div>
+      <p class="text-sm text-color-secondary m-0">{{opt.description}}</p>
+    </div>
+  </div>
+
+  <!-- Configuracoes especificas por produto -->
+  <div class="col-12" *ngIf="isSelected('rgb_embedding')">
+    <p-divider></p-divider>
+    <label class="font-bold block mb-2">Bandas RGB (indices 0-63)</label>
+    <div class="flex gap-2">
+      <p-inputNumber [(ngModel)]="rgbBands[0]" (ngModelChange)="rgbBandsChange.emit(rgbBands)"
+                     [min]="0" [max]="63" placeholder="R" styleClass="w-6rem"></p-inputNumber>
+      <p-inputNumber [(ngModel)]="rgbBands[1]" (ngModelChange)="rgbBandsChange.emit(rgbBands)"
+                     [min]="0" [max]="63" placeholder="G" styleClass="w-6rem"></p-inputNumber>
+      <p-inputNumber [(ngModel)]="rgbBands[2]" (ngModelChange)="rgbBandsChange.emit(rgbBands)"
+                     [min]="0" [max]="63" placeholder="B" styleClass="w-6rem"></p-inputNumber>
+    </div>
+  </div>
+
+  <div class="col-12 md:col-6" *ngIf="isSelected('pca')">
+    <p-divider></p-divider>
+    <label class="font-bold block mb-2">Componentes PCA</label>
+    <p-inputNumber [(ngModel)]="pcaComponents" (ngModelChange)="pcaComponentsChange.emit($event)"
+                   [min]="1" [max]="10" styleClass="w-full"></p-inputNumber>
+  </div>
+
+  <div class="col-12 md:col-6" *ngIf="isSelected('clusters')">
+    <p-divider></p-divider>
+    <label class="font-bold block mb-2">Numero de Clusters (K)</label>
+    <p-inputNumber [(ngModel)]="kmeansK" (ngModelChange)="kmeansKChange.emit($event)"
+                   [min]="2" [max]="20" styleClass="w-full"></p-inputNumber>
+  </div>
+
+  <div class="col-12 md:col-6" *ngIf="isSelected('change_detection')">
+    <p-divider></p-divider>
+    <label class="font-bold block mb-2">Ano de Comparacao</label>
+    <p-inputNumber [(ngModel)]="yearB" (ngModelChange)="yearBChange.emit($event)"
+                   [min]="2017" [max]="2024" styleClass="w-full"
+                   placeholder="Segundo ano"></p-inputNumber>
+  </div>
+</div>

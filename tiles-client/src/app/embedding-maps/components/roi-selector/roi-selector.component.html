@@ -1,0 +1,52 @@
+<div class="grid">
+  <div class="col-12 mb-3">
+    <label class="font-bold block mb-2">Tipo de ROI</label>
+    <p-selectButton [options]="roiModeOptions" optionLabel="label" optionValue="value"
+                    [ngModel]="roiMode" (ngModelChange)="onModeChange($event)">
+    </p-selectButton>
+  </div>
+
+  <!-- BBOX mode -->
+  <ng-container *ngIf="roiMode === 'bbox'">
+    <div class="col-6 md:col-3">
+      <label class="font-bold block mb-2">West</label>
+      <p-inputNumber [(ngModel)]="west" (ngModelChange)="onCoordChange()"
+                     [minFractionDigits]="1" [maxFractionDigits]="4"
+                     mode="decimal" styleClass="w-full"></p-inputNumber>
+    </div>
+    <div class="col-6 md:col-3">
+      <label class="font-bold block mb-2">South</label>
+      <p-inputNumber [(ngModel)]="south" (ngModelChange)="onCoordChange()"
+                     [minFractionDigits]="1" [maxFractionDigits]="4"
+                     mode="decimal" styleClass="w-full"></p-inputNumber>
+    </div>
+    <div class="col-6 md:col-3">
+      <label class="font-bold block mb-2">East</label>
+      <p-inputNumber [(ngModel)]="east" (ngModelChange)="onCoordChange()"
+                     [minFractionDigits]="1" [maxFractionDigits]="4"
+                     mode="decimal" styleClass="w-full"></p-inputNumber>
+    </div>
+    <div class="col-6 md:col-3">
+      <label class="font-bold block mb-2">North</label>
+      <p-inputNumber [(ngModel)]="north" (ngModelChange)="onCoordChange()"
+                     [minFractionDigits]="1" [maxFractionDigits]="4"
+                     mode="decimal" styleClass="w-full"></p-inputNumber>
+    </div>
+  </ng-container>
+
+  <!-- GeoJSON mode -->
+  <ng-container *ngIf="roiMode !== 'bbox'">
+    <div class="col-12">
+      <label class="font-bold block mb-2">GeoJSON</label>
+      <textarea pInputTextarea class="w-full" rows="4"
+                [(ngModel)]="geojsonText" (ngModelChange)="onGeoJsonTextChange()"
+                placeholder='{"type": "Polygon", "coordinates": [...]}'></textarea>
+    </div>
+    <div class="col-12">
+      <p-fileUpload mode="basic" accept=".geojson,.json" [auto]="true"
+                    chooseLabel="Upload GeoJSON" styleClass="p-button-outlined"
+                    (onSelect)="onGeoJsonUpload($event)">
+      </p-fileUpload>
+    </div>
+  </ng-container>
+</div>

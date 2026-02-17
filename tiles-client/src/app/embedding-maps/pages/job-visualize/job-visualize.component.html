@@ -1,0 +1,46 @@
+<div class="embedding-visualize-container">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <p-card>
+      <div class="mb-3">
+        <h3 class="mt-0">{{job?.name || 'Carregando...'}}</h3>
+        <p class="text-color-secondary text-sm" *ngIf="job">Ano: {{job.config['year']}}</p>
+      </div>
+
+      <!-- Product switcher -->
+      <div class="mb-3">
+        <label class="font-bold block mb-2">Produto</label>
+        <div class="flex flex-column gap-2">
+          <div *ngFor="let opt of productOptions"
+               class="p-2 border-round cursor-pointer"
+               [class.surface-primary]="selectedProduct === opt.value && availableProducts.includes(opt.value)"
+               [class.surface-ground]="selectedProduct !== opt.value"
+               [class.opacity-50]="!availableProducts.includes(opt.value)"
+               (click)="availableProducts.includes(opt.value) && onProductChange(opt.value)">
+            <div class="flex align-items-center gap-2">
+              <i class="pi {{opt.icon}}"></i>
+              <span class="text-sm font-bold">{{opt.label}}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p-divider></p-divider>
+
+      <!-- Stats panel -->
+      <app-emb-stats-panel
+        [jobId]="jobId"
+        [product]="selectedProduct">
+      </app-emb-stats-panel>
+    </p-card>
+  </div>
+
+  <!-- Map -->
+  <div class="map-container">
+    <div id="embedding-map" class="map"></div>
+
+    <div *ngIf="loading" class="map-loading">
+      <p-progressSpinner [style]="{width: '50px', height: '50px'}"></p-progressSpinner>
+    </div>
+  </div>
+</div>
