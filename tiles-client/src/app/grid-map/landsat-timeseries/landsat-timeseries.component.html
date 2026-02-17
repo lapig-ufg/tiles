@@ -1,2 +1,4 @@
-<plotly-plot [data]="plotlyData" [layout]="layout" *ngIf="plotlyData"></plotly-plot>
-
+<div *ngIf="loading" class="flex justify-content-center p-4">
+    <p-progressSpinner strokeWidth="4" [style]="{'width': '40px', 'height': '40px'}"></p-progressSpinner>
+</div>
+<plotly-plot [data]="plotlyData" [layout]="layout" *ngIf="plotlyData && !loading"></plotly-plot>
