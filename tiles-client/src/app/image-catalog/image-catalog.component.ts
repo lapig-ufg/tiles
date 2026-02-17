@@ -297,6 +297,13 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
         }
     }
 
+    onCalendarClose(): void {
+        if (this.lat && this.lon && this.startDate && this.endDate) {
+            this.offset = 0;
+            this.searchCatalog();
+        }
+    }
+
     clearSelection(): void {
         this.selectedImages = [];
         this.catalogItems.forEach(item => item.selected = false);
