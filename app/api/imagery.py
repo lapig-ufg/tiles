@@ -163,10 +163,10 @@ def _list_s2_catalog_sync(
         }
         for p in S2_EXTRA_PROPS:
             props[p] = img.get(p)
-        return ee.Feature(None, props)
+        return ee.Dictionary(props)
 
-    features = page.map(extract)
-    result = ee.Dictionary({"total": total, "features": ee.FeatureCollection(features)}).getInfo()
+    items = page.map(extract)
+    result = ee.Dictionary({"total": total, "items": items}).getInfo()
     return result
 
 
@@ -189,7 +189,7 @@ def _list_landsat_catalog_sync(
         merged = c if merged is None else merged.merge(c)
 
     if merged is None:
-        return {"total": 0, "features": {"type": "FeatureCollection", "features": []}}
+        return {"total": 0, "items": []}
 
     merged = merged.filter(ee.Filter.lte(LANDSAT_CLOUD_PROP, max_cloud))
     total = merged.size()
@@ -210,10 +210,10 @@ def _list_landsat_catalog_sync(
         }
         for p in LANDSAT_EXTRA_PROPS:
             props[p] = img.get(p)
-        return ee.Feature(None, props)
+        return ee.Dictionary(props)
 
-    features = page.map(extract)
-    result = ee.Dictionary({"total": total, "features": ee.FeatureCollection(features)}).getInfo()
+    items = page.map(extract)
+    result = ee.Dictionary({"total": total, "items": items}).getInfo()
     return result
 
 
@@ -253,12 +253,10 @@ def _format_catalog_response(
     layer: str, raw: dict, query: dict, limit: int, offset: int,
 ) -> dict:
     total = raw.get("total", 0)
-    fc = raw.get("features", {})
-    features_list = fc.get("features", []) if isinstance(fc, dict) else []
+    raw_items = raw.get("items", [])
 
     items = []
-    for feat in features_list:
-        props = feat.get("properties", {})
+    for props in raw_items:
         image_id = props.get("id", "")
         time_start = props.get("time_start")
         cloud_val = props.get("cloud")
@@ -368,6 +366,8 @@ async def catalog(
     except Exception:
         logger.exception("Erro ao consultar catálogo EE")
         raise HTTPException(502, "Erro ao consultar Earth Engine")
+
+    logger.debug(f"Catalog raw EE result: total={raw.get('total')}, items_count={len(raw.get('items', []))}, keys={list(raw.keys())}")
 
     query_info = {
         "lat": lat, "lon": lon, "start": start, "end": end,
