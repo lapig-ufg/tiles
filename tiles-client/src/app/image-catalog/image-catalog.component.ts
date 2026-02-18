@@ -34,7 +34,7 @@ const IMAGE_CATALOG_STATE_CONFIG: ScreenStateConfig = {
         endDate:          {type: 'date'},
         maxCloud:         {type: 'number', defaultValue: 100},
         selectedVisparam: {type: 'string', defaultValue: 'tvi-red'},
-        selectedSort:     {type: 'string', defaultValue: 'date_desc'},
+        selectedSort:     {type: 'string', defaultValue: 'date_asc'},
         bufferMeters:     {type: 'number', defaultValue: 1000},
         offset:           {type: 'number', defaultValue: 0},
         limit:            {type: 'number', defaultValue: 25},
@@ -53,7 +53,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
     endDate: Date | null = null;
     maxCloud: number = 100;
     selectedVisparam: string = 'tvi-red';
-    selectedSort: string = 'date_desc';
+    selectedSort: string = 'date_asc';
     bufferMeters: number = 1000;
 
     // Catalog data
@@ -97,7 +97,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
     };
 
     sortOptions = [
-        {label: 'Data (recente)', value: 'date_desc'},
+        {label: 'Data (antigo)', value: 'date_asc'},
         {label: 'Nuvem (menor)', value: 'cloud_asc'}
     ];
 
@@ -128,7 +128,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
                 endDate: defaultEnd,
                 maxCloud: 100,
                 selectedVisparam: 'tvi-red',
-                selectedSort: 'date_desc',
+                selectedSort: 'date_asc',
                 bufferMeters: 1000,
                 offset: 0,
                 limit: 25,
@@ -232,7 +232,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
             bufferMeters: this.bufferMeters,
             limit: this.limit,
             offset: this.offset,
-            sort: this.selectedSort as 'date_desc' | 'cloud_asc',
+            sort: this.selectedSort as 'date_asc' | 'cloud_asc',
             maxCloud: this.maxCloud
         }).subscribe({
             next: (response: CatalogResponse) => {

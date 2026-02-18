@@ -150,7 +150,7 @@ def _list_s2_catalog_sync(
     if sort == "cloud_asc":
         col = col.sort(S2_CLOUD_PROP)
     else:
-        col = col.sort("system:time_start", False)
+        col = col.sort("system:time_start", True)
 
     page = col.toList(limit, offset)
 
@@ -197,7 +197,7 @@ def _list_landsat_catalog_sync(
     if sort == "cloud_asc":
         merged = merged.sort(LANDSAT_CLOUD_PROP)
     else:
-        merged = merged.sort("system:time_start", False)
+        merged = merged.sort("system:time_start", True)
 
     page = merged.toList(limit, offset)
 
@@ -317,7 +317,7 @@ async def catalog(
     bufferMeters: int = Query(1000, ge=100, le=50000),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    sort: Literal["date_desc", "cloud_asc"] = Query("date_desc"),
+    sort: Literal["date_asc", "cloud_asc"] = Query("date_asc"),
     maxCloud: int = Query(100, ge=0, le=100),
 ):
     _validate_layer(layer)

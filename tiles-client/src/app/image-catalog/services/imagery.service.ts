@@ -11,7 +11,7 @@ export interface CatalogParams {
     bufferMeters?: number;
     limit?: number;
     offset?: number;
-    sort?: 'date_desc' | 'cloud_asc';
+    sort?: 'date_asc' | 'cloud_asc';
     maxCloud?: number;
 }
 
