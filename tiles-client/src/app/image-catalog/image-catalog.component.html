@@ -1,17 +1,20 @@
 <h4 *ngIf="lat && lon" class="text-center card">Latitude: {{ lat | number }}, Longitude: {{ lon | number }}</h4>
 <h4 *ngIf="!lat || !lon" class="text-center card text-orange-500">Selecione um ponto no mapa ou envie um GeoJSON pelo topbar</h4>
 
-<div class="grid mt-2" *ngIf="activeFeature">
-    <div class="col-12 md:col-6">
+<!-- Painel flutuante Info da Amostra -->
+<div class="sample-info-floating" *ngIf="activeFeature">
+    <button
+        pButton
+        pRipple
+        [icon]="showSampleInfo ? 'pi pi-times' : 'pi pi-info-circle'"
+        class="sample-info-toggle p-button-rounded p-button-sm"
+        [class.p-button-outlined]="!showSampleInfo"
+        (click)="showSampleInfo = !showSampleInfo"
+        [pTooltip]="showSampleInfo ? 'Fechar Info' : 'Info da Amostra'"
+        tooltipPosition="left"
+    ></button>
+    <div class="sample-info-panel" [class.sample-info-panel-hidden]="!showSampleInfo">
         <app-sample-info [feature]="activeFeature"></app-sample-info>
-    </div>
-    <div class="col-12 md:col-6">
-        <p-card>
-            <app-geometry-preview
-                [feature]="activeFeature"
-                [representativePoint]="lat && lon ? {lat: lat, lon: lon} : null">
-            </app-geometry-preview>
-        </p-card>
     </div>
 </div>
 
