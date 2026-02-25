@@ -1,0 +1,43 @@
+<p-panel header="Info da Amostra" [toggleable]="true" [collapsed]="false" *ngIf="geometryInfo">
+    <div class="mb-3">
+        <p-tag [value]="geometryInfo.type" [severity]="getTypeSeverity(geometryInfo.type)" class="mr-2"></p-tag>
+        <span *ngIf="geometryInfo.areaHa !== null" class="mr-3 text-sm">
+            <strong>Area:</strong> {{ geometryInfo.areaHa | number:'1.2-2' }} ha
+        </span>
+        <span *ngIf="geometryInfo.perimeterKm !== null" class="mr-3 text-sm">
+            <strong>Perimetro:</strong> {{ geometryInfo.perimeterKm | number:'1.2-2' }} km
+        </span>
+        <span *ngIf="geometryInfo.lengthKm !== null" class="mr-3 text-sm">
+            <strong>Comprimento:</strong> {{ geometryInfo.lengthKm | number:'1.2-2' }} km
+        </span>
+    </div>
+
+    <div class="mb-3 text-sm">
+        <strong>Ponto Representativo:</strong>
+        {{ geometryInfo.representativePoint.lat | number:'1.6-6' }},
+        {{ geometryInfo.representativePoint.lon | number:'1.6-6' }}
+    </div>
+
+    <div class="mb-3 text-sm" *ngIf="geometryInfo.bbox">
+        <strong>BBox:</strong>
+        [{{ geometryInfo.bbox[0] | number:'1.4-4' }},
+         {{ geometryInfo.bbox[1] | number:'1.4-4' }},
+         {{ geometryInfo.bbox[2] | number:'1.4-4' }},
+         {{ geometryInfo.bbox[3] | number:'1.4-4' }}]
+    </div>
+
+    <p-table [value]="properties" *ngIf="properties.length > 0" styleClass="p-datatable-sm">
+        <ng-template pTemplate="header">
+            <tr>
+                <th>Key</th>
+                <th>Value</th>
+            </tr>
+        </ng-template>
+        <ng-template pTemplate="body" let-prop>
+            <tr>
+                <td>{{ prop.key }}</td>
+                <td>{{ prop.value }}</td>
+            </tr>
+        </ng-template>
+    </p-table>
+</p-panel>

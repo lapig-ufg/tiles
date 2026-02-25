@@ -26,6 +26,8 @@ import {PlotlyModule} from 'angular-plotly.js';
 import * as PlotlyJS from 'plotly.js/dist/plotly.min.js';
 import {SentinelTimeseriesComponent} from '../grid-map/sentinel-timeseries/sentinel-timeseries.component';
 import {LandsatTimeseriesComponent} from '../grid-map/landsat-timeseries/landsat-timeseries.component';
+import {SampleInfoComponent} from './components/sample-info/sample-info.component';
+import {GeometryPreviewComponent} from './components/geometry-preview/geometry-preview.component';
 
 PlotlyModule.plotlyjs = PlotlyJS;
 
@@ -54,6 +56,8 @@ PlotlyModule.plotlyjs = PlotlyJS;
         PlotlyModule,
         SentinelTimeseriesComponent,
         LandsatTimeseriesComponent,
+        SampleInfoComponent,
+        GeometryPreviewComponent,
     ],
     declarations: [
         ImageCatalogComponent

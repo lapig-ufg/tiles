@@ -9,7 +9,7 @@
         (onSelect)="onFileSelect($event)"
         chooseLabel="GeoJSON">
     </p-fileUpload>
-    <div *ngIf="features && features.length" class="p-inputgroup ml-3 mr-3 w-3 h-3">
+    <div *ngIf="geoJsonFeatures && geoJsonFeatures.length" class="p-inputgroup ml-3 mr-3 w-3 h-3">
         <p-inputNumber
             [(ngModel)]="inputPage"
             [min]="1"
@@ -27,16 +27,16 @@
             </p-button>
         </span>
     </div>
-    <div *ngIf="features && features.length">
+    <div *ngIf="geoJsonFeatures && geoJsonFeatures.length">
         <p-paginator
             (onPageChange)="onPageChange($event)"
             [first]="first"
             [rows]="rows"
-            [totalRecords]="features.length"
+            [totalRecords]="geoJsonFeatures.length"
             [showCurrentPageReport]="true"
             [showPageLinks]="false"
             [showJumpToPageDropdown]="false"
-            currentPageReportTemplate="Point {currentPage} of {totalRecords}">
+            currentPageReportTemplate="Feature {currentPage} of {totalRecords}">
         </p-paginator>
     </div>
 </div>

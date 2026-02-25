@@ -27,7 +27,8 @@ export class AppTopbarComponent {
         this.layoutService.showConfigSidebar();
     }
     onSearchPoint(){
-        this.pointService.setPoint({lat: this.latitude, lon: this.longitude})
+        this.pointService.setActiveFeature(null);
+        this.pointService.setPoint({lat: this.latitude, lon: this.longitude});
     }
 
 }

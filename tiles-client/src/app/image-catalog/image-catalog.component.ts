@@ -11,7 +11,7 @@ import Pointer from 'ol/interaction/Pointer';
 import VectorLayer from 'ol/layer/Vector';
 import VectorSource from 'ol/source/Vector';
 import {Icon, Style} from 'ol/style';
-import {Point} from 'ol/geom';
+import {Point, Geometry} from 'ol/geom';
 import {Feature} from 'ol';
 import {Coordinate} from 'ol/coordinate';
 import {marker} from '../../assets/layout/images/marker';
@@ -20,6 +20,7 @@ import {ImageryService, CatalogItem, CatalogResponse} from './services/imagery.s
 import {ScreenStateConfig, ScreenStateBinder} from '../screen-state/interfaces/screen-state.interfaces';
 import {ScreenStateService} from '../screen-state/services/screen-state.service';
 import {bindState} from '../screen-state/helpers/manual-state.helper';
+import {createGeometryStyle} from '../shared/utils/geometry.utils';
 
 const IMAGE_CATALOG_STATE_CONFIG: ScreenStateConfig = {
     screenKey: 'image-catalog',
@@ -68,6 +69,11 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
 
     // Timeseries
     showTimeseries: boolean = true;
+
+    // Active feature (geometry from GeoJSON upload)
+    activeFeature: Feature<Geometry> | null = null;
+    showGeometryOnMaps: boolean = true;
+    private geometryLayersByMapId: Record<string, VectorLayer<Feature<Geometry>>> = {};
 
     // Maps
     private mapsInstances: {id: string, map: Map}[] = [];
@@ -157,6 +163,14 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
             }
         });
         this.subscriptions.push(sub);
+
+        const featureSub = this.pointService.activeFeature$.subscribe({
+            next: feature => {
+                this.activeFeature = feature;
+                this.updateGeometryOverlays();
+            }
+        });
+        this.subscriptions.push(featureSub);
     }
 
     ngOnDestroy(): void {
@@ -324,6 +338,49 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
         return datetime.split('T')[0];
     }
 
+    toggleGeometryOverlay(): void {
+        this.showGeometryOnMaps = !this.showGeometryOnMaps;
+        for (const mapId of Object.keys(this.geometryLayersByMapId)) {
+            this.geometryLayersByMapId[mapId].setVisible(this.showGeometryOnMaps);
+        }
+    }
+
+    get isNonPointGeometry(): boolean {
+        if (!this.activeFeature) return false;
+        const geom = this.activeFeature.getGeometry();
+        return !!geom && geom.getType() !== 'Point';
+    }
+
+    private addGeometryLayer(mapId: string, map: Map): void {
+        if (!this.activeFeature) return;
+        const geomClone = this.activeFeature.clone();
+        const layer = new VectorLayer({
+            source: new VectorSource({features: [geomClone]}),
+            style: createGeometryStyle(),
+            visible: this.showGeometryOnMaps,
+        });
+        map.addLayer(layer);
+        this.geometryLayersByMapId[mapId] = layer;
+    }
+
+    private updateGeometryOverlays(): void {
+        // Remove existing geometry layers
+        for (const mapId of Object.keys(this.geometryLayersByMapId)) {
+            const instance = this.mapsInstances.find(m => m.id === mapId);
+            if (instance) {
+                instance.map.removeLayer(this.geometryLayersByMapId[mapId]);
+            }
+        }
+        this.geometryLayersByMapId = {};
+
+        // Add new geometry layers if feature exists
+        if (this.activeFeature) {
+            for (const instance of this.mapsInstances) {
+                this.addGeometryLayer(instance.id, instance.map);
+            }
+        }
+    }
+
     private createImageMap(item: CatalogItem): void {
         const mapId = 'img-map-' + item.id.replace(/[^a-zA-Z0-9]/g, '-');
 
@@ -363,6 +420,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
 
             const projectedCoordinate = transform(this.centerCoordinates, 'EPSG:3857', 'EPSG:4326');
             this.addMarker(projectedCoordinate[1], projectedCoordinate[0], map);
+            this.addGeometryLayer(mapId, map);
             this.mapsInstances.push({id: mapId, map});
         }, 0);
     }
@@ -373,6 +431,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
         if (index >= 0) {
             this.mapsInstances[index].map.setTarget(undefined);
             this.mapsInstances.splice(index, 1);
+            delete this.geometryLayersByMapId[mapId];
         }
     }
 
@@ -381,6 +440,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
             instance.map.setTarget(undefined);
         }
         this.mapsInstances = [];
+        this.geometryLayersByMapId = {};
     }
 
     private addMarker(lat: number, lon: number, map: Map): void {
