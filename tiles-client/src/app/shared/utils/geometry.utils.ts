@@ -3,7 +3,7 @@ import { Geometry, Point, MultiPoint, Polygon, MultiPolygon, LineString, MultiLi
 import { GeoJSON } from 'ol/format';
 import { getArea, getLength } from 'ol/sphere';
 import { Style, Stroke, Fill, Circle as CircleStyle } from 'ol/style';
-import { transformExtent } from 'ol/proj';
+import { transform, transformExtent } from 'ol/proj';
 import { Feature as GeoJsonFeature, Geometry as GeoJsonGeometry } from 'geojson';
 
 export interface RepresentativePoint {
@@ -34,7 +34,8 @@ export function computeRepresentativePoint(feature: Feature<Geometry>): Represen
     const coords = getRepresentativeCoords(geom);
     if (!coords) return null;
 
-    return { lon: coords[0], lat: coords[1] };
+    const [lon, lat] = transform([coords[0], coords[1]], 'EPSG:3857', 'EPSG:4326');
+    return { lon, lat };
 }
 
 function getRepresentativeCoords(geom: Geometry): number[] | null {
