@@ -83,19 +83,6 @@
             ></p-inputNumber>
         </span>
 
-        <span class="flex flex-column" *ngIf="isNonPointGeometry">
-            <label class="mb-1 font-semibold">Geometria</label>
-            <button
-                pButton
-                [icon]="showGeometryOnMaps ? 'pi pi-eye' : 'pi pi-eye-slash'"
-                [label]="showGeometryOnMaps ? 'Visivel' : 'Oculta'"
-                class="p-button-outlined p-button-sm"
-                (click)="toggleGeometryOverlay()"
-                pTooltip="Mostrar/ocultar geometria nos mapas"
-                tooltipPosition="top"
-            ></button>
-        </span>
-
         <span class="flex flex-column">
             <label for="visparam-select" class="mb-1 font-semibold">Vis Param</label>
             <p-selectButton

@@ -72,7 +72,6 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
 
     // Active feature (geometry from GeoJSON upload)
     activeFeature: Feature<Geometry> | null = null;
-    showGeometryOnMaps: boolean = true;
     showSampleInfo: boolean = true;
     private geometryLayersByMapId: Record<string, VectorLayer<Feature<Geometry>>> = {};
 
@@ -339,26 +338,12 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
         return datetime.split('T')[0];
     }
 
-    toggleGeometryOverlay(): void {
-        this.showGeometryOnMaps = !this.showGeometryOnMaps;
-        for (const mapId of Object.keys(this.geometryLayersByMapId)) {
-            this.geometryLayersByMapId[mapId].setVisible(this.showGeometryOnMaps);
-        }
-    }
-
-    get isNonPointGeometry(): boolean {
-        if (!this.activeFeature) return false;
-        const geom = this.activeFeature.getGeometry();
-        return !!geom && geom.getType() !== 'Point';
-    }
-
     private addGeometryLayer(mapId: string, map: Map): void {
         if (!this.activeFeature) return;
         const geomClone = this.activeFeature.clone();
         const layer = new VectorLayer({
             source: new VectorSource({features: [geomClone]}),
             style: createGeometryStyleNoFill(),
-            visible: this.showGeometryOnMaps,
         });
         map.addLayer(layer);
         this.geometryLayersByMapId[mapId] = layer;
