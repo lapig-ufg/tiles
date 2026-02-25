@@ -136,7 +136,7 @@ export function geoJsonFeatureToOl(geoJsonFeature: GeoJsonFeature<GeoJsonGeometr
 }
 
 /**
- * Style para preview de geometria no mapa.
+ * Style para preview de geometria no mapa (com preenchimento).
  */
 export function createGeometryStyle(): Style {
     return new Style({
@@ -146,6 +146,24 @@ export function createGeometryStyle(): Style {
         }),
         fill: new Fill({
             color: 'rgba(30, 100, 230, 0.15)',
+        }),
+        image: new CircleStyle({
+            radius: 6,
+            fill: new Fill({ color: 'rgba(30, 100, 230, 0.8)' }),
+            stroke: new Stroke({ color: '#fff', width: 2 }),
+        }),
+    });
+}
+
+/**
+ * Style sem preenchimento para geometrias no grid de imagens.
+ * Apenas contorno (Stroke) para não obstruir a visualização das imagens.
+ */
+export function createGeometryStyleNoFill(): Style {
+    return new Style({
+        stroke: new Stroke({
+            color: 'rgba(30, 100, 230, 0.9)',
+            width: 2,
         }),
         image: new CircleStyle({
             radius: 6,

@@ -20,7 +20,7 @@ import {ImageryService, CatalogItem, CatalogResponse} from './services/imagery.s
 import {ScreenStateConfig, ScreenStateBinder} from '../screen-state/interfaces/screen-state.interfaces';
 import {ScreenStateService} from '../screen-state/services/screen-state.service';
 import {bindState} from '../screen-state/helpers/manual-state.helper';
-import {createGeometryStyle} from '../shared/utils/geometry.utils';
+import {createGeometryStyleNoFill} from '../shared/utils/geometry.utils';
 
 const IMAGE_CATALOG_STATE_CONFIG: ScreenStateConfig = {
     screenKey: 'image-catalog',
@@ -73,6 +73,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
     // Active feature (geometry from GeoJSON upload)
     activeFeature: Feature<Geometry> | null = null;
     showGeometryOnMaps: boolean = true;
+    showSampleInfo: boolean = true;
     private geometryLayersByMapId: Record<string, VectorLayer<Feature<Geometry>>> = {};
 
     // Maps
@@ -356,7 +357,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
         const geomClone = this.activeFeature.clone();
         const layer = new VectorLayer({
             source: new VectorSource({features: [geomClone]}),
-            style: createGeometryStyle(),
+            style: createGeometryStyleNoFill(),
             visible: this.showGeometryOnMaps,
         });
         map.addLayer(layer);
