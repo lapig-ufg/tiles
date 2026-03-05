@@ -1,10 +1,12 @@
 import {Component, Input, OnChanges, OnDestroy, SimpleChanges} from '@angular/core';
-import {HttpClient} from "@angular/common/http";
+import {HttpClient, HttpParams} from "@angular/common/http";
 import {Subject, of} from "rxjs";
 import {switchMap, catchError, takeUntil, tap} from "rxjs/operators";
 import {PlotlySharedModule} from "angular-plotly.js";
 import {NgIf} from "@angular/common";
+import {FormsModule} from "@angular/forms";
 import {ProgressSpinnerModule} from "primeng/progressspinner";
+import {SelectButtonModule} from "primeng/selectbutton";
 
 @Component({
     selector: 'app-sentinel-timeseries',
@@ -12,7 +14,9 @@ import {ProgressSpinnerModule} from "primeng/progressspinner";
     imports: [
         PlotlySharedModule,
         NgIf,
-        ProgressSpinnerModule
+        FormsModule,
+        ProgressSpinnerModule,
+        SelectButtonModule
     ],
     templateUrl: './sentinel-timeseries.component.html',
     styleUrl: './sentinel-timeseries.component.scss'
@@ -23,7 +27,16 @@ export class SentinelTimeseriesComponent implements OnChanges, OnDestroy {
     plotlyData: any;
     loading = false;
 
-    private loadSubject = new Subject<{lat: number, lon: number}>();
+    selectedMethod = 'whittaker';
+    smoothingMethods = [
+        {label: 'Raw', value: 'raw'},
+        {label: 'Savgol', value: 'savgol'},
+        {label: 'Whittaker', value: 'whittaker'},
+        {label: 'Spline', value: 'spline'},
+        {label: 'LOESS', value: 'loess'},
+    ];
+
+    private loadSubject = new Subject<{lat: number, lon: number, method: string}>();
     private destroy$ = new Subject<void>();
 
     layout = {
@@ -55,9 +68,10 @@ export class SentinelTimeseriesComponent implements OnChanges, OnDestroy {
         this.loadSubject.pipe(
             takeUntil(this.destroy$),
             tap(() => { this.loading = true; this.plotlyData = null; }),
-            switchMap(({lat, lon}) => {
+            switchMap(({lat, lon, method}) => {
+                const params = new HttpParams().set('method', method);
                 const url = `https://tiles.lapig.iesa.ufg.br/api/timeseries/sentinel2/${lat}/${lon}`;
-                return this.http.get<any[]>(url).pipe(
+                return this.http.get<any[]>(url, {params}).pipe(
                     catchError(() => of(null))
                 );
             })
@@ -69,7 +83,13 @@ export class SentinelTimeseriesComponent implements OnChanges, OnDestroy {
 
     ngOnChanges(changes: SimpleChanges) {
         if ((changes['lat'] || changes['lon']) && this.isValidLatLon()) {
-            this.loadSubject.next({lat: this.lat!, lon: this.lon!});
+            this.loadSubject.next({lat: this.lat!, lon: this.lon!, method: this.selectedMethod});
+        }
+    }
+
+    onMethodChange() {
+        if (this.isValidLatLon()) {
+            this.loadSubject.next({lat: this.lat!, lon: this.lon!, method: this.selectedMethod});
         }
     }
 

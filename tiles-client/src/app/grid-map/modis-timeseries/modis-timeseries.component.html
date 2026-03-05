@@ -1,2 +1,15 @@
-<plotly-plot [data]="plotlyData" [layout]="layout" *ngIf="plotlyData"></plotly-plot>
-
+<div class="flex align-items-center gap-2 mb-2">
+    <label class="font-semibold text-sm">Suavização:</label>
+    <p-selectButton
+        [options]="smoothingMethods"
+        [(ngModel)]="selectedMethod"
+        optionLabel="label"
+        optionValue="value"
+        (onChange)="onMethodChange()"
+        [style]="{'font-size': '0.75rem'}"
+    ></p-selectButton>
+</div>
+<div *ngIf="loading" class="flex justify-content-center p-4">
+    <p-progressSpinner strokeWidth="4" [style]="{'width': '40px', 'height': '40px'}"></p-progressSpinner>
+</div>
+<plotly-plot [data]="plotlyData" [layout]="layout" *ngIf="plotlyData && !loading"></plotly-plot>
