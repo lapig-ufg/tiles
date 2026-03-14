@@ -46,6 +46,11 @@ export class AppMenuComponent implements OnInit {
                         icon: 'pi pi-fw pi-cloud',
                         routerLink: ['/stac/copernicus']
                     },
+                    {
+                        label: 'Brazil Data Cube',
+                        icon: 'pi pi-fw pi-database',
+                        routerLink: ['/stac/bdc']
+                    },
                 ]
             },
             {
