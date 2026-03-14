@@ -90,6 +90,10 @@ async def lifespan(app: FastAPI):
     await tile_cache.close()
     logger.info("Cache híbrido fechado")
 
+    from app.api.cog_proxy import shutdown_client
+    await shutdown_client()
+    logger.info("COG proxy client closed")
+
     from app.core.otel import shutdown_otel_logging
     shutdown_otel_logging()
 

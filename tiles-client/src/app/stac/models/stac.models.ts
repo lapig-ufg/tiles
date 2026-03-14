@@ -140,3 +140,27 @@ export interface QueryablesResponse {
   properties: Record<string, QueryableProperty>;
   '$id'?: string;
 }
+
+/**
+ * Converte URLs de assets para formatos acessíveis pelo navegador.
+ *
+ * Transformações:
+ * - s3://bucket/key → https://bucket.s3.amazonaws.com/key
+ * - https://data.inpe.br/... → /api/cog-proxy?url=<encoded> (proxy CORS)
+ */
+export function sanitizeAssetUrl(url: string): string {
+  if (!url) return url;
+
+  // S3 scheme → HTTPS
+  const s3Match = url.match(/^s3:\/\/([^/]+)\/(.+)$/);
+  if (s3Match) {
+    return `https://${s3Match[1]}.s3.amazonaws.com/${s3Match[2]}`;
+  }
+
+  // BDC (data.inpe.br) — servidor sem CORS, roteado via proxy backend
+  if (url.includes('data.inpe.br')) {
+    return `/api/cog-proxy?url=${encodeURIComponent(url)}`;
+  }
+
+  return url;
+}
