@@ -141,12 +141,14 @@ export interface QueryablesResponse {
   '$id'?: string;
 }
 
+const TILES_API_BASE = 'https://tiles.lapig.iesa.ufg.br';
+
 /**
  * Converte URLs de assets para formatos acessíveis pelo navegador.
  *
  * Transformações:
  * - s3://bucket/key → https://bucket.s3.amazonaws.com/key
- * - https://data.inpe.br/... → /api/cog-proxy?url=<encoded> (proxy CORS)
+ * - https://data.inpe.br/... → TILES_API_BASE/api/cog-proxy?url=<encoded> (proxy CORS)
  */
 export function sanitizeAssetUrl(url: string): string {
   if (!url) return url;
@@ -159,7 +161,7 @@ export function sanitizeAssetUrl(url: string): string {
 
   // BDC (data.inpe.br) — servidor sem CORS, roteado via proxy backend
   if (url.includes('data.inpe.br')) {
-    return `/api/cog-proxy?url=${encodeURIComponent(url)}`;
+    return `${TILES_API_BASE}/api/cog-proxy?url=${encodeURIComponent(url)}`;
   }
 
   return url;
