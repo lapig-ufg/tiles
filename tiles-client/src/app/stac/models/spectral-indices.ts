@@ -303,9 +303,16 @@ export function getAssetKeysForIndex(index: SpectralIndex): string[] {
 /**
  * Checks if a collection supports spectral index rendering.
  */
+/**
+ * Coleções com assets COG acessíveis via HTTPS para renderização por bandas.
+ * Excluídas:
+ *   - sentinel-2-l1c: assets JP2, não COG
+ *   - landsat-c2-l2: bucket requester-pays (403)
+ *   - naip: bucket requester-pays (403)
+ */
 export function collectionSupportsBands(collectionId: string): boolean {
   const supported = [
-    'sentinel-2-l2a', 'sentinel-2-l1c', 'sentinel-2-c1-l2a', 'landsat-c2-l2'
+    'sentinel-2-l2a', 'sentinel-2-c1-l2a',
   ];
   return supported.includes(collectionId);
 }

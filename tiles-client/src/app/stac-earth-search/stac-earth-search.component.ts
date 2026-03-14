@@ -23,14 +23,17 @@ interface CollectionOption {
 }
 
 const COLLECTIONS: CollectionOption[] = [
+  // COG via HTTPS — renderização por bandas disponível
   { id: 'sentinel-2-l2a', label: 'Sentinel-2 L2A', resolution: '10m', free: true, hasBands: true, supportsCloudFilter: true },
-  { id: 'sentinel-2-l1c', label: 'Sentinel-2 L1C', resolution: '10m', free: true, hasBands: true, supportsCloudFilter: true },
   { id: 'sentinel-2-c1-l2a', label: 'Sentinel-2 C1 L2A', resolution: '10m', free: true, hasBands: true, supportsCloudFilter: true },
-  { id: 'landsat-c2-l2', label: 'Landsat C2 L2', resolution: '30m', free: false, hasBands: true, supportsCloudFilter: true },
+  // COG via S3 público (sanitize s3→https) — renderização por bandas disponível
   { id: 'sentinel-1-grd', label: 'Sentinel-1 GRD', resolution: '10m', free: true, hasBands: false, supportsCloudFilter: false },
-  { id: 'naip', label: 'NAIP', resolution: '0.6m', free: true, hasBands: false, supportsCloudFilter: false },
   { id: 'cop-dem-glo-30', label: 'Copernicus DEM 30m', resolution: '30m', free: true, hasBands: false, supportsCloudFilter: false },
   { id: 'cop-dem-glo-90', label: 'Copernicus DEM 90m', resolution: '90m', free: true, hasBands: false, supportsCloudFilter: false },
+  // Sem COG acessível — apenas footprint
+  { id: 'sentinel-2-l1c', label: 'Sentinel-2 L1C (JP2)', resolution: '10m', free: true, hasBands: false, supportsCloudFilter: true },
+  { id: 'landsat-c2-l2', label: 'Landsat C2 L2 (requester-pays)', resolution: '30m', free: false, hasBands: false, supportsCloudFilter: true },
+  { id: 'naip', label: 'NAIP (requester-pays)', resolution: '0.6m', free: true, hasBands: false, supportsCloudFilter: false },
 ];
 
 const PERIOD_PRESETS = [

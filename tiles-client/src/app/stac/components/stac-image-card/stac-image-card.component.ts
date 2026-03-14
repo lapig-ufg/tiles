@@ -15,7 +15,7 @@ import { Feature } from 'ol';
 import { Geometry } from 'ol/geom';
 import { GeoJSON } from 'ol/format';
 import { transformExtent } from 'ol/proj';
-import { StacItem } from '../../models/stac.models';
+import { StacItem, sanitizeAssetUrl } from '../../models/stac.models';
 import { SpectralIndex, getAssetKeysForIndex } from '../../models/spectral-indices';
 import { CogRendererService } from '../../services/cog-renderer.service';
 import { createGeometryStyleNoFill, createGeometryStyle } from '../../../shared/utils/geometry.utils';
@@ -126,13 +126,14 @@ export class StacImageCardComponent implements AfterViewInit, OnDestroy {
     let cogLayer: WebGLTileLayer;
     try {
       if (this.spectralIndex.type === 'rgb') {
-        const visualUrl = this.item.assets['visual']?.href
-                       || this.item.assets['rendered_preview']?.href
-                       || this.item.assets['thumbnail']?.href;
-        if (!visualUrl) {
+        const rawUrl = this.item.assets['visual']?.href
+                    || this.item.assets['rendered_preview']?.href
+                    || this.item.assets['thumbnail']?.href;
+        if (!rawUrl) {
           this.setError('Asset visual não encontrado');
           return;
         }
+        const visualUrl = sanitizeAssetUrl(rawUrl);
         const result = this.cogRenderer.createVisualLayer(visualUrl, this.spectralIndex.style);
         cogLayer = result.layer;
       } else {
@@ -142,7 +143,7 @@ export class StacImageCardComponent implements AfterViewInit, OnDestroy {
         for (const key of assetKeys) {
           const asset = this.item.assets[key];
           if (asset?.href) {
-            bandUrls.push(asset.href);
+            bandUrls.push(sanitizeAssetUrl(asset.href));
           } else {
             missing.push(key);
           }
