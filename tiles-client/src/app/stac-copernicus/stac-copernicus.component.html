@@ -1,0 +1,281 @@
+<div class="stac-copernicus">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h3><i class="pi pi-cloud"></i> Copernicus</h3>
+      <span class="text-xs text-color-secondary">CDSE STAC Catalogue</span>
+    </div>
+
+    <!-- 1. Collections -->
+    <section class="sidebar-section collections-section">
+      <div class="flex align-items-center justify-content-between mb-2">
+        <h4 class="section-title mb-0">Coleções</h4>
+        <span *ngIf="selectedCollections.length > 0" class="selected-badge">
+          {{ selectedCollections.length }}
+        </span>
+      </div>
+
+      <!-- Loading -->
+      <div *ngIf="collectionsLoading" class="flex justify-content-center py-3">
+        <p-progressSpinner [style]="{ width: '24px', height: '24px' }" strokeWidth="4"></p-progressSpinner>
+      </div>
+
+      <div *ngIf="!collectionsLoading">
+        <!-- Quick picks -->
+        <div class="quick-picks">
+          <button *ngFor="let name of ['Sentinel-2', 'Sentinel-1', 'Sentinel-3', 'Landsat', 'DEM']"
+                  pButton [label]="name"
+                  class="p-button-sm quick-pick-btn"
+                  [class.p-button-outlined]="!isGroupQuickSelected(name)"
+                  (click)="quickSelectGroup(name)"
+                  pTooltip="Selecionar primeira coleção de {{ name }}">
+          </button>
+        </div>
+
+        <!-- Selected chips -->
+        <div *ngIf="selectedCollections.length > 0" class="selected-chips">
+          <div *ngFor="let colId of selectedCollections" class="sel-chip">
+            <span class="sel-chip-text">{{ getCollectionShortTitle(colId) }}</span>
+            <i class="pi pi-times sel-chip-remove" (click)="removeCollection(colId)"></i>
+          </div>
+          <button *ngIf="selectedCollections.length > 1"
+                  pButton icon="pi pi-trash" class="p-button-sm p-button-text p-button-danger"
+                  (click)="clearCollections()" pTooltip="Limpar seleção">
+          </button>
+        </div>
+
+        <!-- Toggle browser -->
+        <button pButton
+                [label]="showCollectionBrowser ? 'Fechar navegador' : 'Navegar todas as coleções'"
+                [icon]="showCollectionBrowser ? 'pi pi-chevron-up' : 'pi pi-chevron-down'"
+                iconPos="right"
+                class="p-button-sm p-button-text w-full mt-1"
+                (click)="showCollectionBrowser = !showCollectionBrowser">
+        </button>
+
+        <!-- Collection browser panel -->
+        <div *ngIf="showCollectionBrowser" class="collection-browser">
+          <!-- Search -->
+          <div class="browser-search">
+            <span class="p-input-icon-left w-full">
+              <i class="pi pi-search"></i>
+              <input pInputText [(ngModel)]="collectionSearchText"
+                     (input)="onSearchTextChange()"
+                     placeholder="Buscar coleção..."
+                     class="p-inputtext-sm w-full">
+            </span>
+          </div>
+
+          <!-- Groups -->
+          <div class="browser-groups">
+            <div *ngFor="let group of collectionGroups"
+                 class="coll-group"
+                 [class.hidden]="!isGroupVisible(group)">
+
+              <!-- Group header -->
+              <div class="coll-group-header" (click)="toggleGroupExpand(group)">
+                <i [class]="group.icon" class="group-icon"></i>
+                <span class="group-label">{{ group.label }}</span>
+                <span class="group-count">{{ group.matchCount }}</span>
+                <i [class]="group.expanded ? 'pi pi-chevron-down' : 'pi pi-chevron-right'"
+                   class="group-chevron"></i>
+              </div>
+
+              <!-- Group items -->
+              <div *ngIf="group.expanded" class="coll-group-items">
+                <div *ngFor="let item of getVisibleItems(group)"
+                     class="coll-item"
+                     [class.selected]="item.selected"
+                     (click)="toggleCollection(item)">
+                  <p-checkbox [binary]="true" [(ngModel)]="item.selected"
+                              (onChange)="syncSelectedFromGroupsPublic()"
+                              (click)="$event.stopPropagation()">
+                  </p-checkbox>
+                  <div class="coll-item-info">
+                    <span class="coll-item-title">{{ item.title }}</span>
+                    <span *ngIf="item.description" class="coll-item-desc">{{ item.description }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <span *ngIf="!showCollectionBrowser" class="text-xs text-color-secondary mt-1 block">
+          {{ allCollections.length }} coleções disponíveis
+        </span>
+      </div>
+    </section>
+
+    <!-- 2. Area of Interest -->
+    <section class="sidebar-section">
+      <h4 class="section-title">Área de Interesse</h4>
+      <app-aoi-map
+        [basemap]="basemap"
+        (bboxChange)="onBboxChange($event)"
+        (geometryChange)="onGeometryChange($event)">
+      </app-aoi-map>
+    </section>
+
+    <!-- 3. Period -->
+    <section class="sidebar-section">
+      <h4 class="section-title">Período</h4>
+      <div class="flex gap-2">
+        <div class="flex-1">
+          <label class="field-label">Início</label>
+          <p-calendar [(ngModel)]="startDate" dateFormat="dd/mm/yy" [showIcon]="true"
+                       inputStyleClass="w-full p-inputtext-sm" (onClose)="onFilterChange()"
+                       appendTo="body"></p-calendar>
+        </div>
+        <div class="flex-1">
+          <label class="field-label">Fim</label>
+          <p-calendar [(ngModel)]="endDate" dateFormat="dd/mm/yy" [showIcon]="true"
+                       inputStyleClass="w-full p-inputtext-sm" (onClose)="onFilterChange()"
+                       appendTo="body"></p-calendar>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Filters -->
+    <section class="sidebar-section">
+      <h4 class="section-title">Filtros</h4>
+      <div class="filter-row mb-2">
+        <label class="field-label"><i class="pi pi-cloud"></i> Nuvens máx.</label>
+        <div class="cloud-slider-row">
+          <div class="cloud-slider-track">
+            <p-slider [(ngModel)]="maxCloud" [min]="0" [max]="100"
+                       (onSlideEnd)="onFilterChange()"></p-slider>
+          </div>
+          <span class="cloud-value">{{ maxCloud }}%</span>
+        </div>
+      </div>
+      <div class="filter-row">
+        <label class="field-label">Limite de resultados</label>
+        <p-inputNumber [(ngModel)]="limit" [min]="1" [max]="100" [showButtons]="true"
+                        inputStyleClass="w-full p-inputtext-sm" (onInput)="onFilterChange()">
+        </p-inputNumber>
+      </div>
+    </section>
+
+    <!-- 5. Dynamic Queryable Filters -->
+    <section class="sidebar-section" *ngIf="selectedCollections.length === 1">
+      <h4 class="section-title">Filtros da Coleção</h4>
+      <div *ngIf="queryablesLoading" class="flex justify-content-center py-2">
+        <p-progressSpinner [style]="{ width: '24px', height: '24px' }" strokeWidth="4"></p-progressSpinner>
+      </div>
+      <app-queryable-filter *ngIf="!queryablesLoading"
+                            [queryables]="queryables"
+                            [summaries]="collectionSummaries"
+                            (valuesChange)="onQueryableValuesChange($event)">
+      </app-queryable-filter>
+    </section>
+
+    <!-- 6. CQL2 -->
+    <section class="sidebar-section">
+      <h4 class="section-title">Filtros Avançados (CQL2)</h4>
+      <app-cql2-filter
+        [queryables]="queryables"
+        (filterChange)="onCql2FilterChange($event)">
+      </app-cql2-filter>
+    </section>
+
+    <!-- Search -->
+    <div class="sidebar-footer">
+      <button pButton label="Buscar Imagens" icon="pi pi-search"
+              class="w-full search-btn"
+              [loading]="loading"
+              [disabled]="!canSearch"
+              (click)="searchImages()">
+      </button>
+      <div *ngIf="!canSearch && missingRequirements.length > 0" class="missing-hint">
+        Faltando: {{ missingRequirements.join(', ') }}
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main-content">
+    <div *ngIf="loading" class="state-container">
+      <p-progressSpinner [style]="{ width: '48px', height: '48px' }"></p-progressSpinner>
+      <span class="text-color-secondary mt-2">Buscando imagens no Copernicus...</span>
+    </div>
+
+    <div *ngIf="errorMessage && !loading" class="state-container">
+      <i class="pi pi-exclamation-triangle text-4xl" style="color: var(--red-400)"></i>
+      <span class="text-color-secondary mt-2">{{ errorMessage }}</span>
+      <button pButton label="Tentar novamente" icon="pi pi-refresh"
+              class="p-button-sm p-button-outlined mt-3" (click)="searchImages()"></button>
+    </div>
+
+    <div *ngIf="items.length > 0 && !loading">
+      <div class="results-header flex align-items-center justify-content-between mb-3">
+        <div class="flex align-items-center gap-2">
+          <span class="result-count">{{ totalResults }}</span>
+          <span class="text-sm text-color-secondary">resultados</span>
+        </div>
+        <p-selectButton [options]="[{label:'1x1',value:1},{label:'2x2',value:2},{label:'3x3',value:3}]"
+                         [(ngModel)]="gridSize" optionLabel="label" optionValue="value"
+                         styleClass="p-selectbutton-sm"></p-selectButton>
+      </div>
+
+      <p-table [value]="items" [scrollable]="true" scrollHeight="280px"
+               styleClass="p-datatable-sm p-datatable-striped mb-3" [rowHover]="true">
+        <ng-template pTemplate="header">
+          <tr>
+            <th style="width: 30%">ID</th>
+            <th>Data</th>
+            <th>Nuvens</th>
+            <th>Plataforma</th>
+            <th>Coleção</th>
+          </tr>
+        </ng-template>
+        <ng-template pTemplate="body" let-item>
+          <tr>
+            <td class="text-xs font-mono text-overflow-ellipsis overflow-hidden" style="max-width: 200px">{{ item.id }}</td>
+            <td>{{ getItemDate(item) }}</td>
+            <td>{{ getItemCloud(item) }}</td>
+            <td>{{ getItemPlatform(item) }}</td>
+            <td class="text-xs">{{ item.collection }}</td>
+          </tr>
+        </ng-template>
+      </p-table>
+
+      <app-image-grid
+        [items]="items"
+        [gridSize]="gridSize"
+        [spectralIndex]="spectralIndex"
+        renderMode="footprint"
+        [aoiGeometry]="activeFeature"
+        [basemap]="basemap"
+        [totalResults]="totalResults"
+        [viewBbox]="currentBbox">
+      </app-image-grid>
+
+      <div *ngIf="nextPageUrl" class="flex justify-content-center mt-3 mb-3">
+        <button pButton label="Carregar mais" icon="pi pi-arrow-down"
+                class="p-button-outlined"
+                [loading]="loadingMore"
+                (click)="loadMore()">
+        </button>
+      </div>
+    </div>
+
+    <div *ngIf="searched && items.length === 0 && !loading && !errorMessage" class="state-container">
+      <i class="pi pi-inbox text-4xl text-color-secondary"></i>
+      <span class="text-lg text-color-secondary mt-2">Nenhuma imagem encontrada</span>
+      <span class="text-sm text-color-secondary">Tente expandir o período, a área ou ajustar os filtros</span>
+    </div>
+
+    <div *ngIf="!searched && !loading && !errorMessage" class="state-container">
+      <i class="pi pi-cloud text-5xl" style="color: var(--primary-color); opacity: 0.5"></i>
+      <span class="text-xl mt-3" style="color: var(--text-color); font-weight: 600">Copernicus Data Space</span>
+      <span class="text-sm text-color-secondary mt-1">Acesso a 162+ coleções Sentinel, Landsat, DEM e mais</span>
+      <div class="steps-hint mt-4">
+        <div class="step"><span class="step-num">1</span> Selecione uma ou mais coleções</div>
+        <div class="step"><span class="step-num">2</span> Desenhe a área de interesse</div>
+        <div class="step"><span class="step-num">3</span> Defina o período e filtros</div>
+        <div class="step"><span class="step-num">4</span> Clique em "Buscar Imagens"</div>
+      </div>
+    </div>
+  </main>
+</div>

@@ -1,0 +1,311 @@
+:host {
+  display: block;
+  height: 100%;
+}
+
+.stac-earth-search {
+  display: flex;
+  height: calc(100vh - 62px);
+  overflow: hidden;
+}
+
+// --- Sidebar ---
+
+.sidebar {
+  width: 340px;
+  min-width: 340px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--surface-border);
+  background: var(--surface-card);
+  overflow-y: auto;
+}
+
+.sidebar-header {
+  padding: 1rem 1rem 0.5rem;
+  border-bottom: 1px solid var(--surface-border);
+
+  h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+}
+
+.sidebar-section {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--surface-border);
+}
+
+.section-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-color-secondary);
+}
+
+// Collections
+.collection-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.collection-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+
+  &:hover {
+    background: var(--surface-hover);
+  }
+
+  &.active {
+    background: rgba(var(--primary-color-rgb, 59, 130, 246), 0.1);
+  }
+}
+
+.collection-radio {
+  flex-shrink: 0;
+}
+
+.collection-info {
+  min-width: 0;
+}
+
+.collection-name {
+  font-size: 0.8rem;
+  font-weight: 500;
+  display: block;
+}
+
+.collection-tags {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.micro-tag {
+  font-size: 0.6rem;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+  text-transform: uppercase;
+
+  &.info { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+  &.success { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
+  &.warn { background: rgba(245, 158, 11, 0.15); color: #f59e0b; }
+}
+
+// Period presets
+.period-presets {
+  display: flex;
+  gap: 2px;
+  flex-wrap: wrap;
+}
+
+.preset-btn {
+  font-size: 0.75rem !important;
+  padding: 0.2rem 0.5rem !important;
+}
+
+.field-label {
+  display: block;
+  font-size: 0.7rem;
+  color: var(--text-color-secondary);
+  margin-bottom: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+// Filter rows
+.filter-row {
+  margin-bottom: 0.5rem;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.cloud-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.cloud-slider-track {
+  flex: 1;
+  min-width: 0;
+  padding: 0.25rem 0;
+}
+
+.cloud-value {
+  font-size: 0.85rem;
+  font-weight: 700;
+  min-width: 38px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+// Spectral index
+.index-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.index-btn {
+  font-size: 0.7rem !important;
+  padding: 0.2rem 0.5rem !important;
+
+  &.active {
+    font-weight: 700;
+  }
+}
+
+.index-info {
+  font-size: 0.8rem;
+
+  strong { display: block; }
+
+  code {
+    font-size: 0.7rem;
+    color: var(--text-color-secondary);
+  }
+}
+
+.legend-bar {
+  display: flex;
+  gap: 4px;
+  align-items: flex-end;
+}
+
+.legend-stop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+
+  span { font-size: 0.6rem; color: var(--text-color-secondary); }
+}
+
+.legend-color {
+  width: 22px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+// Footer
+.sidebar-footer {
+  padding: 0.75rem 1rem;
+  margin-top: auto;
+  border-top: 1px solid var(--surface-border);
+  background: var(--surface-ground);
+}
+
+.search-btn {
+  font-weight: 600;
+}
+
+.missing-hint {
+  font-size: 0.7rem;
+  color: var(--text-color-secondary);
+  text-align: center;
+  margin-top: 0.35rem;
+}
+
+// --- Main Content ---
+
+.main-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  background: var(--surface-ground);
+}
+
+.state-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 400px;
+  text-align: center;
+}
+
+.steps-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  text-align: left;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.875rem;
+  color: var(--text-color-secondary);
+}
+
+.step-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+// PrimeNG overrides
+::ng-deep {
+  .sidebar .p-slider {
+    height: 4px;
+  }
+
+  .sidebar .p-slider .p-slider-handle {
+    width: 14px;
+    height: 14px;
+  }
+
+  // Fix calendar width inside sidebar
+  .sidebar-section .p-calendar {
+    width: 100%;
+  }
+
+  .sidebar-section .p-calendar .p-inputtext {
+    width: 100%;
+  }
+
+  // Fix inputnumber width
+  .sidebar-section .p-inputnumber {
+    width: auto;
+  }
+
+  // Fix radio button alignment
+  .sidebar-section .p-radiobutton {
+    width: 18px;
+    height: 18px;
+  }
+
+  // Slider container needs full width
+  .sidebar-section .p-slider {
+    width: 100%;
+  }
+}

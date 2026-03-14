@@ -1,0 +1,19 @@
+:host {
+  display: block;
+}
+
+.image-grid-container {
+  width: 100%;
+}
+
+.grid-toolbar {
+  padding: 0.5rem;
+  background: var(--surface-ground);
+  border-radius: 6px;
+  border: 1px solid var(--surface-border);
+}
+
+.image-grid {
+  display: grid;
+  gap: 0.75rem;
+}

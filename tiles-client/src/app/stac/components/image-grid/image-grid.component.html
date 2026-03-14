@@ -1,0 +1,42 @@
+<div class="image-grid-container">
+  <!-- Toolbar -->
+  <div class="grid-toolbar flex align-items-center justify-content-between gap-2 mb-3 flex-wrap">
+    <div class="flex align-items-center gap-2">
+      <p-tag [value]="totalResults + ' resultados'" severity="info" icon="pi pi-images"></p-tag>
+    </div>
+
+    <div class="flex align-items-center gap-2 flex-wrap">
+      <!-- Sort -->
+      <p-selectButton [options]="sortOptions" [(ngModel)]="selectedSort" (onChange)="onSortChange()"
+                       optionLabel="label" optionValue="value" styleClass="p-selectbutton-sm"></p-selectButton>
+
+      <!-- Basemap -->
+      <p-selectButton [options]="basemapOptions" [(ngModel)]="basemap" (onChange)="onBasemapChange()"
+                       optionLabel="label" optionValue="value" styleClass="p-selectbutton-sm"></p-selectButton>
+
+      <!-- Grid size -->
+      <p-selectButton [options]="gridOptions" [(ngModel)]="gridSize"
+                       optionLabel="label" optionValue="value" styleClass="p-selectbutton-sm"></p-selectButton>
+    </div>
+  </div>
+
+  <!-- Grid -->
+  <div class="image-grid" [ngStyle]="{'grid-template-columns': 'repeat(' + gridSize + ', 1fr)'}">
+    <app-stac-image-card
+      *ngFor="let item of displayItems; let i = index; trackBy: trackById"
+      [item]="item"
+      [spectralIndex]="spectralIndex"
+      [renderMode]="renderMode"
+      [aoiGeometry]="aoiGeometry"
+      [basemap]="basemap"
+      [viewBbox]="viewBbox"
+      [initDelay]="i * 200">
+    </app-stac-image-card>
+  </div>
+
+  <!-- Empty state -->
+  <div *ngIf="displayItems.length === 0" class="flex flex-column align-items-center justify-content-center py-5">
+    <i class="pi pi-images text-4xl text-color-secondary mb-2"></i>
+    <span class="text-color-secondary">Nenhum resultado encontrado</span>
+  </div>
+</div>

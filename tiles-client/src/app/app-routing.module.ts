@@ -13,6 +13,8 @@ const routes: Routes = [
             { path: '', data: { breadcrumb: 'Grid Maps' }, loadChildren: () => import('./grid-map/map-grid.module').then(m => m.MapGridModule) },
             { path: 'imagery', data: { breadcrumb: 'Catálogo de Imagens' }, loadChildren: () => import('./image-catalog/image-catalog.module').then(m => m.ImageCatalogModule) },
             { path: 'embedding', data: { breadcrumb: 'Embedding Maps' }, loadChildren: () => import('./embedding-maps/embedding-maps.module').then(m => m.EmbeddingMapsModule) },
+            { path: 'stac/earth-search', data: { breadcrumb: 'STAC Earth Search' }, loadChildren: () => import('./stac-earth-search/stac-earth-search.module').then(m => m.StacEarthSearchModule) },
+            { path: 'stac/copernicus', data: { breadcrumb: 'STAC Copernicus' }, loadChildren: () => import('./stac-copernicus/stac-copernicus.module').then(m => m.StacCopernicusModule) },
         ]
     },
     { path: 'auth', data: { breadcrumb: 'Auth' }, loadChildren: () => import('./demo/components/auth/auth.module').then(m => m.AuthModule) },

@@ -1,0 +1,26 @@
+<div class="stac-card">
+  <div class="card-header flex justify-content-between align-items-center px-2 py-1">
+    <span class="text-sm font-medium">{{ itemDate }}</span>
+    <p-tag *ngIf="cloudCover !== null"
+           [value]="(cloudCover | number:'1.1-1') + '%'"
+           [severity]="cloudSeverity"
+           icon="pi pi-cloud"
+           [pTooltip]="'Cobertura de nuvens: ' + (cloudCover | number:'1.1-1') + '%'"
+           styleClass="text-xs">
+    </p-tag>
+    <span *ngIf="platform" class="text-xs text-color-secondary">{{ platform }}</span>
+  </div>
+
+  <div class="card-map-container">
+    <div #cardMap class="card-map"></div>
+
+    <div *ngIf="loading" class="loading-overlay">
+      <p-progressSpinner [style]="{ width: '30px', height: '30px' }" strokeWidth="4"></p-progressSpinner>
+    </div>
+
+    <div *ngIf="error && !loading" class="error-overlay">
+      <i class="pi pi-exclamation-triangle text-yellow-500"></i>
+      <span class="text-xs">{{ errorDetail || 'Falha ao carregar' }}</span>
+    </div>
+  </div>
+</div>

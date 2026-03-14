@@ -1,0 +1,95 @@
+<div class="aoi-map-wrapper">
+  <!-- Map -->
+  <div class="aoi-map-frame">
+    <div #mapContainer class="aoi-map"></div>
+
+    <!-- Draw mode overlay -->
+    <div *ngIf="drawingMode" class="draw-overlay">
+      <span>Clique e arraste para desenhar o retângulo</span>
+    </div>
+
+    <!-- Map toolbar (top-right) -->
+    <div class="map-toolbar">
+      <button pButton [icon]="drawingMode ? 'pi pi-times' : 'pi pi-pencil'"
+              [class]="drawingMode ? 'p-button-sm p-button-danger' : 'p-button-sm p-button-outlined'"
+              (click)="toggleDrawMode()"
+              [pTooltip]="drawingMode ? 'Cancelar' : 'Desenhar área'">
+      </button>
+    </div>
+  </div>
+
+  <!-- Controls -->
+  <div class="aoi-controls">
+    <!-- Basemap -->
+    <div class="control-row">
+      <p-selectButton [options]="basemapOptions" [(ngModel)]="basemap" (onChange)="onBasemapChange()"
+                       optionLabel="label" optionValue="value" styleClass="p-selectbutton-sm w-full">
+      </p-selectButton>
+    </div>
+
+    <!-- Coordinates -->
+    <div class="control-row flex gap-2 align-items-center">
+      <div class="flex-1">
+        <label class="control-label">Lng</label>
+        <p-inputNumber [(ngModel)]="lng" [minFractionDigits]="4" [maxFractionDigits]="4"
+                        mode="decimal" inputStyleClass="w-full p-inputtext-sm">
+        </p-inputNumber>
+      </div>
+      <div class="flex-1">
+        <label class="control-label">Lat</label>
+        <p-inputNumber [(ngModel)]="lat" [minFractionDigits]="4" [maxFractionDigits]="4"
+                        mode="decimal" inputStyleClass="w-full p-inputtext-sm">
+        </p-inputNumber>
+      </div>
+      <button pButton icon="pi pi-map-marker" class="p-button-sm p-button-text mt-3"
+              (click)="goToCenter()" pTooltip="Ir para coordenadas">
+      </button>
+    </div>
+
+    <!-- GeoJSON upload -->
+    <div class="control-row">
+      <div class="flex gap-2 align-items-center">
+        <p-fileUpload mode="basic" accept=".geojson,.json" [auto]="true"
+                      chooseLabel="Importar GeoJSON" chooseIcon="pi pi-upload"
+                      styleClass="p-button-sm p-button-outlined w-full"
+                      (onSelect)="handleGeoJsonUpload($event)">
+        </p-fileUpload>
+      </div>
+    </div>
+
+    <!-- GeoJSON file info & navigation -->
+    <div *ngIf="geoJsonFileName" class="control-row">
+      <div class="geojson-info flex align-items-center justify-content-between">
+        <div class="flex align-items-center gap-2">
+          <i class="pi pi-file text-primary"></i>
+          <span class="text-sm text-overflow-ellipsis overflow-hidden white-space-nowrap" style="max-width: 160px">{{ geoJsonFileName }}</span>
+        </div>
+        <button pButton icon="pi pi-times" class="p-button-sm p-button-text p-button-danger" (click)="clearGeoJson()"></button>
+      </div>
+
+      <div *ngIf="geoJsonFeatures.length > 1" class="flex align-items-center justify-content-center gap-2 mt-2">
+        <button pButton icon="pi pi-chevron-left" class="p-button-sm p-button-rounded p-button-text"
+                (click)="prevFeature()" [disabled]="currentFeatureIndex === 0"></button>
+        <span class="text-sm font-medium">{{ currentFeatureIndex + 1 }} / {{ geoJsonFeatures.length }}</span>
+        <button pButton icon="pi pi-chevron-right" class="p-button-sm p-button-rounded p-button-text"
+                (click)="nextFeature()" [disabled]="currentFeatureIndex === geoJsonFeatures.length - 1"></button>
+      </div>
+    </div>
+
+    <!-- Bbox status -->
+    <div class="control-row">
+      <div *ngIf="currentBbox" class="bbox-status flex align-items-center justify-content-between">
+        <span class="text-xs font-mono">
+          {{ currentBbox[0] | number:'1.2-2' }}, {{ currentBbox[1] | number:'1.2-2' }} |
+          {{ currentBbox[2] | number:'1.2-2' }}, {{ currentBbox[3] | number:'1.2-2' }}
+        </span>
+        <button pButton icon="pi pi-times" class="p-button-sm p-button-text p-button-secondary"
+                (click)="clearBbox()" pTooltip="Limpar área"></button>
+      </div>
+      <div *ngIf="!currentBbox" class="no-bbox-hint">
+        <i class="pi pi-info-circle"></i>
+        Clique no botão <i class="pi pi-pencil"></i> para desenhar a área de interesse
+      </div>
+    </div>
+  </div>
+</div>

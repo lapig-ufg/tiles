@@ -1,0 +1,177 @@
+<div class="stac-earth-search">
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <!-- Header -->
+    <div class="sidebar-header">
+      <h3><i class="pi pi-search"></i> Earth Search</h3>
+      <span class="text-xs text-color-secondary">Element84 STAC API</span>
+    </div>
+
+    <!-- 1. Collection -->
+    <section class="sidebar-section">
+      <h4 class="section-title">Coleção</h4>
+      <div class="collection-list">
+        <div *ngFor="let col of collections"
+             class="collection-item"
+             [class.active]="selectedCollection === col.id"
+             (click)="selectedCollection = col.id; onCollectionChange()">
+          <div class="collection-radio">
+            <p-radioButton [value]="col.id" [(ngModel)]="selectedCollection"
+                            (onClick)="onCollectionChange()"></p-radioButton>
+          </div>
+          <div class="collection-info">
+            <span class="collection-name">{{ col.label }}</span>
+            <div class="collection-tags">
+              <span class="micro-tag info">{{ col.resolution }}</span>
+              <span *ngIf="col.free" class="micro-tag success">Free</span>
+              <span *ngIf="col.hasBands" class="micro-tag warn">COG</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. Area of Interest -->
+    <section class="sidebar-section">
+      <h4 class="section-title">Área de Interesse</h4>
+      <app-aoi-map
+        [basemap]="basemap"
+        (bboxChange)="onBboxChange($event)"
+        (geometryChange)="onGeometryChange($event)">
+      </app-aoi-map>
+    </section>
+
+    <!-- 3. Period -->
+    <section class="sidebar-section">
+      <h4 class="section-title">Período</h4>
+      <div class="period-presets">
+        <button *ngFor="let preset of periodPresets"
+                pButton [label]="preset.label"
+                class="p-button-sm p-button-text preset-btn"
+                (click)="applyPeriodPreset(preset)">
+        </button>
+      </div>
+      <div class="flex gap-2 mt-2">
+        <div class="flex-1">
+          <label class="field-label">Início</label>
+          <p-calendar [(ngModel)]="startDate" dateFormat="dd/mm/yy" [showIcon]="true"
+                       inputStyleClass="w-full p-inputtext-sm" (onClose)="onFilterChange()"
+                       appendTo="body"></p-calendar>
+        </div>
+        <div class="flex-1">
+          <label class="field-label">Fim</label>
+          <p-calendar [(ngModel)]="endDate" dateFormat="dd/mm/yy" [showIcon]="true"
+                       inputStyleClass="w-full p-inputtext-sm" (onClose)="onFilterChange()"
+                       appendTo="body"></p-calendar>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Filters -->
+    <section class="sidebar-section">
+      <h4 class="section-title">Filtros</h4>
+
+      <div *ngIf="supportsCloudFilter" class="filter-row mb-2">
+        <label class="field-label"><i class="pi pi-cloud"></i> Nuvens máx.</label>
+        <div class="cloud-slider-row">
+          <div class="cloud-slider-track">
+            <p-slider [(ngModel)]="maxCloud" [min]="0" [max]="100"
+                       (onSlideEnd)="onFilterChange()"></p-slider>
+          </div>
+          <span class="cloud-value">{{ maxCloud }}%</span>
+        </div>
+      </div>
+
+      <div class="filter-row">
+        <label class="field-label">Limite de resultados</label>
+        <p-inputNumber [(ngModel)]="limit" [min]="1" [max]="50" [showButtons]="true"
+                        inputStyleClass="w-full p-inputtext-sm" (onInput)="onFilterChange()">
+        </p-inputNumber>
+      </div>
+    </section>
+
+    <!-- 5. Spectral Index -->
+    <section class="sidebar-section" *ngIf="hasBands">
+      <h4 class="section-title">Índice Espectral</h4>
+      <div class="index-grid">
+        <button *ngFor="let idx of spectralIndices"
+                pButton [label]="idx.id"
+                [class]="selectedIndex === idx.id ? 'p-button-sm index-btn active' : 'p-button-sm p-button-text index-btn'"
+                (click)="selectedIndex = idx.id; onIndexChange()">
+        </button>
+      </div>
+      <div class="index-info mt-2">
+        <strong>{{ currentSpectralIndex.label }}</strong>
+        <code>{{ currentSpectralIndex.formula }}</code>
+      </div>
+      <div *ngIf="currentSpectralIndex.legend" class="legend-bar mt-2">
+        <div *ngFor="let stop of currentSpectralIndex.legend" class="legend-stop">
+          <div class="legend-color" [style.background-color]="stop.color"></div>
+          <span>{{ stop.label }}</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Search -->
+    <div class="sidebar-footer">
+      <button pButton label="Buscar Imagens" icon="pi pi-search"
+              class="w-full search-btn"
+              [loading]="loading"
+              [disabled]="!canSearch"
+              (click)="searchImages()">
+      </button>
+      <div *ngIf="!canSearch && missingRequirements.length > 0" class="missing-hint">
+        Faltando: {{ missingRequirements.join(', ') }}
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="main-content">
+    <!-- Loading -->
+    <div *ngIf="loading" class="state-container">
+      <p-progressSpinner [style]="{ width: '48px', height: '48px' }"></p-progressSpinner>
+      <span class="text-color-secondary mt-2">Buscando imagens...</span>
+    </div>
+
+    <!-- Error -->
+    <div *ngIf="errorMessage && !loading" class="state-container">
+      <i class="pi pi-exclamation-triangle text-4xl" style="color: var(--red-400)"></i>
+      <span class="text-color-secondary mt-2">{{ errorMessage }}</span>
+      <button pButton label="Tentar novamente" icon="pi pi-refresh"
+              class="p-button-sm p-button-outlined mt-3" (click)="searchImages()"></button>
+    </div>
+
+    <!-- Results -->
+    <app-image-grid *ngIf="items.length > 0 && !loading"
+                    [items]="items"
+                    [gridSize]="gridSize"
+                    [spectralIndex]="currentSpectralIndex"
+                    [renderMode]="renderMode"
+                    [aoiGeometry]="activeFeature"
+                    [basemap]="basemap"
+                    [totalResults]="totalResults"
+                    [viewBbox]="currentBbox">
+    </app-image-grid>
+
+    <!-- Empty result -->
+    <div *ngIf="searched && items.length === 0 && !loading && !errorMessage" class="state-container">
+      <i class="pi pi-inbox text-4xl text-color-secondary"></i>
+      <span class="text-lg text-color-secondary mt-2">Nenhuma imagem encontrada</span>
+      <span class="text-sm text-color-secondary">Tente expandir o período ou aumentar o limite de nuvens</span>
+    </div>
+
+    <!-- Initial -->
+    <div *ngIf="!searched && !loading && !errorMessage" class="state-container">
+      <i class="pi pi-globe text-5xl" style="color: var(--primary-color); opacity: 0.5"></i>
+      <span class="text-xl mt-3" style="color: var(--text-color); font-weight: 600">Earth Search Explorer</span>
+      <span class="text-sm text-color-secondary mt-1">Catálogo STAC com imagens Sentinel-2, Landsat, NAIP e mais</span>
+      <div class="steps-hint mt-4">
+        <div class="step"><span class="step-num">1</span> Selecione uma coleção</div>
+        <div class="step"><span class="step-num">2</span> Desenhe a área de interesse</div>
+        <div class="step"><span class="step-num">3</span> Defina o período</div>
+        <div class="step"><span class="step-num">4</span> Clique em "Buscar Imagens"</div>
+      </div>
+    </div>
+  </main>
+</div>

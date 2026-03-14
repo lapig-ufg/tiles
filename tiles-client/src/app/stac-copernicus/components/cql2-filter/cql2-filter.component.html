@@ -1,0 +1,50 @@
+<div class="cql2-filter flex flex-column gap-2">
+  <div *ngFor="let row of rows; let i = index" class="flex gap-2 align-items-center">
+    <!-- Property -->
+    <p-dropdown [options]="propertyOptions" [(ngModel)]="row.property"
+                optionLabel="label" optionValue="value"
+                placeholder="Propriedade" styleClass="w-8rem text-sm"
+                [filter]="true" filterBy="label"
+                (onChange)="onValueChange()">
+    </p-dropdown>
+
+    <!-- Operator -->
+    <p-dropdown [options]="operatorOptions" [(ngModel)]="row.operator"
+                optionLabel="label" optionValue="value"
+                styleClass="w-5rem text-sm"
+                (onChange)="onValueChange()">
+    </p-dropdown>
+
+    <!-- Value - dynamic by type -->
+    <ng-container [ngSwitch]="getPropertyType(row.property)">
+      <p-inputNumber *ngSwitchCase="'number'" [(ngModel)]="row.value"
+                     inputStyleClass="w-6rem p-inputtext-sm"
+                     (onInput)="onValueChange()">
+      </p-inputNumber>
+
+      <p-inputNumber *ngSwitchCase="'integer'" [(ngModel)]="row.value"
+                     inputStyleClass="w-6rem p-inputtext-sm"
+                     [useGrouping]="false"
+                     (onInput)="onValueChange()">
+      </p-inputNumber>
+
+      <p-calendar *ngSwitchCase="getPropertyFormat(row.property) === 'date-time' ? 'string' : ''"
+                  [(ngModel)]="row.value" dateFormat="yy-mm-dd"
+                  [showIcon]="true" inputStyleClass="w-8rem p-inputtext-sm"
+                  (onClose)="onValueChange()">
+      </p-calendar>
+
+      <input *ngSwitchDefault pInputText [(ngModel)]="row.value"
+             class="p-inputtext-sm w-6rem"
+             (input)="onValueChange()">
+    </ng-container>
+
+    <!-- Remove button -->
+    <button pButton icon="pi pi-times" class="p-button-sm p-button-text p-button-danger"
+            (click)="removeRow(i)"></button>
+  </div>
+
+  <button pButton label="Adicionar filtro" icon="pi pi-plus"
+          class="p-button-sm p-button-outlined align-self-start"
+          (click)="addRow()"></button>
+</div>

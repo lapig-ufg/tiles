@@ -36,7 +36,12 @@
                         "allowedCommonJsDependencies": [
                             "quill",
                             "rbush",
-                            "plotly.js/dist/plotly.min.js"
+                            "plotly.js/dist/plotly.min.js",
+                            "geotiff",
+                            "xml-utils/find-tags-by-name.js",
+                            "xml-utils/get-attribute.js",
+                            "pbf",
+                            "earcut"
                         ]
                     },
                     "configurations": {
@@ -53,7 +58,8 @@
                                     "maximumError": "5mb"
                                 }
                             ],
-                            "outputHashing": "all"
+                            "outputHashing": "all",
+                            "baseHref": "/tiles/"
                         },
                         "ghpages": {
                             "budgets": [

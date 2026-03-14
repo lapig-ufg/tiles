@@ -33,6 +33,22 @@ export class AppMenuComponent implements OnInit {
                 ]
             },
             {
+                label: 'STAC',
+                icon: 'pi pi-globe',
+                items: [
+                    {
+                        label: 'Earth Search',
+                        icon: 'pi pi-fw pi-search',
+                        routerLink: ['/stac/earth-search']
+                    },
+                    {
+                        label: 'Copernicus',
+                        icon: 'pi pi-fw pi-cloud',
+                        routerLink: ['/stac/copernicus']
+                    },
+                ]
+            },
+            {
                 label: 'ANALYSIS',
                 icon: 'pi pi-chart-bar',
                 items: [
