@@ -127,6 +127,7 @@ export class StacImageCardComponent implements AfterViewInit, OnDestroy {
     try {
       if (this.spectralIndex.type === 'rgb') {
         const rawUrl = this.item.assets['visual']?.href
+                    || this.item.assets['RGB']?.href
                     || this.item.assets['rendered_preview']?.href
                     || this.item.assets['thumbnail']?.href;
         if (!rawUrl) {

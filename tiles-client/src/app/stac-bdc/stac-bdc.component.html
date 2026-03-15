@@ -99,7 +99,7 @@
     </section>
 
     <!-- 5. Spectral Index -->
-    <section class="sidebar-section" *ngIf="hasBands">
+    <section class="sidebar-section" *ngIf="hasBands && spectralIndices.length > 1">
       <h4 class="section-title">Índice Espectral</h4>
       <div class="index-grid">
         <button *ngFor="let idx of spectralIndices"

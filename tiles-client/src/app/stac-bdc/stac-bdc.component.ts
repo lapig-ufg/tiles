@@ -34,9 +34,9 @@ const BDC_STATE_CONFIG: ScreenStateConfig = {
   strategy: 'storage-only',
   debounceMs: 400,
   ttlMs: 7 * 24 * 60 * 60 * 1000,
-  schemaVersion: 1,
+  schemaVersion: 2,
   fields: {
-    selectedCollection: { type: 'string', defaultValue: 'CB4A-WFI-L4-SR-1' },
+    selectedCollection: { type: 'string', defaultValue: 'CB4A-WPM-PCA-FUSED-1' },
     startDate: { type: 'date' },
     endDate: { type: 'date' },
     maxCloud: { type: 'number', defaultValue: 30 },
@@ -55,7 +55,7 @@ const BDC_STATE_CONFIG: ScreenStateConfig = {
 export class StacBdcComponent implements OnInit, OnDestroy {
   collections = BDC_COLLECTIONS;
   collectionGroups = BDC_COLLECTION_GROUPS;
-  selectedCollection: string = 'CB4A-WFI-L4-SR-1';
+  selectedCollection: string = 'CB4A-WPM-PCA-FUSED-1';
 
   startDate: Date | null = null;
   endDate: Date | null = null;
@@ -99,7 +99,7 @@ export class StacBdcComponent implements OnInit, OnDestroy {
       BDC_STATE_CONFIG,
       this.route, this.router, this.screenStateService,
       {
-        selectedCollection: 'CB4A-WFI-L4-SR-1',
+        selectedCollection: 'CB4A-WPM-PCA-FUSED-1',
         startDate: null,
         endDate: null,
         maxCloud: 30,

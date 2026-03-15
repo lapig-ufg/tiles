@@ -84,6 +84,29 @@ export function getBdcSpectralIndices(config: BdcCollectionConfig): SpectralInde
   const indices: SpectralIndex[] = [];
   const mapping = config.bandMapping;
 
+  // RGB asset único (ex.: CB4A-WPM-PCA-FUSED-1) — int8, sem índices espectrais
+  if (config.rgbAssetKey) {
+    indices.push({
+      id: 'TCI',
+      label: 'True Color',
+      formula: 'RGB: Red, Green, Blue',
+      type: 'rgb',
+      bands: [],
+      bandMapping: mapping,
+      style: {
+        color: [
+          'array',
+          ['clamp', ['*', ['/', ['band', 1], 255], 1.2], 0, 1],
+          ['clamp', ['*', ['/', ['band', 2], 255], 1.2], 0, 1],
+          ['clamp', ['*', ['/', ['band', 3], 255], 1.2], 0, 1],
+          1,
+        ],
+        gamma: 0.9,
+      },
+    });
+    return indices;
+  }
+
   // TCI — sempre disponível se tem R, G, B
   if (hasAllBands(config, ['red', 'green', 'blue'])) {
     indices.push({
