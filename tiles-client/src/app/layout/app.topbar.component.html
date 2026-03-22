@@ -15,15 +15,22 @@
 
             <ng-template #searchForm>
               <li class="topbar-search">
-                <span class="p-input-icon-left">
-                  <input type="text" pInputText placeholder="Latitude" [(ngModel)]="latitude" class="w-12rem sm:w-full">
-                </span>
-                <span class="p-input-icon-left ml-2">
-                  <input type="text" pInputText placeholder="Longitude" [(ngModel)]="longitude" class="w-12rem sm:w-full">
-                </span>
-                <button pButton type="button" icon="pi pi-search" class="p-button-text p-button-secondary p-button-rounded flex-shrink-0 ml-3"
-                        [disabled]="!latitude && !longitude" (click)="onSearchPoint()">
-                </button>
+                <div class="flex align-items-center">
+                  <div class="flex flex-column">
+                    <input type="text" pInputText
+                           placeholder="Latitude, Longitude (ex: -15.78, -47.92)"
+                           [(ngModel)]="coordInput"
+                           (ngModelChange)="onCoordInputChange()"
+                           (keydown.enter)="isValidCoord && onSearchPoint()"
+                           class="w-22rem sm:w-full"
+                           [ngClass]="{'ng-invalid ng-dirty': coordError}">
+                    <small *ngIf="coordError" class="p-error mt-1">{{ coordError }}</small>
+                    <small *ngIf="coordWarning && !coordError" class="text-yellow-500 mt-1">{{ coordWarning }}</small>
+                  </div>
+                  <button pButton type="button" icon="pi pi-search" class="p-button-text p-button-secondary p-button-rounded flex-shrink-0 ml-3"
+                          [disabled]="!isValidCoord" (click)="onSearchPoint()">
+                  </button>
+                </div>
               </li>
             </ng-template>
         </ul>
