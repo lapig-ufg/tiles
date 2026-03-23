@@ -155,5 +155,5 @@ python -m app.prewarm popular
 1. Fork o projeto
 2. Crie sua branch (`git checkout -b feature/AmazingFeature`)
 3. Commit suas mudanças (`git commit -m 'Add some AmazingFeature'`)
-4. Push para a branch (`git push origin feature/AmazingFeature`)
+4. Push para a branch (`git push origin feature/AmazingFeature`).
 5. Abra um Pull Request
