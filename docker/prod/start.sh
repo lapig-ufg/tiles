@@ -19,6 +19,7 @@ echo "Iniciando servidor com $WORKERS workers..."
 
 # Inicia Gunicorn com configurações otimizadas
 exec gunicorn main:app \
+    --config /app/gunicorn_conf.py \
     --workers $WORKERS \
     --worker-class uvicorn.workers.UvicornWorker \
     --bind 0.0.0.0:8083 \
@@ -26,11 +27,9 @@ exec gunicorn main:app \
     --max-requests ${MAX_REQUESTS:-10000} \
     --max-requests-jitter ${MAX_REQUESTS_JITTER:-1000} \
     --timeout 30 \
-    --keepalive 5 \
     --access-logfile - \
     --error-logfile - \
     --log-level ${LOG_LEVEL:-info} \
-    --preload \
     --graceful-timeout 30 \
     --limit-request-line 0 \
     --limit-request-field_size 0

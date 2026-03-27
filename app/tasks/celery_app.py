@@ -2,10 +2,35 @@
 Celery configuration and initialization
 Optimized for high-performance tile processing and caching
 """
+import os
+import socket
+
 from celery import Celery
+from celery.signals import worker_process_init, worker_process_shutdown
 from kombu import Queue, Exchange
 
 from app.core.config import settings
+
+
+# ---------------------------------------------------------------------------
+# Signals — inicialização do pool GEE por worker process (prefork)
+# ---------------------------------------------------------------------------
+
+@worker_process_init.connect
+def _init_gee_for_celery_worker(**kwargs):
+    """Cada worker Celery (prefork) adquire uma SA do pool ao iniciar."""
+    from app.core.gee_auth import initialize_earth_engine
+
+    worker_id = f"{socket.gethostname()}-celery-{os.getpid()}"
+    initialize_earth_engine(worker_id)
+
+
+@worker_process_shutdown.connect
+def _shutdown_gee_for_celery_worker(**kwargs):
+    """Libera a SA de volta ao pool ao encerrar o worker."""
+    from app.core.gee_auth import shutdown_earth_engine
+
+    shutdown_earth_engine()
 
 # Create Celery instance
 celery_app = Celery(

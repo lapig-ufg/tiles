@@ -29,6 +29,7 @@ from app.core.errors import generate_error_image
 from app.middleware.rate_limiter import limit_sentinel, limit_landsat
 from app.services.tile import tile2goehashBBOX
 from app.utils.capabilities import get_capabilities_provider
+from app.core.gee_pool import gee_retry
 from app.utils.http import http_get_bytes as _http_get_bytes
 from app.visualization.vis_params_db import get_landsat_vis_params_async
 from app.visualization.vis_params_loader import get_visparams, get_landsat_vis_params, get_landsat_collection
@@ -106,6 +107,7 @@ async def _vis_param(visparam: str) -> dict[str, Any]:
     return vis
 
 
+@gee_retry()
 def _create_s2_layer_sync(geom: ee.Geometry, dates: Dict[str, str], vis: dict) -> str:
     s2 = (ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
           .filterDate(dates["dtStart"], dates["dtEnd"])
@@ -169,6 +171,7 @@ def add_cloud_score_fast(image, tile_geometry):
     })
 
 
+@gee_retry()
 def _create_landsat_layer_sync(geom: ee.Geometry,
                                dates: Dict[str, str],
                                visparam_name: str,
@@ -279,6 +282,7 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
             raise
 
 
+@gee_retry()
 def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], vis: dict, composite_mode: str = "BEST_IMAGE") -> str:
     """Create Landsat layer with pre-processed vis params (no async calls)"""
     def scale(img):

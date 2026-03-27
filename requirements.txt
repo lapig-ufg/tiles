@@ -102,3 +102,4 @@ flower==2.0.1
 opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp-proto-http==1.25.0
+gunicorn==21.2.0

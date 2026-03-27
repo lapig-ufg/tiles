@@ -27,6 +27,8 @@ from app.cache.cache import (
 from app.core.config import logger, settings
 from app.core.errors import generate_error_image
 from app.middleware.rate_limiter import limit_imagery
+from app.core.gee_pool import gee_retry
+from app.utils.ee_compute import compute_value
 from app.utils.http import http_get_bytes
 from app.visualization.vis_params_db import get_landsat_vis_params_async
 from app.visualization.vis_params_loader import get_visparams, generate_landsat_list
@@ -132,13 +134,14 @@ def _tile_meta_key(layer: str, image_id: str, visparam: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# EE builders — catálogo (sync, rodam no executor)                             #
+# EE builders — catálogo (async via REST API)                                  #
 # --------------------------------------------------------------------------- #
 
-def _list_s2_catalog_sync(
+async def _list_s2_catalog(
     region: ee.Geometry, start: str, end: str,
     sort: str, max_cloud: int, limit: int, offset: int,
 ) -> dict:
+    """Lista imagens S2 via REST API assíncrona (substitui .getInfo())."""
     col = (
         ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
         .filterDate(start, end)
@@ -166,14 +169,15 @@ def _list_s2_catalog_sync(
         return ee.Dictionary(props)
 
     items = page.map(extract)
-    result = ee.Dictionary({"total": total, "items": items}).getInfo()
-    return result
+    expr = ee.Dictionary({"total": total, "items": items})
+    return await compute_value(expr)
 
 
-def _list_landsat_catalog_sync(
+async def _list_landsat_catalog(
     region: ee.Geometry, start: str, end: str,
     sort: str, max_cloud: int, limit: int, offset: int,
 ) -> dict:
+    """Lista imagens Landsat via REST API assíncrona (substitui .getInfo())."""
     dt_start = datetime.strptime(start, "%Y-%m-%d")
     dt_end = datetime.strptime(end, "%Y-%m-%d")
     collections = generate_landsat_list(dt_start.year, dt_end.year)
@@ -213,14 +217,15 @@ def _list_landsat_catalog_sync(
         return ee.Dictionary(props)
 
     items = page.map(extract)
-    result = ee.Dictionary({"total": total, "items": items}).getInfo()
-    return result
+    expr = ee.Dictionary({"total": total, "items": items})
+    return await compute_value(expr)
 
 
 # --------------------------------------------------------------------------- #
 # EE builders — tile por imagem individual (sync, rodam no executor)           #
 # --------------------------------------------------------------------------- #
 
+@gee_retry()
 def _create_s2_image_layer_sync(image_id: str, vis: dict) -> str:
     """Gera URL de tiles para uma imagem S2 individual."""
     image = ee.Image(image_id)
@@ -230,6 +235,7 @@ def _create_s2_image_layer_sync(image_id: str, vis: dict) -> str:
     return map_id["tile_fetcher"].url_format
 
 
+@gee_retry()
 def _create_landsat_image_layer_sync(image_id: str, vis: dict) -> str:
     """Gera URL de tiles para uma imagem Landsat individual."""
     image = ee.Image(image_id)
@@ -350,17 +356,13 @@ async def catalog(
 
     # EE query
     region = _point_to_region(lat, lon, bufferMeters)
-    loop = asyncio.get_event_loop()
-
     try:
         if layer == "s2_harmonized":
-            raw = await loop.run_in_executor(
-                ee_executor, _list_s2_catalog_sync,
+            raw = await _list_s2_catalog(
                 region, start, end, sort, maxCloud, limit, offset,
             )
         else:
-            raw = await loop.run_in_executor(
-                ee_executor, _list_landsat_catalog_sync,
+            raw = await _list_landsat_catalog(
                 region, start, end, sort, maxCloud, limit, offset,
             )
     except Exception:

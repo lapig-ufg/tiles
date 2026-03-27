@@ -27,7 +27,7 @@ services:
     tty: true
     volumes:
       - '/etc/localtime:/etc/localtime'
-      - './.service-accounts/gee.json:/app/.service-accounts/gee.json'
+      - './.service-accounts:/app/.service-accounts:ro'
       - './cache:/app/cache'  # Cache local para hot tiles
     depends_on:
       - valkey

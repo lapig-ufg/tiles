@@ -1,3 +1,9 @@
+"""
+Endpoints de séries temporais — NDVI (Landsat, Sentinel-2, MODIS), NDDI, Precipitação.
+
+Usa REST API v1 do GEE (ee_compute) para computação assíncrona e paralela,
+substituindo .getInfo() por chamadas HTTP não-bloqueantes.
+"""
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -8,17 +14,29 @@ from fastapi.responses import JSONResponse
 from app.services.timeseries_service import (
     apply_smoothing,
     build_plotly_response,
-    fetch_precipitation,
+    build_precipitation_expr,
     parse_smoothing_method,
     process_gee_region_data,
+    process_precipitation_data,
 )
+from app.utils.ee_compute import compute_parallel, compute_value
 from app.utils.smoothing.config import Satellite
 
 router = APIRouter()
 
 
+def _handle_ee_quota_error(exc: ee.EEException) -> None:
+    """Registra rotação de SA quando o erro é de quota/429."""
+    error_msg = str(exc).lower()
+    if "429" in error_msg or "quota" in error_msg or "too many requests" in error_msg:
+        from app.core.gee_auth import get_gee_manager
+        mgr = get_gee_manager()
+        if mgr:
+            mgr.rotate_on_429()
+
+
 @router.get("/landsat/{lat}/{lon}")
-def timeseries_landsat(
+async def timeseries_landsat(
         lat: float,
         lon: float,
         data_inicio: str = Query(None, description="Start date in YYYY-MM-DD format"),
@@ -70,10 +88,16 @@ def timeseries_landsat(
             .map(mask).map(apply_scale).map(calculate_ndvi) \
             .sort('system:time_start')
 
-        ndvi_data = collections.select(['NDVI']).getRegion(point, 10).getInfo()
+        # Construir expressões EE (lazy — sem chamada ao servidor)
+        ndvi_expr = collections.select(['NDVI']).getRegion(point, 10)
+        precip_expr = build_precipitation_expr(point, data_inicio, data_fim, scale=500)
+
+        # Computar NDVI e precipitação em paralelo via REST API
+        ndvi_data, precip_data = await compute_parallel(ndvi_expr, precip_expr)
+
         ndvi_dates, ndvi_values = process_gee_region_data(ndvi_data, 'NDVI', valid_range=(0, 1))
         ndvi_smoothed = apply_smoothing(ndvi_dates, ndvi_values, Satellite.LANDSAT, smoothing_method)
-        precip_dates, precip_values = fetch_precipitation(point, data_inicio, data_fim, scale=500)
+        precip_dates, precip_values = process_precipitation_data(precip_data)
 
         plotly_data = build_plotly_response(
             ndvi_dates, ndvi_values, ndvi_smoothed,
@@ -82,12 +106,14 @@ def timeseries_landsat(
         return JSONResponse(content=plotly_data)
 
     except ee.EEException as e:
+        _handle_ee_quota_error(e)
         raise HTTPException(status_code=500, detail=f"Error fetching data from Earth Engine: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
+
 @router.get("/nddi/{lat}/{lon}")
-def timeseries_nddi(
+async def timeseries_nddi(
     lat: float,
     lon: float,
     data_inicio: str = Query('1985-01-01', description="Start date in YYYY-MM-DD format"),
@@ -108,7 +134,11 @@ def timeseries_nddi(
             return image.addBands(nddi).set('system:time_start', date.millis())
 
         nddi_collection = mosaic.map(calculate_nddi).filterDate(data_inicio, data_fim).filterBounds(point)
-        nddi_data = nddi_collection.select('NDDI').getRegion(point, 30).getInfo()
+
+        # Computar via REST API (async)
+        nddi_expr = nddi_collection.select('NDDI').getRegion(point, 30)
+        nddi_data = await compute_value(nddi_expr)
+
         nddi_dates, nddi_values = process_gee_region_data(nddi_data, 'NDDI')
 
         plotly_data = [
@@ -125,12 +155,14 @@ def timeseries_nddi(
         return JSONResponse(content=plotly_data)
 
     except ee.EEException as e:
+        _handle_ee_quota_error(e)
         raise HTTPException(status_code=500, detail=f"Error fetching data from Earth Engine: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
+
 @router.get("/modis/{lat}/{lon}")
-def timeseries_modis(
+async def timeseries_modis(
         lat: float,
         lon: float,
         data_inicio: str = Query(None, description="Start date in YYYY-MM-DD format"),
@@ -152,10 +184,16 @@ def timeseries_modis(
             return image.select('NDVI').multiply(0.0001).copyProperties(image, ['system:time_start'])
 
         modis_scaled = modis.map(scale_ndvi)
-        ndvi_data = modis_scaled.getRegion(point, 250).getInfo()
+
+        # Construir expressões (lazy) e computar em paralelo
+        ndvi_expr = modis_scaled.getRegion(point, 250)
+        precip_expr = build_precipitation_expr(point, data_inicio, data_fim, scale=5000)
+
+        ndvi_data, precip_data = await compute_parallel(ndvi_expr, precip_expr)
+
         ndvi_dates, ndvi_values = process_gee_region_data(ndvi_data, 'NDVI', valid_range=(-1, 1))
         ndvi_smoothed = apply_smoothing(ndvi_dates, ndvi_values, Satellite.MODIS, smoothing_method)
-        precip_dates, precip_values = fetch_precipitation(point, data_inicio, data_fim, scale=5000)
+        precip_dates, precip_values = process_precipitation_data(precip_data)
 
         plotly_data = build_plotly_response(
             ndvi_dates, ndvi_values, ndvi_smoothed,
@@ -164,13 +202,14 @@ def timeseries_modis(
         return JSONResponse(content=plotly_data)
 
     except ee.EEException as e:
+        _handle_ee_quota_error(e)
         raise HTTPException(status_code=500, detail=f"Error fetching data from Earth Engine: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")
 
 
 @router.get("/sentinel2/{lat}/{lon}")
-def timeseries_sentinel2(
+async def timeseries_sentinel2(
     lat: float,
     lon: float,
     data_inicio: str = Query(None, description="Start date in YYYY-MM-DD format"),
@@ -204,10 +243,16 @@ def timeseries_sentinel2(
               .map(maskS2clouds))
 
         s2_ndvi = s2.map(addNDVI)
-        ndvi_data = s2_ndvi.select('NDVI').getRegion(point, 10).getInfo()
+
+        # Construir expressões (lazy) e computar em paralelo
+        ndvi_expr = s2_ndvi.select('NDVI').getRegion(point, 10)
+        precip_expr = build_precipitation_expr(point, data_inicio, data_fim, scale=5000)
+
+        ndvi_data, precip_data = await compute_parallel(ndvi_expr, precip_expr)
+
         ndvi_dates, ndvi_values = process_gee_region_data(ndvi_data, 'NDVI')
         ndvi_smoothed = apply_smoothing(ndvi_dates, ndvi_values, Satellite.SENTINEL2, smoothing_method)
-        precip_dates, precip_values = fetch_precipitation(point, data_inicio, data_fim, scale=5000)
+        precip_dates, precip_values = process_precipitation_data(precip_data)
 
         plotly_data = build_plotly_response(
             ndvi_dates, ndvi_values, ndvi_smoothed,
@@ -216,6 +261,7 @@ def timeseries_sentinel2(
         return JSONResponse(content=plotly_data)
 
     except ee.EEException as e:
+        _handle_ee_quota_error(e)
         raise HTTPException(status_code=500, detail=f"Error fetching data from Earth Engine: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {str(e)}")

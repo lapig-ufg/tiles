@@ -76,19 +76,31 @@ async def lifespan(app: FastAPI):
     await tile_cache.initialize()
     logger.info("Cache híbrido inicializado")
     
-    # Inicializa Earth Engine
+    # Inicializa GEE com SA do pool.
+    # Com uvicorn --workers N, cada worker roda o lifespan independentemente,
+    # então cada processo adquire uma SA distinta via Redis.
+    # Com gunicorn, o post_fork (gunicorn_conf.py) também inicializa —
+    # o guard interno (_manager is not None) evita dupla inicialização.
     from app.core.gee_auth import initialize_earth_engine
     initialize_earth_engine()
-    
+
     yield
     
     # Shutdown
+    from app.core.gee_auth import shutdown_earth_engine
+    shutdown_earth_engine()
+    logger.info("GEE manager encerrado")
+
     from app.core.mongodb import close_mongo_connection
     await close_mongo_connection()
     logger.info("MongoDB connection closed")
 
     await tile_cache.close()
     logger.info("Cache híbrido fechado")
+
+    from app.utils.ee_compute import close_session as close_ee_session
+    await close_ee_session()
+    logger.info("EE compute session closed")
 
     from app.api.cog_proxy import shutdown_client
     await shutdown_client()

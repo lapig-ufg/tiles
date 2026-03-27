@@ -1,4 +1,4 @@
-from .api import layers, timeseries, tile_aggregation, cache, vis_params, capabilities, tasks, admin, imagery, cog_proxy
+from .api import layers, timeseries, tile_aggregation, cache, vis_params, capabilities, tasks, admin, imagery, cog_proxy, gee_admin
 from .modules.embedding_maps.router import router as embedding_maps_router
 
 
@@ -25,6 +25,9 @@ def created_routes(app):
     
     # Rota para administração - OCULTA DA DOCUMENTAÇÃO
     app.include_router(admin.router, tags=["Administration"], include_in_schema=False)
+
+    # Pool de Service Accounts do GEE - OCULTA DA DOCUMENTAÇÃO
+    app.include_router(gee_admin.router, tags=["GEE Pool Admin"], include_in_schema=False)
 
     # Proxy para COGs sem CORS (BDC/data.inpe.br)
     app.include_router(cog_proxy.router, prefix="/api", tags=["COG Proxy"])

@@ -1,0 +1,15 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.git/
+.env
+node_modules/
+tiles-client/node_modules/
+logs/
+cache/
+*.log
+.service-accounts/
+k3s/
+tests/
+docs/

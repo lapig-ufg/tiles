@@ -1,0 +1,113 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tiles-api
+  namespace: tiles-loadtest
+  labels:
+    app: tiles-api
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8083
+  selector:
+    app: tiles-api
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tiles-api
+  namespace: tiles-loadtest
+  labels:
+    app: tiles-api
+spec:
+  replicas: 10
+  selector:
+    matchLabels:
+      app: tiles-api
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 2
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: tiles-api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8083"
+    spec:
+      terminationGracePeriodSeconds: 45
+      containers:
+        - name: tiles
+          image: tiles-loadtest:latest
+          imagePullPolicy: Never  # Imagem local (importada via k3s ctr)
+          ports:
+            - containerPort: 8083
+              name: http
+          envFrom:
+            - configMapRef:
+                name: tiles-config
+          command: ["/bin/bash", "/app/docker/prod/start.sh"]
+          volumeMounts:
+            - name: gee-credentials
+              mountPath: /app/.service-accounts
+              readOnly: true
+          resources:
+            requests:
+              memory: 512Mi
+              cpu: 250m
+            limits:
+              memory: 2Gi
+              cpu: "1"
+          readinessProbe:
+            httpGet:
+              path: /health/light
+              port: 8083
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health/light
+              port: 8083
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          startupProbe:
+            httpGet:
+              path: /health/light
+              port: 8083
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 30  # Até 2.5 min para startup (GEE init pode demorar)
+      volumes:
+        - name: gee-credentials
+          secret:
+            secretName: gee-service-accounts
+---
+# Ingress para acesso externo ao loadtest
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tiles-api
+  namespace: tiles-loadtest
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  rules:
+    - host: tiles-loadtest.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: tiles-api
+                port:
+                  number: 80

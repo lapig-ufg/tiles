@@ -13,6 +13,7 @@ import ee
 from loguru import logger
 
 from app.cache.cache import aset_png as set_png
+from app.core.gee_pool import gee_retry
 from app.tasks.celery_app import celery_app
 from app.visualization.vis_params_loader import get_landsat_collection, get_landsat_vis_params, VISPARAMS
 
@@ -236,6 +237,7 @@ def _get_tiles_in_bounds(bounds: Dict[str, float], zoom: int) -> List[Dict[str, 
     return tiles
 
 
+@gee_retry()
 def _generate_landsat_tile(bounds: Dict[str, float], params: Dict[str, Any]) -> str:
     """Generate Landsat tile URL"""
     geom = ee.Geometry.BBox(
@@ -263,6 +265,7 @@ def _generate_landsat_tile(bounds: Dict[str, float], params: Dict[str, Any]) -> 
     return map_id["tile_fetcher"].url_format
 
 
+@gee_retry()
 def _generate_sentinel2_tile(bounds: Dict[str, float], params: Dict[str, Any]) -> str:
     """Generate Sentinel-2 tile URL"""
     geom = ee.Geometry.BBox(

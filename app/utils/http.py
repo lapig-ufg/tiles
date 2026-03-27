@@ -25,6 +25,15 @@ async def http_get_bytes(url: str, *, max_retries: int = 5, base_delay: float = 
                 if resp.status == 200:
                     return await resp.read()
                 elif resp.status == 429:
+                    # Registrar métrica no pool (sem rotação — URL já gerada)
+                    try:
+                        from app.core.gee_auth import get_gee_manager
+                        mgr = get_gee_manager()
+                        if mgr:
+                            mgr.report_http_429()
+                    except Exception:
+                        pass
+
                     if attempt < max_retries - 1:
                         delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
                         logger.warning(

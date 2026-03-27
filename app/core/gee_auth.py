@@ -1,45 +1,79 @@
 """
-Google Earth Engine authentication shared between FastAPI and Celery
+Autenticação do Google Earth Engine com suporte a pool de service accounts.
+
+Delega ao ServiceAccountPool (gee_pool.py) para coordenação de múltiplas SAs
+entre workers Gunicorn/Celery via Redis. Mantém retrocompatibilidade com
+chamadas existentes (sem argumentos).
 """
-import ee
-from google.oauth2 import service_account
+from __future__ import annotations
+
+import os
+import socket
 
 from app.core.config import settings, logger
 
 
-def initialize_earth_engine():
-    """Initialize Google Earth Engine with service account credentials"""
-    if ee.data._credentials:
+_manager = None  # WorkerGEEManager | None — lazy import para evitar circular
+
+
+def initialize_earth_engine(worker_id: str | None = None) -> None:
+    """Inicializa o Google Earth Engine com uma SA do pool.
+
+    Se GEE_SA_DIRECTORY estiver configurado e contiver mais de uma SA,
+    utiliza o pool com coordenação Redis. Caso contrário, usa o modo
+    legado com arquivo único (GEE_SERVICE_ACCOUNT_FILE).
+
+    Args:
+        worker_id: Identificador único do worker. Se None, gera automaticamente.
+    """
+    global _manager
+
+    if _manager is not None:
         return
-    
+
     if settings.get("SKIP_GEE_INIT", False):
-        logger.warning("Skipping GEE initialization (SKIP_GEE_INIT=true)")
+        logger.warning("Inicialização do GEE ignorada (SKIP_GEE_INIT=true)")
         return
-    
+
+    if not worker_id:
+        worker_id = f"{socket.gethostname()}-{os.getpid()}"
+
     try:
-        service_account_file = settings.GEE_SERVICE_ACCOUNT_FILE
-        logger.debug(f"Initializing GEE with service account: {service_account_file}")
-        
-        credentials = service_account.Credentials.from_service_account_file(
-            service_account_file,
-            scopes=["https://www.googleapis.com/auth/earthengine.readonly"],
-        )
-        ee.Initialize(credentials)
-        logger.info("GEE initialized successfully")
-        
-    except Exception as e:
-        logger.error(f"Failed to initialize GEE: {e}")
+        from app.core.gee_pool import ServiceAccountPool, WorkerGEEManager
+
+        pool = ServiceAccountPool.get_instance()
+        _manager = WorkerGEEManager(pool)
+        _manager.initialize(worker_id)
+
+    except Exception as exc:
+        logger.error(f"Falha ao inicializar GEE via pool: {exc}")
         if settings.get("TILES_ENV") != "development":
             raise
-        logger.warning("Running in development mode without GEE")
+        logger.warning("Executando em modo desenvolvimento sem GEE")
 
 
-# Singleton pattern to ensure GEE is initialized only once
+def get_gee_manager():
+    """Retorna o WorkerGEEManager do worker atual (ou None)."""
+    return _manager
+
+
+def shutdown_earth_engine() -> None:
+    """Libera a SA do worker atual e para o heartbeat."""
+    global _manager
+    if _manager is not None:
+        try:
+            _manager.shutdown()
+        except Exception as exc:
+            logger.warning(f"Erro ao encerrar GEE manager: {exc}")
+        _manager = None
+
+
+# Singleton pattern para contextos async
 _gee_initialized = False
 
 
-async def ensure_gee_initialized():
-    """Async wrapper to ensure GEE is initialized (for use in async contexts)"""
+async def ensure_gee_initialized() -> None:
+    """Wrapper async para garantir que o GEE está inicializado."""
     global _gee_initialized
     if not _gee_initialized:
         initialize_earth_engine()

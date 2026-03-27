@@ -1,0 +1,55 @@
+---
+# MongoDB de teste para loadtest — instância independente da produção.
+# Os dados são copiados de prod (porta 27018) via mongodump/mongorestore.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  namespace: tiles-loadtest
+  labels:
+    app: mongodb-test
+spec:
+  ports:
+    - port: 27017
+      targetPort: 27017
+  selector:
+    app: mongodb-test
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb-test
+  namespace: tiles-loadtest
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb-test
+  template:
+    metadata:
+      labels:
+        app: mongodb-test
+    spec:
+      containers:
+        - name: mongodb
+          image: mongo:7
+          ports:
+            - containerPort: 27017
+          resources:
+            requests:
+              memory: 256Mi
+              cpu: 100m
+            limits:
+              memory: 1Gi
+              cpu: 500m
+          readinessProbe:
+            exec:
+              command: ["mongosh", "--eval", "db.adminCommand('ping')"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: mongo-data
+              mountPath: /data/db
+      volumes:
+        - name: mongo-data
+          emptyDir: {}

@@ -44,20 +44,33 @@ def process_gee_region_data(
     return grouped["date"].tolist(), grouped[band_name].tolist()
 
 
-def fetch_precipitation(
+# ---------------------------------------------------------------------------
+# Precipitação — expressão EE separada do processamento
+# ---------------------------------------------------------------------------
+
+def build_precipitation_expr(
     point: ee.Geometry,
     data_inicio: str,
     data_fim: str,
     scale: int = 5000,
-) -> Tuple[List[str], List[float]]:
+) -> ee.ComputedObject:
+    """Constrói a expressão EE para dados de precipitação CHIRPS.
+
+    Retorna um ee.ComputedObject (lazy) que pode ser computado via
+    compute_value() ou .getInfo().
+    """
     chirps = (
         ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
         .filterDate(data_inicio, data_fim)
         .filterBounds(point)
     )
+    return chirps.getRegion(point, scale)
 
-    precip_data = chirps.getRegion(point, scale).getInfo()
 
+def process_precipitation_data(
+    precip_data: list,
+) -> Tuple[List[str], List[float]]:
+    """Processa o resultado bruto de getRegion para precipitação."""
     if not precip_data or len(precip_data) <= 1:
         return [], []
 
@@ -79,6 +92,18 @@ def fetch_precipitation(
     grouped = df.groupby("date")["precipitation"].sum().reset_index()
 
     return grouped["date"].tolist(), grouped["precipitation"].tolist()
+
+
+def fetch_precipitation(
+    point: ee.Geometry,
+    data_inicio: str,
+    data_fim: str,
+    scale: int = 5000,
+) -> Tuple[List[str], List[float]]:
+    """Versão síncrona (legada) — usa .getInfo(). Manter para compatibilidade."""
+    expr = build_precipitation_expr(point, data_inicio, data_fim, scale)
+    precip_data = expr.getInfo()
+    return process_precipitation_data(precip_data)
 
 
 def apply_smoothing(
