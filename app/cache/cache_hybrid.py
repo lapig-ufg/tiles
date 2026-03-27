@@ -185,54 +185,71 @@ class HybridTileCache:
                 return None
     
     async def set_png(self, key: str, data: bytes, ttl: int = None) -> None:
-        """Salva tile PNG no cache híbrido"""
+        """Salva tile PNG no cache híbrido.
+
+        Best-effort: se o S3 estiver indisponível, o tile é salvo no Redis e
+        no cache local para continuar servindo. Nunca propaga exceção.
+        """
         if ttl is None:
             ttl = self.PNG_TTL
-            
+
+        # Atualiza cache local imediatamente (mais rápido)
+        self._update_local_cache(key, data)
+
         s3_key = self._generate_s3_key(key)
 
-        # Upload para S3 primeiro (garante que o objeto existe antes de registrar no Redis)
-        await self._upload_to_s3(s3_key, data)
+        # Upload para S3 (best-effort, não bloqueia)
+        s3_ok = await self._upload_to_s3(s3_key, data)
 
-        # Só salva metadados no Redis após upload S3 concluído
-        async with self._get_redis() as r:
-            meta = {
-                's3_key': s3_key,
-                'size': str(len(data)),
-                'created': datetime.now().isoformat(),
-                'content_type': 'image/png'
-            }
-            await r.hset(f"tile:{key}", mapping=meta)
-            await r.expire(f"tile:{key}", ttl)
-        
-        # Atualiza cache local
-        self._update_local_cache(key, data)
+        # Salva metadados no Redis (com ou sem S3)
+        try:
+            async with self._get_redis() as r:
+                meta = {
+                    's3_key': s3_key,
+                    'size': str(len(data)),
+                    'created': datetime.now().isoformat(),
+                    'content_type': 'image/png',
+                    's3_synced': '1' if s3_ok else '0',
+                }
+                await r.hset(f"tile:{key}", mapping=meta)
+                await r.expire(f"tile:{key}", ttl)
+        except Exception as e:
+            logger.warning(f"Redis write falhou para tile:{key}: {e}")
     
-    async def _upload_to_s3(self, s3_key: str, data: bytes) -> None:
-        """Upload assíncrono para S3 com retry"""
-        async with self.s3_session.client(
-            's3',
-            endpoint_url=self.s3_endpoint,
-            aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
-            aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
-            use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
-            verify=settings.get("S3_VERIFY_SSL", True) 
-        ) as s3:
-            for attempt in range(3):
-                try:
-                    await s3.put_object(
-                        Bucket=self.s3_bucket,
-                        Key=s3_key,
-                        Body=data,
-                        ContentType='image/png',
-                        CacheControl='public, max-age=2592000'  # 30 dias
-                    )
-                    return
-                except Exception as e:
-                    if attempt == 2:
-                        logger.error(f"Falha ao salvar {s3_key} após 3 tentativas: {e}")
-                        raise
-                    await asyncio.sleep(0.1 * (attempt + 1))
+    async def _upload_to_s3(self, s3_key: str, data: bytes) -> bool:
+        """Upload assíncrono para S3 com retry. Best-effort — nunca propaga exceção.
+
+        Returns:
+            True se o upload foi bem-sucedido, False caso contrário.
+        """
+        try:
+            async with self.s3_session.client(
+                's3',
+                endpoint_url=self.s3_endpoint,
+                aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
+                aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
+                use_ssl=settings.get("S3_USE_SSL", True),
+                verify=settings.get("S3_VERIFY_SSL", True)
+            ) as s3:
+                for attempt in range(3):
+                    try:
+                        await s3.put_object(
+                            Bucket=self.s3_bucket,
+                            Key=s3_key,
+                            Body=data,
+                            ContentType='image/png',
+                            CacheControl='public, max-age=2592000'  # 30 dias
+                        )
+                        return True
+                    except Exception as e:
+                        if attempt == 2:
+                            logger.warning(f"S3 write falhou para {s3_key}: {e}")
+                            return False
+                        await asyncio.sleep(0.1 * (attempt + 1))
+        except Exception as e:
+            logger.warning(f"S3 client error para {s3_key}: {e}")
+            return False
+        return False
     
     def _update_local_cache(self, key: str, data: bytes) -> None:
         """Atualiza cache local com LRU eviction"""

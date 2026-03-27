@@ -24,7 +24,14 @@ from app.router import created_routes
 from app.utils.cors import origin_regex, allow_origins
 from app.cache import tile_cache
 
-Base.metadata.create_all(bind=engine)
+# create_all com tratamento de race condition para multi-worker (uvicorn/gunicorn).
+# Múltiplos workers podem tentar criar tabelas simultaneamente no mesmo SQLite.
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception:
+    pass  # Tabelas já existem — criadas por outro worker
+except Exception:
+    pass  # Tabelas já existem — criadas por outro worker
 
 limiter = Limiter(
     key_func=get_remote_address,
