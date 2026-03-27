@@ -42,6 +42,7 @@ export class MapGridLandsatComponent implements OnInit {
     private centerCoordinates = fromLonLat([-57.149819, -21.329828]);
     private mapsInstances: { id: string, map: Map }[] = [];
     private markerLayersByMapId: { [mapId: string]: VectorLayer<any> } = {};
+    private _syncing = false;
     public pointCreationMode = false;
     public lat: number | null = null;
     public lon: number | null = null;
@@ -227,7 +228,28 @@ private loadProdesYearMaps(type: 'landsat', year: number, visparam: string, star
             const projectedCoordinate = transform(this.centerCoordinates, 'EPSG:3857', 'EPSG:4326');
             this.addMarker(projectedCoordinate[1], projectedCoordinate[0], map, mapId);
             this.mapsInstances.push({id: mapId, map});
+            this.addViewSyncListener(map);
         }, 0);
+    }
+
+    private addViewSyncListener(sourceMap: Map): void {
+        sourceMap.getView().on('change:center', () => this.syncViews(sourceMap));
+        sourceMap.getView().on('change:resolution', () => this.syncViews(sourceMap));
+    }
+
+    private syncViews(sourceMap: Map): void {
+        if (this._syncing) return;
+        this._syncing = true;
+        const sourceView = sourceMap.getView();
+        const center = sourceView.getCenter();
+        const zoom = sourceView.getZoom();
+        for (const inst of this.mapsInstances) {
+            if (inst.map === sourceMap) continue;
+            const view = inst.map.getView();
+            if (center) view.setCenter(center);
+            if (zoom !== undefined) view.setZoom(zoom);
+        }
+        this._syncing = false;
     }
 
     private updateCenterCoordinates(coordinates: [number, number]): void {
