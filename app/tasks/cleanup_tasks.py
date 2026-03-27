@@ -590,7 +590,7 @@ celery_app.conf.beat_schedule.update({
     'cleanup-orphaned-weekly': {
         'task': 'app.tasks.cleanup_tasks.cleanup_orphaned_objects',
         'schedule': crontab(day_of_week=0, hour=4, minute=0),  # Sunday 4 AM
-        'kwargs': {'max_objects': 10000},
+        'kwargs': {'max_objects': 100000},
     },
     'analyze-usage-weekly': {
         'task': 'app.tasks.cleanup_tasks.cleanup_analyze_usage',
