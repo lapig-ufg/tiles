@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import ee
+import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
@@ -151,6 +152,17 @@ async def timeseries_nddi(
                 'marker': {'color': 'rgba(50, 168, 82, 0.3)'},
             }
         ]
+
+        if nddi_values:
+            mean_val = float(np.mean(nddi_values))
+            plotly_data.append({
+                'x': [nddi_dates[0], nddi_dates[-1]],
+                'y': [mean_val, mean_val],
+                'type': 'scatter',
+                'mode': 'lines',
+                'name': f'Média NDDI ({mean_val:.3f})',
+                'line': {'color': 'rgb(255, 127, 14)', 'dash': 'dash', 'width': 2},
+            })
 
         return JSONResponse(content=plotly_data)
 

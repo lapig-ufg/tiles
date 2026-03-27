@@ -125,7 +125,7 @@ def build_plotly_response(
 ) -> List[Dict]:
     display_name = get_method_display_name(method)
 
-    return [
+    traces = [
         {
             "x": list(ndvi_dates),
             "y": list(ndvi_smoothed),
@@ -151,6 +151,19 @@ def build_plotly_response(
             "yaxis": "y2",
         },
     ]
+
+    if ndvi_values:
+        mean_val = float(np.mean(ndvi_values))
+        traces.append({
+            "x": [ndvi_dates[0], ndvi_dates[-1]],
+            "y": [mean_val, mean_val],
+            "type": "scatter",
+            "mode": "lines",
+            "name": f"Média NDVI ({mean_val:.3f})",
+            "line": {"color": "rgb(255, 127, 14)", "dash": "dash", "width": 2},
+        })
+
+    return traces
 
 
 def parse_smoothing_method(method_str: Optional[str]) -> SmoothingMethod:
