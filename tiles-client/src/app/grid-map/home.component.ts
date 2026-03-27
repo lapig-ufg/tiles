@@ -20,6 +20,7 @@ export class HomeComponent implements OnInit {
     public maps: { period: string, year: number, id: string }[] = [];
     private centerCoordinates = fromLonLat([-57.149819, -21.329828]);
     private mapsInstances: Map[] = [];
+    public pointCreationMode = false;
 
     constructor(private layerService: LayerService, public pointService: PointService) { }
 
@@ -66,9 +67,11 @@ export class HomeComponent implements OnInit {
                 interactions: defaultInteractions().extend([
                     new Pointer({
                         handleDownEvent: (event) => {
+                            if (!this.pointCreationMode) return false;
+                            this.pointCreationMode = false;
                             const coordinates = toLonLat(event.coordinate) as [number, number];
                             this.updateCenterCoordinates(coordinates);
-                            return true; // stop event propagation
+                            return true;
                         }
                     })
                 ])
@@ -80,6 +83,7 @@ export class HomeComponent implements OnInit {
 
     private updateCenterCoordinates(coordinates: [number, number]): void {
         this.centerCoordinates = fromLonLat(coordinates);
+        this.pointService.setPoint({ lat: coordinates[1], lon: coordinates[0] });
         this.updateMaps();
     }
 

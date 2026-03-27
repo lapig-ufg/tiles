@@ -12,6 +12,9 @@ import {ModisTimeseriesComponent} from "./modis-timeseries/modis-timeseries.comp
 import {TabViewModule} from "primeng/tabview";
 import {FormsModule} from "@angular/forms";
 import {SelectButtonModule} from "primeng/selectbutton";
+import {ButtonModule} from "primeng/button";
+import {RippleModule} from "primeng/ripple";
+import {TooltipModule} from "primeng/tooltip";
 import {MapGridLandsatComponent} from "./map-grid-landsat/map-grid-landsat.component";
 import {DropdownModule} from "primeng/dropdown";
 import {TableModule} from "primeng/table";
@@ -31,6 +34,9 @@ PlotlyModule.plotlyjs = PlotlyJS;
         TabViewModule,
         FormsModule,
         SelectButtonModule,
+        ButtonModule,
+        RippleModule,
+        TooltipModule,
         DropdownModule,
         TableModule,
         PanelModule,

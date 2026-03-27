@@ -1,6 +1,18 @@
 <h4 *ngIf="lat && lon" class="text-center card">Latitude: {{ lat | number }}, Longitude: {{ lon | number }}</h4>
 <h4 *ngIf="!lat || !lon" class="text-center card text-orange-500">Selecione um ponto no mapa ou envie um GeoJSON pelo topbar</h4>
 
+<div class="flex justify-content-center my-2">
+    <button pButton pRipple
+        [label]="pointCreationMode ? 'Clique no mapa...' : 'Novo Ponto'"
+        [icon]="pointCreationMode ? 'pi pi-map' : 'pi pi-map-marker'"
+        [class]="pointCreationMode ? 'p-button-warning' : 'p-button-outlined'"
+        (click)="enablePointCreation()"
+        [disabled]="pointCreationMode"
+        pTooltip="Clique para habilitar a criação de um novo ponto no mapa"
+        tooltipPosition="bottom">
+    </button>
+</div>
+
 <!-- Painel flutuante Info da Amostra -->
 <div class="sample-info-floating" *ngIf="activeFeature">
     <button
@@ -254,7 +266,7 @@
 
 <div class="mt-3" *ngIf="selectedImages.length > 0">
     <h5>Imagens Selecionadas ({{ selectedImages.length }})</h5>
-    <div class="map-grid">
+    <div class="map-grid" [class.cursor-crosshair]="pointCreationMode">
         <div *ngFor="let img of selectedImages" class="map-item">
             <div class="map-label">
                 <span class="font-semibold">{{ formatDateDisplay(img.datetime) }}</span>

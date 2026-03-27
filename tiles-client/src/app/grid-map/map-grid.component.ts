@@ -65,6 +65,8 @@ export class MapGridComponent implements OnInit, OnDestroy {
     public landsatMaps: (PeriodMapItem | MonthMapItem)[] = [];
     private centerCoordinates = fromLonLat([-57.149819, -21.329828]);
     private mapsInstances: { id: string, map: Map }[] = [];
+    private markerLayersByMapId: { [mapId: string]: VectorLayer<any> } = {};
+    public pointCreationMode = false;
     public lat: number | null = null;
     public lon: number | null = null;
     public sentinelYears: any[] = [];
@@ -131,27 +133,32 @@ export class MapGridComponent implements OnInit, OnDestroy {
         this.stateBinder.destroy();
     }
 
-    private addMarker(lat: number, lon: number, map: Map): void {
+    enablePointCreation(): void {
+        this.pointCreationMode = true;
+    }
+
+    private addMarker(lat: number, lon: number, map: Map, mapId: string): void {
+        const existing = this.markerLayersByMapId[mapId];
+        if (existing) {
+            map.removeLayer(existing);
+        }
+
         const iconFeature = new Feature({
             geometry: new Point(fromLonLat([lon, lat])),
         });
-        const iconStyle = new Style({
+        iconFeature.setStyle(new Style({
             image: new Icon({
                 anchor: [0.5, 0.5],
                 src: marker,
                 scale: 1,
             }),
-        });
+        }));
 
-        iconFeature.setStyle(iconStyle);
-
-        const vectorSource = new VectorSource({
-            features: [iconFeature],
-        });
         const vectorLayer = new VectorLayer({
-            source: vectorSource,
+            source: new VectorSource({ features: [iconFeature] }),
         });
-        map.addLayer(vectorLayer)
+        map.addLayer(vectorLayer);
+        this.markerLayersByMapId[mapId] = vectorLayer;
     }
 
     private initializeMaps(): void {
@@ -230,8 +237,9 @@ export class MapGridComponent implements OnInit, OnDestroy {
                 interactions: defaultInteractions().extend([
                     new Pointer({
                         handleDownEvent: (event) => {
+                            if (!this.pointCreationMode) return false;
+                            this.pointCreationMode = false;
                             const coordinates = toLonLat(event.coordinate) as [number, number];
-                            console.log(coordinates)
                             this.updateCenterCoordinates(coordinates);
                             return true;
                         }
@@ -239,14 +247,17 @@ export class MapGridComponent implements OnInit, OnDestroy {
                 ])
             });
             const projectedCoordinate = transform(this.centerCoordinates, 'EPSG:3857', 'EPSG:4326');
-            this.addMarker(projectedCoordinate[1], projectedCoordinate[0], map);
+            this.addMarker(projectedCoordinate[1], projectedCoordinate[0], map, mapId);
 
             this.mapsInstances.push({id: mapId, map});
         }, 0);
     }
 
     private updateCenterCoordinates(coordinates: [number, number]): void {
+        this.lon = coordinates[0];
+        this.lat = coordinates[1];
         this.centerCoordinates = fromLonLat(coordinates);
+        this.pointService.setPoint({ lat: this.lat, lon: this.lon });
         this.updateMaps();
     }
 
@@ -255,7 +266,7 @@ export class MapGridComponent implements OnInit, OnDestroy {
             const view = mapInstance.map.getView();
             view.setCenter(this.centerCoordinates);
             const projectedCoordinate = transform(this.centerCoordinates, 'EPSG:3857', 'EPSG:4326');
-            this.addMarker(projectedCoordinate[1], projectedCoordinate[0], mapInstance.map);
+            this.addMarker(projectedCoordinate[1], projectedCoordinate[0], mapInstance.map, mapInstance.id);
         }
     }
 

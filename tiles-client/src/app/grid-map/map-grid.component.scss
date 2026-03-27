@@ -16,5 +16,8 @@
 
 .campo{
     display: flex;
+}
 
+.cursor-crosshair .map-container {
+    cursor: crosshair;
 }

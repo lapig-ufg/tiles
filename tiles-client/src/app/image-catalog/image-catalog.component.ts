@@ -77,7 +77,9 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
 
     // Maps
     private mapsInstances: {id: string, map: Map}[] = [];
+    private markerLayersByMapId: { [mapId: string]: VectorLayer<any> } = {};
     private centerCoordinates: Coordinate = fromLonLat([-49.2646, -16.6799]);
+    pointCreationMode = false;
 
     // Point coordinates
     lat: number | null = null;
@@ -396,6 +398,8 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
                 interactions: defaultInteractions().extend([
                     new Pointer({
                         handleDownEvent: (event) => {
+                            if (!this.pointCreationMode) return false;
+                            this.pointCreationMode = false;
                             const coordinates = toLonLat(event.coordinate) as [number, number];
                             this.updateCenterCoordinates(coordinates);
                             return true;
@@ -405,7 +409,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
             });
 
             const projectedCoordinate = transform(this.centerCoordinates, 'EPSG:3857', 'EPSG:4326');
-            this.addMarker(projectedCoordinate[1], projectedCoordinate[0], map);
+            this.addMarker(projectedCoordinate[1], projectedCoordinate[0], map, mapId);
             this.addGeometryLayer(mapId, map);
             this.mapsInstances.push({id: mapId, map});
         }, 0);
@@ -429,25 +433,38 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
         this.geometryLayersByMapId = {};
     }
 
-    private addMarker(lat: number, lon: number, map: Map): void {
+    enablePointCreation(): void {
+        this.pointCreationMode = true;
+    }
+
+    private addMarker(lat: number, lon: number, map: Map, mapId: string): void {
+        const existing = this.markerLayersByMapId[mapId];
+        if (existing) {
+            map.removeLayer(existing);
+        }
+
         const iconFeature = new Feature({
             geometry: new Point(fromLonLat([lon, lat])),
         });
-        const iconStyle = new Style({
+        iconFeature.setStyle(new Style({
             image: new Icon({
                 anchor: [0.5, 0.5],
                 src: marker,
                 scale: 1,
             }),
+        }));
+        const vectorLayer = new VectorLayer({
+            source: new VectorSource({ features: [iconFeature] }),
         });
-        iconFeature.setStyle(iconStyle);
-        const vectorSource = new VectorSource({features: [iconFeature]});
-        const vectorLayer = new VectorLayer({source: vectorSource});
         map.addLayer(vectorLayer);
+        this.markerLayersByMapId[mapId] = vectorLayer;
     }
 
     private updateCenterCoordinates(coordinates: [number, number]): void {
+        this.lon = coordinates[0];
+        this.lat = coordinates[1];
         this.centerCoordinates = fromLonLat(coordinates);
+        this.pointService.setPoint({ lat: this.lat, lon: this.lon });
         this.updateMaps();
     }
 
@@ -456,7 +473,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
             const view = mapInstance.map.getView();
             view.setCenter(this.centerCoordinates);
             const projectedCoordinate = transform(this.centerCoordinates, 'EPSG:3857', 'EPSG:4326');
-            this.addMarker(projectedCoordinate[1], projectedCoordinate[0], mapInstance.map);
+            this.addMarker(projectedCoordinate[1], projectedCoordinate[0], mapInstance.map, mapInstance.id);
         }
     }
 

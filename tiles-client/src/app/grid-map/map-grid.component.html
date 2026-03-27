@@ -39,7 +39,18 @@
         ></app-screen-state-clear>
     </span>
 </div>
-<div class="map-grid mt-3">
+<div class="flex justify-content-center my-2">
+    <button pButton pRipple
+        [label]="pointCreationMode ? 'Clique no mapa...' : 'Novo Ponto'"
+        [icon]="pointCreationMode ? 'pi pi-map' : 'pi pi-map-marker'"
+        [class]="pointCreationMode ? 'p-button-warning' : 'p-button-outlined'"
+        (click)="enablePointCreation()"
+        [disabled]="pointCreationMode"
+        pTooltip="Clique para habilitar a criação de um novo ponto no mapa"
+        tooltipPosition="bottom">
+    </button>
+</div>
+<div class="map-grid mt-3" [class.cursor-crosshair]="pointCreationMode">
     <div *ngFor="let map of sentinelMaps" class="map-item">
         <div [id]="map.id" class="map-container"></div>
     </div>
