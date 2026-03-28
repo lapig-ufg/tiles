@@ -266,25 +266,16 @@ async def health_check():
     
     # 4. Verificar S3/MinIO
     try:
-        # Usa o cliente S3 do cache híbrido
-        async with tile_cache.s3_session.client(
-            's3',
-            endpoint_url=tile_cache.s3_endpoint,
-            aws_access_key_id=settings.get('S3_ACCESS_KEY', 'minioadmin'),
-            aws_secret_access_key=settings.get('S3_SECRET_KEY', 'minioadmin'),
-            use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
-            verify=settings.get("S3_VERIFY_SSL", True) 
-        ) as s3_client:
-            # Tenta listar buckets para verificar conectividade
-            response = await s3_client.list_buckets()
-            bucket_exists = any(b['Name'] == tile_cache.s3_bucket for b in response['Buckets'])
-            
-            health_status["services"]["s3"] = {
-                "status": "healthy",
-                "endpoint": tile_cache.s3_endpoint,
-                "bucket": tile_cache.s3_bucket,
-                "bucket_exists": bucket_exists
-            }
+        s3_client = await tile_cache._ensure_s3_client()
+        response = await s3_client.list_buckets()
+        bucket_exists = any(b['Name'] == tile_cache.s3_bucket for b in response['Buckets'])
+
+        health_status["services"]["s3"] = {
+            "status": "healthy",
+            "endpoint": tile_cache.s3_endpoint,
+            "bucket": tile_cache.s3_bucket,
+            "bucket_exists": bucket_exists
+        }
     except Exception as e:
         health_status["services"]["s3"] = {
             "status": "unhealthy",

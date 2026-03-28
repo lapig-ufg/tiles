@@ -5,6 +5,7 @@ Redireciona para o novo cache híbrido de alta performance
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 from typing import Any, Optional
 
 from app.cache.cache_hybrid import tile_cache
@@ -14,27 +15,41 @@ PNG_TTL = 30 * 24 * 3600   # 30 dias para tiles (eram 24h)
 META_TTL = 7 * 24 * 3600    # 7 dias para metadados (eram 6h)
 
 # ----------------------- helpers síncronos (compatibilidade) ----------------------------- #
-# NOTA: Estas funções são para compatibilidade com código legado
+# NOTA: Estas funções são para compatibilidade com código legado (ex: Celery tasks em prefork)
 # Recomenda-se usar as versões assíncronas (aget_png, aset_png, etc) quando possível
 
+_sync_executor = concurrent.futures.ThreadPoolExecutor(
+    max_workers=8, thread_name_prefix="cache-sync"
+)
+
+
 def _run_async(coro):
-    """Helper para executar código assíncrono em contexto síncrono"""
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
+    """Executa coroutine de forma segura tanto em contexto síncrono quanto assíncrono.
+
+    Quando chamado de dentro de um event loop ativo (ex: FastAPI handler chamando
+    código síncrono legado), delega para uma thread separada para evitar deadlock.
+    Quando chamado de contexto puramente síncrono (ex: Celery prefork worker),
+    cria um loop dedicado.
+    """
+    def _run_in_new_loop():
         loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    
-    if loop.is_running():
-        # Se já estamos em um loop assíncrono, cria uma task
-        task = asyncio.create_task(coro)
-        # Usa nest_asyncio para permitir loops aninhados
-        import nest_asyncio
-        nest_asyncio.apply()
-        return loop.run_until_complete(task)
-    else:
-        # Se não há loop rodando, executa normalmente
-        return loop.run_until_complete(coro)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return _run_in_new_loop()
+
+    # Loop ativo — delega para thread para evitar deadlock
+    future = _sync_executor.submit(_run_in_new_loop)
+    return future.result(timeout=120)
+
 
 def get_png(key: str) -> Optional[bytes]:
     """Busca PNG do cache híbrido (compatibilidade síncrona)"""

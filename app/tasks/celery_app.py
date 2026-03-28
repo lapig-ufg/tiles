@@ -18,11 +18,21 @@ from app.core.config import settings
 
 @worker_process_init.connect
 def _init_gee_for_celery_worker(**kwargs):
-    """Cada worker Celery (prefork) adquire uma SA do pool ao iniciar."""
+    """Cada worker Celery (prefork) adquire uma SA do pool e conecta ao MongoDB ao iniciar."""
+    import asyncio
     from app.core.gee_auth import initialize_earth_engine
 
     worker_id = f"{socket.gethostname()}-celery-{os.getpid()}"
     initialize_earth_engine(worker_id)
+
+    # Inicializar MongoDB uma vez por worker (em vez de a cada task)
+    try:
+        from app.core.mongodb import connect_to_mongo
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(connect_to_mongo())
+        loop.close()
+    except Exception as e:
+        print(f"[Celery] MongoDB init falhou (non-fatal): {e}")
 
 
 @worker_process_shutdown.connect
@@ -105,6 +115,8 @@ celery_app.conf.update(
         'app.tasks.cache_operations.cache_point': {'queue': 'standard'},
         'app.tasks.cache_operations.cache_point_batch': {'queue': 'standard'},
         'app.tasks.cache_operations.cache_warm_regions': {'queue': 'low_priority'},
+        'app.tasks.cache_operations.cache_warm_tile': {'queue': 'standard'},
+        'app.tasks.cache_operations.cache_warm_from_tiles_json': {'queue': 'high_priority'},
         'app.tasks.cache_operations.cache_validate': {'queue': 'low_priority'},
         
         # Cleanup tasks
@@ -135,6 +147,7 @@ celery_app.conf.update(
         'app.tasks.cache_operations.cache_campaign': {'rate_limit': '10/m'},
         'app.tasks.cache_operations.cache_point': {'rate_limit': '500/m'},
         'app.tasks.cache_operations.cache_warm_regions': {'rate_limit': '5/m'},
+        'app.tasks.cache_operations.cache_warm_tile': {'rate_limit': '200/m'},
         
         # Cleanup tasks - conservative limits
         'app.tasks.cleanup_tasks.cleanup_expired_cache': {'rate_limit': '1/m'},

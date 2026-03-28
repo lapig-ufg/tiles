@@ -146,8 +146,24 @@ TEST_TILES = [
 ]
 
 
+# Tiles carregados de arquivo externo (preenchido por --tile-urls)
+LOADED_TILE_URLS: list[dict] = []
+
+
 def random_tile_url(base: str) -> tuple[str, str]:
-    """Retorna URL de tile e nome do endpoint."""
+    """Retorna URL de tile e nome do endpoint.
+
+    Se LOADED_TILE_URLS estiver preenchido (via --tile-urls), sorteia de lá.
+    Caso contrário, usa os TEST_TILES hardcoded.
+    """
+    if LOADED_TILE_URLS:
+        entry = random.choice(LOADED_TILE_URLS)
+        url = entry["url"]
+        if not url.startswith("http"):
+            url = f"{base}{url}"
+        endpoint = entry.get("endpoint", "landsat")
+        return url, f"tile-{endpoint}"
+
     x, y, z = random.choice(TEST_TILES)
     year = random.choice([2022, 2023, 2024])
     month = random.randint(1, 12)
@@ -227,17 +243,22 @@ async def request_worker(
     log: logging.Logger,
     stop_event: asyncio.Event,
     worker_id: int,
+    tiles_only: bool = False,
 ):
     """Worker que envia requisições continuamente até o stop_event."""
     while not stop_event.is_set():
-        # Distribuição de carga: 60% tiles, 25% timeseries, 15% catalog
-        roll = random.random()
-        if roll < 0.60:
+        if tiles_only:
+            # Modo focado em tiles
             url, endpoint = random_tile_url(base_url)
-        elif roll < 0.85:
-            url, endpoint = random_timeseries_url(base_url)
         else:
-            url, endpoint = random_catalog_url(base_url)
+            # Distribuição de carga: 60% tiles, 25% timeseries, 15% catalog
+            roll = random.random()
+            if roll < 0.60:
+                url, endpoint = random_tile_url(base_url)
+            elif roll < 0.85:
+                url, endpoint = random_timeseries_url(base_url)
+            else:
+                url, endpoint = random_catalog_url(base_url)
 
         ep_stats = stats.get(endpoint)
         t0 = time.time()
@@ -376,9 +397,18 @@ async def periodic_reporter(
 # ---------------------------------------------------------------------------
 
 async def run_loadtest(args):
+    global LOADED_TILE_URLS
+
     log = setup_logging(args.log_file)
     stats = GlobalStats(start_time=time.time())
     stop_event = asyncio.Event()
+
+    # Carregar URLs de tiles de arquivo externo
+    if args.tile_urls:
+        with open(args.tile_urls, "r") as f:
+            data = json.load(f)
+        LOADED_TILE_URLS = data.get("tiles", [])
+        log.info(f"Carregadas {len(LOADED_TILE_URLS)} URLs de tiles de {args.tile_urls}")
 
     # Capturar SIGINT/SIGTERM para encerramento graceful
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -389,6 +419,8 @@ async def run_loadtest(args):
     log.info(f"  Base URL:     {args.base_url}")
     log.info(f"  Concorrência: {args.concurrency} workers")
     log.info(f"  Duração:      {args.duration}s")
+    log.info(f"  Tiles only:   {args.tiles_only}")
+    log.info(f"  Tile URLs:    {len(LOADED_TILE_URLS)} carregadas" if LOADED_TILE_URLS else "  Tile URLs:    hardcoded (12 tiles)")
     log.info(f"  Log:          {args.log_file}")
     log.info("=" * 100)
 
@@ -417,7 +449,8 @@ async def run_loadtest(args):
     for i in range(args.concurrency):
         tasks.append(
             asyncio.create_task(
-                request_worker(session, args.base_url, stats, log, stop_event, i)
+                request_worker(session, args.base_url, stats, log, stop_event, i,
+                               tiles_only=args.tiles_only)
             )
         )
 
@@ -542,6 +575,17 @@ def main():
         "--log-file", "-l",
         default="/tmp/tiles-loadtest.log",
         help="Arquivo de log (default: /tmp/tiles-loadtest.log)",
+    )
+    parser.add_argument(
+        "--tile-urls",
+        default=None,
+        help="Arquivo JSON com URLs de tiles gerado por generate_tile_urls.py",
+    )
+    parser.add_argument(
+        "--tiles-only",
+        action="store_true",
+        default=False,
+        help="Testar apenas tiles (sem timeseries/catalog)",
     )
     args = parser.parse_args()
 

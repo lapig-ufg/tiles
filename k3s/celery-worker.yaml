@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: celery-worker
+  namespace: tiles-loadtest
+  labels:
+    app: celery-worker
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: celery-worker
+  template:
+    metadata:
+      labels:
+        app: celery-worker
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: celery-worker
+          image: tiles-loadtest:latest
+          imagePullPolicy: Never
+          command:
+            - celery
+            - -A
+            - app.tasks.celery_app
+            - worker
+            - --loglevel=info
+            - --concurrency=4
+            - -Q
+            - high_priority,standard,low_priority,maintenance
+            - --without-gossip
+            - --without-mingle
+          envFrom:
+            - configMapRef:
+                name: tiles-config
+          volumeMounts:
+            - name: gee-credentials
+              mountPath: /app/.service-accounts
+              readOnly: true
+          resources:
+            requests:
+              memory: 512Mi
+              cpu: 250m
+            limits:
+              memory: 2Gi
+              cpu: "1"
+          livenessProbe:
+            exec:
+              command:
+                - celery
+                - -A
+                - app.tasks.celery_app
+                - inspect
+                - ping
+                - --timeout=10
+            initialDelaySeconds: 30
+            periodSeconds: 60
+            timeoutSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: gee-credentials
+          secret:
+            secretName: gee-service-accounts

@@ -116,7 +116,7 @@ def cleanup_expired_cache(self, dry_run: bool = False,
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(_cleanup())
+        return loop.run_until_complete(asyncio.wait_for(_cleanup(), timeout=600))
     finally:
         loop.close()
 
@@ -145,60 +145,51 @@ def cleanup_orphaned_objects(self, bucket_prefix: Optional[str] = None,
         
         try:
             await tile_cache.initialize()
-            
-            async with tile_cache.s3_session.client(
-                's3',
-                endpoint_url=tile_cache.s3_endpoint,
-                aws_access_key_id=settings.get("S3_ACCESS_KEY"),
-                aws_secret_access_key=settings.get("S3_SECRET_KEY"),
-                use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
-                verify=settings.get("S3_VERIFY_SSL", True) 
-            ) as s3:
-                
-                # List objects
-                paginator = s3.get_paginator('list_objects_v2')
-                params = {"Bucket": tile_cache.s3_bucket}
-                if bucket_prefix:
-                    params["Prefix"] = bucket_prefix
-                
-                orphaned_objects = []
-                
-                async for page in paginator.paginate(**params):
-                    if 'Contents' not in page:
-                        continue
-                    
-                    for obj in page['Contents']:
-                        if stats["scanned"] >= max_objects:
-                            break
-                        
-                        stats["scanned"] += 1
-                        s3_key = obj['Key']
-                        
-                        # Check if metadata exists
-                        if await _is_orphaned_object(s3_key):
-                            orphaned_objects.append({
-                                'Key': s3_key,
-                                'Size': obj['Size']
-                            })
-                            stats["orphaned"] += 1
-                            stats["space_freed_mb"] += obj['Size'] / (1024 * 1024)
-                
-                # Delete orphaned objects in batches
-                if orphaned_objects:
-                    for i in range(0, len(orphaned_objects), 100):
-                        batch = orphaned_objects[i:i+100]
-                        delete_objects = [{'Key': obj['Key']} for obj in batch]
-                        
-                        try:
-                            response = await s3.delete_objects(
-                                Bucket=tile_cache.s3_bucket,
-                                Delete={'Objects': delete_objects}
-                            )
-                            stats["deleted"] += len(response.get('Deleted', []))
-                            stats["errors"] += len(response.get('Errors', []))
-                        except Exception as e:
-                            logger.error(f"Error deleting batch: {e}")
-                            stats["errors"] += len(batch)
+            s3 = await tile_cache._ensure_s3_client()
+
+            # List objects
+            paginator = s3.get_paginator('list_objects_v2')
+            params = {"Bucket": tile_cache.s3_bucket}
+            if bucket_prefix:
+                params["Prefix"] = bucket_prefix
+
+            orphaned_objects = []
+
+            async for page in paginator.paginate(**params):
+                if 'Contents' not in page:
+                    continue
+
+                for obj in page['Contents']:
+                    if stats["scanned"] >= max_objects:
+                        break
+
+                    stats["scanned"] += 1
+                    s3_key = obj['Key']
+
+                    if await _is_orphaned_object(s3_key):
+                        orphaned_objects.append({
+                            'Key': s3_key,
+                            'Size': obj['Size']
+                        })
+                        stats["orphaned"] += 1
+                        stats["space_freed_mb"] += obj['Size'] / (1024 * 1024)
+
+            # Delete orphaned objects in batches
+            if orphaned_objects:
+                for i in range(0, len(orphaned_objects), 100):
+                    batch = orphaned_objects[i:i+100]
+                    delete_objects = [{'Key': obj['Key']} for obj in batch]
+
+                    try:
+                        response = await s3.delete_objects(
+                            Bucket=tile_cache.s3_bucket,
+                            Delete={'Objects': delete_objects}
+                        )
+                        stats["deleted"] += len(response.get('Deleted', []))
+                        stats["errors"] += len(response.get('Errors', []))
+                    except Exception as e:
+                        logger.error(f"Error deleting batch: {e}")
+                        stats["errors"] += len(batch)
             
             return stats
             
@@ -209,7 +200,7 @@ def cleanup_orphaned_objects(self, bucket_prefix: Optional[str] = None,
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(_cleanup_orphaned())
+        return loop.run_until_complete(asyncio.wait_for(_cleanup_orphaned(), timeout=600))
     finally:
         loop.close()
 
@@ -323,7 +314,7 @@ def cleanup_analyze_usage(self, days: int = 30) -> Dict[str, Any]:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(_analyze())
+        return loop.run_until_complete(asyncio.wait_for(_analyze(), timeout=300))
     finally:
         loop.close()
 
@@ -393,36 +384,29 @@ async def _find_orphaned_s3_objects(stats: CleanupStats,
                     s3_keys_to_check.add(meta[b's3_key'].decode())
         
         # Scan S3 for orphaned objects
-        async with tile_cache.s3_session.client(
-            's3',
-            endpoint_url=tile_cache.s3_endpoint,
-            aws_access_key_id=settings.get("S3_ACCESS_KEY"),
-            aws_secret_access_key=settings.get("S3_SECRET_KEY"),
-            use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
-                verify=settings.get("S3_VERIFY_SSL", True) 
-        ) as s3:
-            paginator = s3.get_paginator('list_objects_v2')
-            
-            checked = 0
-            async for page in paginator.paginate(Bucket=tile_cache.s3_bucket):
-                if 'Contents' not in page:
-                    continue
-                
-                for obj in page['Contents']:
-                    if max_items and checked >= max_items:
-                        break
-                    
-                    checked += 1
-                    s3_key = obj['Key']
-                    
-                    if s3_key in s3_keys_to_check or await _is_orphaned_object(s3_key):
-                        orphaned_objects.append({
-                            'Key': s3_key,
-                            'Size': obj['Size'],
-                            'LastModified': obj['LastModified']
-                        })
-                        stats.s3_orphaned += 1
-                        stats.total_space_freed_mb += obj['Size'] / (1024 * 1024)
+        s3 = await tile_cache._ensure_s3_client()
+        paginator = s3.get_paginator('list_objects_v2')
+
+        checked = 0
+        async for page in paginator.paginate(Bucket=tile_cache.s3_bucket):
+            if 'Contents' not in page:
+                continue
+
+            for obj in page['Contents']:
+                if max_items and checked >= max_items:
+                    break
+
+                checked += 1
+                s3_key = obj['Key']
+
+                if s3_key in s3_keys_to_check or await _is_orphaned_object(s3_key):
+                    orphaned_objects.append({
+                        'Key': s3_key,
+                        'Size': obj['Size'],
+                        'LastModified': obj['LastModified']
+                    })
+                    stats.s3_orphaned += 1
+                    stats.total_space_freed_mb += obj['Size'] / (1024 * 1024)
     
     except Exception as e:
         logger.error(f"Error scanning S3 objects: {e}")
@@ -461,38 +445,31 @@ async def _cleanup_s3_objects(stats: CleanupStats, orphaned_objects: List[Dict[s
     if not orphaned_objects:
         return
     
-    async with tile_cache.s3_session.client(
-        's3',
-        endpoint_url=tile_cache.s3_endpoint,
-        aws_access_key_id=settings.get("S3_ACCESS_KEY"),
-        aws_secret_access_key=settings.get("S3_SECRET_KEY"),
-        use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
-                verify=settings.get("S3_VERIFY_SSL", True) 
-    ) as s3:
-        batch_size = 1000
-        
-        for i in range(0, len(orphaned_objects), batch_size):
-            batch = orphaned_objects[i:i+batch_size]
-            objects_to_delete = [{'Key': obj['Key']} for obj in batch]
-            
-            try:
-                response = await s3.delete_objects(
-                    Bucket=tile_cache.s3_bucket,
-                    Delete={'Objects': objects_to_delete}
-                )
-                
-                stats.s3_deleted += len(response.get('Deleted', []))
-                stats.s3_errors += len(response.get('Errors', []))
-                
-                logger.info(f"Deleted {len(response.get('Deleted', []))} S3 objects")
-                
-            except Exception as e:
-                logger.error(f"Error deleting S3 objects: {e}")
-                stats.s3_errors += len(batch)
-                stats.errors.append({
-                    "type": "s3_batch_delete_error",
-                    "message": str(e)
-                })
+    s3 = await tile_cache._ensure_s3_client()
+    batch_size = 1000
+
+    for i in range(0, len(orphaned_objects), batch_size):
+        batch = orphaned_objects[i:i+batch_size]
+        objects_to_delete = [{'Key': obj['Key']} for obj in batch]
+
+        try:
+            response = await s3.delete_objects(
+                Bucket=tile_cache.s3_bucket,
+                Delete={'Objects': objects_to_delete}
+            )
+
+            stats.s3_deleted += len(response.get('Deleted', []))
+            stats.s3_errors += len(response.get('Errors', []))
+
+            logger.info(f"Deleted {len(response.get('Deleted', []))} S3 objects")
+
+        except Exception as e:
+            logger.error(f"Error deleting S3 objects: {e}")
+            stats.s3_errors += len(batch)
+            stats.errors.append({
+                "type": "s3_batch_delete_error",
+                "message": str(e)
+            })
 
 
 async def _log_cleanup_operation(stats: CleanupStats):

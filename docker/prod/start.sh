@@ -26,7 +26,7 @@ exec gunicorn main:app \
     --worker-connections ${WORKER_CONNECTIONS:-2000} \
     --max-requests ${MAX_REQUESTS:-10000} \
     --max-requests-jitter ${MAX_REQUESTS_JITTER:-1000} \
-    --timeout 30 \
+    --timeout 300 \
     --access-logfile - \
     --error-logfile - \
     --log-level ${LOG_LEVEL:-info} \

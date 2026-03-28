@@ -6,14 +6,17 @@
 #   1. Build da imagem Docker
 #   2. Import da imagem no k3s
 #   3. Criação do namespace e recursos (Redis, MinIO, Secret)
-#   4. Deploy da aplicação (10 pods)
-#   5. Aguarda pods ready
-#   6. Inicia monitoramento em background
-#   7. Executa load test
-#   8. Coleta relatório final
+#   4. Deploy dos Celery workers e beat
+#   5. Deploy da aplicação (10 pods)
+#   6. Aguarda pods ready
+#   7. Geração de URLs de tiles a partir do GeoJSON
+#   8. Inicia monitoramento em background
+#   9. Executa load test
 #
 # Uso:
 #   ./run-loadtest.sh [--skip-build] [--duration 300] [--concurrency 50]
+#                     [--geojson /path/to/file.geojson] [--sample-size 1000]
+#                     [--tiles-only]
 #
 # Pré-requisitos:
 #   - k3s instalado e rodando
@@ -44,6 +47,9 @@ DURATION=300
 CONCURRENCY=50
 SKIP_BUILD=false
 LOG_DIR="/tmp/tiles-loadtest-$(date +%Y%m%d-%H%M%S)"
+GEOJSON_PATH=""
+SAMPLE_SIZE=1000
+TILES_ONLY=false
 
 # Parse de argumentos
 while [[ $# -gt 0 ]]; do
@@ -52,6 +58,9 @@ while [[ $# -gt 0 ]]; do
         --duration) DURATION="$2"; shift 2 ;;
         --concurrency) CONCURRENCY="$2"; shift 2 ;;
         --log-dir) LOG_DIR="$2"; shift 2 ;;
+        --geojson) GEOJSON_PATH="$2"; shift 2 ;;
+        --sample-size) SAMPLE_SIZE="$2"; shift 2 ;;
+        --tiles-only) TILES_ONLY=true; shift ;;
         *) echo "Argumento desconhecido: $1"; exit 1 ;;
     esac
 done
@@ -59,13 +68,17 @@ done
 # Criar diretório de logs
 mkdir -p "$LOG_DIR"
 
+TOTAL_STEPS=9
 echo "============================================================"
-echo " TILES LOAD TEST — k3s com 10 pods"
+echo " TILES LOAD TEST — k3s com 10 pods + Celery workers"
 echo "============================================================"
 echo " Projeto:      $PROJECT_DIR"
 echo " Namespace:    $NAMESPACE"
 echo " Duração:      ${DURATION}s"
 echo " Concorrência: $CONCURRENCY workers"
+echo " GeoJSON:      ${GEOJSON_PATH:-nenhum (tiles hardcoded)}"
+echo " Amostra:      $SAMPLE_SIZE pontos"
+echo " Tiles only:   $TILES_ONLY"
 echo " Logs:         $LOG_DIR"
 echo "============================================================"
 echo ""
@@ -74,9 +87,9 @@ echo ""
 # 1. Build da imagem Docker
 # ===========================================================================
 if [ "$SKIP_BUILD" = false ]; then
-    echo "[1/7] Construindo imagem Docker..."
+    echo "[1/$TOTAL_STEPS] Construindo imagem Docker..."
 
-    # Usar docker se disponível, senão buildah/nerdctl
+    # Usar docker se dispon��vel, senão buildah/nerdctl
     if command -v docker &> /dev/null; then
         BUILD_CMD="docker build"
     elif command -v nerdctl &> /dev/null; then
@@ -92,14 +105,14 @@ if [ "$SKIP_BUILD" = false ]; then
 
     echo "   Imagem construída: $IMAGE_NAME:$IMAGE_TAG"
 else
-    echo "[1/7] Build ignorado (--skip-build)"
+    echo "[1/$TOTAL_STEPS] Build ignorado (--skip-build)"
 fi
 
 # ===========================================================================
 # 2. Importar imagem no k3s
 # ===========================================================================
 echo ""
-echo "[2/7] Importando imagem no k3s..."
+echo "[2/$TOTAL_STEPS] Importando imagem no k3s..."
 
 if command -v docker &> /dev/null; then
     docker save "$IMAGE_NAME:$IMAGE_TAG" | sudo k3s ctr images import - 2>&1
@@ -113,7 +126,7 @@ echo "   Imagem importada no k3s"
 # 3. Criar namespace e recursos
 # ===========================================================================
 echo ""
-echo "[3/7] Criando namespace e infraestrutura..."
+echo "[3/$TOTAL_STEPS] Criando namespace e infraestrutura..."
 
 # Namespace
 $KUBECTL apply -f "$K3S_DIR/namespace.yaml"
@@ -141,18 +154,33 @@ bash "$SCRIPT_DIR/seed-mongodb.sh" 2>&1 | tee "$LOG_DIR/seed-mongodb.log"
 echo "   Infraestrutura pronta"
 
 # ===========================================================================
-# 4. Deploy da aplicação
+# 4. Deploy dos Celery workers e beat
 # ===========================================================================
 echo ""
-echo "[4/7] Fazendo deploy da aplicação (10 pods)..."
+echo "[4/$TOTAL_STEPS] Fazendo deploy dos Celery workers e beat..."
+
+$KUBECTL apply -f "$K3S_DIR/celery-worker.yaml"
+$KUBECTL apply -f "$K3S_DIR/celery-beat.yaml"
+
+echo "   Aguardando Celery workers ficarem ready..."
+$KUBECTL wait --for=condition=ready pod -l app=celery-worker -n "$NAMESPACE" --timeout=120s || \
+    echo "   AVISO: Alguns Celery workers podem não estar prontos"
+
+echo "   Celery workers e beat implantados"
+
+# ===========================================================================
+# 5. Deploy da aplicação
+# ===========================================================================
+echo ""
+echo "[5/$TOTAL_STEPS] Fazendo deploy da aplicação (10 pods)..."
 
 $KUBECTL apply -f "$K3S_DIR/deployment.yaml"
 
 # ===========================================================================
-# 5. Aguardar pods ready
+# 6. Aguardar pods ready
 # ===========================================================================
 echo ""
-echo "[5/7] Aguardando pods ficarem ready (pode levar até 3 min)..."
+echo "[6/$TOTAL_STEPS] Aguardando pods ficarem ready (pode levar até 3 min)..."
 
 # Aguardar que pelo menos 8 de 10 pods estejam ready (tolerância para startup lento)
 MAX_WAIT=180
@@ -189,13 +217,42 @@ fi
 
 # Mostrar estado dos pods
 echo ""
-$KUBECTL get pods -n "$NAMESPACE" -l app=tiles-api -o wide
+$KUBECTL get pods -n "$NAMESPACE" -o wide
 
 # ===========================================================================
-# 6. Port-forward + Iniciar monitoramento em background
+# 7. Geração de URLs de tiles a partir do GeoJSON
 # ===========================================================================
 echo ""
-echo "[6/7] Configurando acesso e iniciando monitoramento..."
+TILE_URLS_FILE=""
+TILE_URLS_ARG=""
+TILES_ONLY_ARG=""
+
+if [ -n "$GEOJSON_PATH" ]; then
+    echo "[7/$TOTAL_STEPS] Gerando URLs de tiles a partir do GeoJSON..."
+    TILE_URLS_FILE="$LOG_DIR/tile_urls.json"
+
+    python3 "$SCRIPT_DIR/generate_tile_urls.py" \
+        --geojson-path "$GEOJSON_PATH" \
+        --sample-size "$SAMPLE_SIZE" \
+        --zoom-levels 10,11,12 \
+        --years 2022,2023,2024 \
+        --output "$TILE_URLS_FILE" 2>&1 | tee "$LOG_DIR/generate-urls.log"
+
+    TILE_URLS_ARG="--tile-urls $TILE_URLS_FILE"
+    echo "   URLs geradas: $TILE_URLS_FILE"
+else
+    echo "[7/$TOTAL_STEPS] Sem GeoJSON — usando tiles de teste hardcoded"
+fi
+
+if [ "$TILES_ONLY" = true ]; then
+    TILES_ONLY_ARG="--tiles-only"
+fi
+
+# ===========================================================================
+# 8. Port-forward + Iniciar monitoramento em background
+# ===========================================================================
+echo ""
+echo "[8/$TOTAL_STEPS] Configurando acesso e iniciando monitoramento..."
 
 # Port-forward para acesso local
 $KUBECTL port-forward -n "$NAMESPACE" svc/tiles-api 8083:80 &
@@ -227,19 +284,23 @@ cleanup() {
 trap cleanup EXIT
 
 # ===========================================================================
-# 7. Executar load test
+# 9. Executar load test
 # ===========================================================================
 echo ""
-echo "[7/7] Iniciando load test..."
+echo "[9/$TOTAL_STEPS] Iniciando load test..."
 echo "      Duração: ${DURATION}s | Concorrência: ${CONCURRENCY} workers"
+echo "      Tiles only: $TILES_ONLY"
+echo "      Tile URLs: ${TILE_URLS_FILE:-hardcoded}"
 echo "      Log: $LOG_DIR/loadtest.log"
 echo ""
 
+# shellcheck disable=SC2086
 python3 "$SCRIPT_DIR/loadtest.py" \
     --base-url http://localhost:8083 \
     --concurrency "$CONCURRENCY" \
     --duration "$DURATION" \
-    --log-file "$LOG_DIR/loadtest.log"
+    --log-file "$LOG_DIR/loadtest.log" \
+    $TILE_URLS_ARG $TILES_ONLY_ARG
 
 # ===========================================================================
 # Relatório final

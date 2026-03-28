@@ -2,11 +2,13 @@
 Unified Cache Management API
 Combines all cache-related endpoints in a single, organized module
 """
+import asyncio
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
+import orjson
 from celery.result import AsyncResult
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
 from app.cache.cache_hybrid import tile_cache
@@ -14,17 +16,23 @@ from app.cache.cache_warmer import (
     CacheWarmer, LoadingPattern, schedule_warmup_task, analyze_usage_patterns_task
 )
 from app.core.auth import SuperAdminRequired
-from app.core.config import logger
+from app.core.config import logger, settings
 from app.core.mongodb import get_points_collection, get_campaigns_collection
-from app.tasks.cache_operations import cache_point, cache_campaign, cache_validate
+from app.tasks.cache_operations import (
+    cache_point, cache_campaign, cache_validate,
+    cache_warm_tile, cache_warm_from_tiles_json,
+)
 from app.tasks.celery_app import celery_app
 from app.tasks.cleanup_tasks import cleanup_expired_cache
 
 router = APIRouter(
-    prefix="/api/cache", 
+    prefix="/api/cache",
     tags=["Cache Management"],
     dependencies=[SuperAdminRequired]  # Protege todos os endpoints do router
 )
+
+# Router separado sem autenticação para WebSocket (não suporta HTTPBasic)
+ws_router = APIRouter(prefix="/api/cache", tags=["Cache WebSocket"])
 
 # ============================================================================
 # Request/Response Models
@@ -833,15 +841,8 @@ async def check_cache_integrity():
         
         # Check S3 connection
         try:
-            async with tile_cache.s3_session.client(
-                's3',
-                endpoint_url=tile_cache.s3_endpoint,
-                aws_access_key_id=settings.get("S3_ACCESS_KEY"),
-                aws_secret_access_key=settings.get("S3_SECRET_KEY"),
-                use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
-                verify=settings.get("S3_VERIFY_SSL", True) 
-            ) as s3:
-                await s3.head_bucket(Bucket=tile_cache.s3_bucket)
+            s3 = await tile_cache._ensure_s3_client()
+            await s3.head_bucket(Bucket=tile_cache.s3_bucket)
         except Exception as e:
             issues["connection_issues"].append(f"S3 connection failed: {str(e)}")
         
@@ -856,25 +857,18 @@ async def check_cache_integrity():
                         break
                 
                 # Verify S3 objects exist
-                async with tile_cache.s3_session.client(
-                    's3',
-                    endpoint_url=tile_cache.s3_endpoint,
-                    aws_access_key_id=settings.get("S3_ACCESS_KEY"),
-                    aws_secret_access_key=settings.get("S3_SECRET_KEY"),
-                    use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
-                    verify=settings.get("S3_VERIFY_SSL", True) 
-                ) as s3:
-                    for key in sample_keys:
-                        meta = await r.hgetall(key)
-                        if meta and meta.get(b's3_key'):
-                            s3_key = meta[b's3_key'].decode()
-                            try:
-                                await s3.head_object(Bucket=tile_cache.s3_bucket, Key=s3_key)
-                            except:
-                                issues["missing_s3_objects"].append({
-                                    "redis_key": key.decode(),
-                                    "s3_key": s3_key
-                                })
+                s3 = await tile_cache._ensure_s3_client()
+                for key in sample_keys:
+                    meta = await r.hgetall(key)
+                    if meta and meta.get(b's3_key'):
+                        s3_key = meta[b's3_key'].decode()
+                        try:
+                            await s3.head_object(Bucket=tile_cache.s3_bucket, Key=s3_key)
+                        except Exception:
+                            issues["missing_s3_objects"].append({
+                                "redis_key": key.decode(),
+                                "s3_key": s3_key
+                            })
         
         # Calculate health score
         total_issues = sum(len(v) for v in issues.values())
@@ -1252,7 +1246,346 @@ async def get_cache_recommendations():
             "recommendations": recommendations,
             "total_recommendations": len(recommendations)
         }
-        
+
     except Exception as e:
         logger.exception(f"Error getting recommendations: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Cache Warming via Celery Workers
+# ============================================================================
+
+class WarmTilesRequest(BaseModel):
+    """Request para pré-aquecimento de tiles via Celery workers"""
+    tiles: List[Dict[str, Any]] = Field(..., description="Lista de tiles [{x, y, z, endpoint, params}]")
+    batch_size: int = Field(50, ge=1, le=500, description="Tiles por batch")
+
+
+@router.post("/warm-tiles")
+async def warm_tiles(request: WarmTilesRequest):
+    """Enfileira tiles para pré-aquecimento nos Celery workers."""
+    try:
+        result = cache_warm_from_tiles_json.apply_async(
+            kwargs={"tiles": request.tiles, "batch_size": request.batch_size},
+            queue="high_priority",
+        )
+        return {
+            "status": "warming_started",
+            "total_tiles": len(request.tiles),
+            "batch_size": request.batch_size,
+            "job_id": result.id,
+            "message": f"Enfileiradas {len(request.tiles)} tiles para pré-aquecimento",
+        }
+    except Exception as e:
+        logger.exception("Erro ao enfileirar warming")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# WebSocket — Monitoramento de Cache em Tempo Real
+# ============================================================================
+
+async def _validate_ws_auth(ws: WebSocket) -> bool:
+    """Valida acesso ao WebSocket usando as mesmas credenciais da API (Basic Auth).
+
+    Aceita:
+    - Query params: ws://...?username=<user>&password=<pass>
+    - Header: Authorization: Basic base64(user:pass)
+    - Sem credenciais se ambiente é desenvolvimento
+    """
+    from app.core.mongodb import get_database
+    import hashlib as _hashlib
+
+    # Dev mode — sem autenticação se TILES_ENV != production
+    if settings.get("TILES_ENV", "development") != "production":
+        return True
+
+    # Tentar extrair credenciais
+    username = ws.query_params.get("username", "")
+    password = ws.query_params.get("password", "")
+
+    if not username:
+        # Tentar header Authorization
+        auth_header = ws.headers.get("authorization", "")
+        if auth_header.startswith("Basic "):
+            import base64
+            try:
+                decoded = base64.b64decode(auth_header[6:]).decode("utf-8")
+                username, password = decoded.split(":", 1)
+            except Exception:
+                return False
+
+    if not username or not password:
+        return False
+
+    # Validar contra MongoDB (mesmo que SuperAdminRequired)
+    try:
+        db = get_database()
+        if db is None:
+            return False
+
+        user = await db.users.find_one({
+            "$or": [{"username": username}, {"email": username}],
+            "active": {"$ne": False}
+        })
+        if not user:
+            return False
+
+        # Verificar role
+        if user.get("role") != "super-admin" and user.get("type") != "admin":
+            return False
+
+        # Verificar senha (plain text ou SHA256)
+        stored = user.get("password", "")
+        hashed = _hashlib.sha256(password.encode()).hexdigest()
+        return password == stored or hashed == stored
+
+    except Exception as e:
+        logger.error(f"WebSocket auth error: {e}")
+        return False
+
+
+@ws_router.websocket("/ws/monitor")
+async def cache_monitor_ws(ws: WebSocket):
+    """
+    WebSocket que transmite estatísticas do cache em tempo real (~500ms).
+
+    Autenticação via query param: ws://...?token=<CACHE_WS_TOKEN>
+
+    Usa apenas comandos O(1) do Redis (DBSIZE, INFO) para não degradar
+    performance. A contagem por tipo (tile/meta/lock) é feita via Lua script
+    com SCAN amostral — rápido o suficiente para atualização em tempo real.
+    """
+    if not await _validate_ws_auth(ws):
+        await ws.close(code=1008, reason="Unauthorized")
+        return
+    await ws.accept()
+    logger.info("WebSocket cache monitor conectado")
+
+    # Lua script para contagem rápida por prefixo via SCAN amostral.
+    # Faz um único SCAN com COUNT alto e conta por prefixo no server-side.
+    # Isso evita múltiplos round-trips Python↔Redis.
+    COUNT_BY_PREFIX_LUA = """
+    local cursor = "0"
+    local tile_count = 0
+    local meta_count = 0
+    local lock_count = 0
+    local total_scanned = 0
+    local max_scan = tonumber(ARGV[1]) or 5000
+
+    repeat
+        local result = redis.call("SCAN", cursor, "COUNT", 500)
+        cursor = result[1]
+        local keys = result[2]
+        for _, key in ipairs(keys) do
+            total_scanned = total_scanned + 1
+            if string.sub(key, 1, 5) == "tile:" then
+                tile_count = tile_count + 1
+            elseif string.sub(key, 1, 5) == "meta:" then
+                meta_count = meta_count + 1
+            elseif string.sub(key, 1, 5) == "lock:" then
+                lock_count = lock_count + 1
+            end
+        end
+    until cursor == "0" or total_scanned >= max_scan
+
+    return {tile_count, meta_count, lock_count, total_scanned, cursor == "0" and 1 or 0}
+    """
+
+    try:
+        await tile_cache.initialize()
+        prev_tile = 0
+        prev_time = datetime.now()
+
+        # Registrar o script Lua uma vez
+        async with tile_cache._get_redis() as r:
+            sha = await r.script_load(COUNT_BY_PREFIX_LUA)
+
+        while True:
+            try:
+                async with tile_cache._get_redis() as r:
+                    # Contagem O(n) via Lua no server-side (sem round-trips)
+                    counts = await r.evalsha(sha, 0, 10000)
+                    tile_count, meta_count, lock_count, scanned, complete = counts
+
+                    # INFO e DBSIZE são O(1)
+                    info = await r.info("memory")
+                    dbsize = await r.dbsize()
+
+                now = datetime.now()
+                dt = (now - prev_time).total_seconds()
+                delta_tiles = tile_count - prev_tile
+                rate = delta_tiles / dt if dt > 0 else 0
+
+                # Celery queue lengths (DB 1)
+                import redis.asyncio as async_redis
+                celery_r = async_redis.from_url(
+                    settings.get("CELERY_BROKER_URL", "redis://valkey:6379/1"),
+                    decode_responses=True,
+                )
+                try:
+                    queue_standard = await celery_r.llen("standard")
+                    queue_high = await celery_r.llen("high_priority")
+                finally:
+                    await celery_r.aclose()
+
+                import socket as _socket
+                snapshot = {
+                    "tile_keys": tile_count,
+                    "meta_keys": meta_count,
+                    "lock_keys": lock_count,
+                    "total_keys": dbsize,
+                    "scan_complete": bool(complete),
+                    "delta_tiles": delta_tiles,
+                    "tiles_per_sec": round(rate, 1),
+                    "redis_memory": info.get("used_memory_human", "?"),
+                    "redis_memory_bytes": info.get("used_memory", 0),
+                    "celery_queue_standard": queue_standard,
+                    "celery_queue_high": queue_high,
+                    "s3_connected": tile_cache._s3_client is not None,
+                    "local_cache_size": len(tile_cache.local_cache),
+                    "pod": _socket.gethostname(),
+                    "timestamp": now.isoformat(),
+                }
+
+                prev_tile = tile_count
+                prev_time = now
+
+                await ws.send_text(orjson.dumps(snapshot).decode())
+
+            except Exception as e:
+                await ws.send_text(
+                    orjson.dumps({"error": str(e), "timestamp": datetime.now().isoformat()}).decode()
+                )
+
+            await asyncio.sleep(0.5)
+
+    except WebSocketDisconnect:
+        logger.info("WebSocket cache monitor desconectado")
+    except Exception as e:
+        logger.error(f"WebSocket cache monitor erro: {e}")
+
+
+@ws_router.websocket("/ws/campaign/{campaign_id}")
+async def campaign_monitor_ws(ws: WebSocket, campaign_id: str):
+    """
+    WebSocket que transmite progresso do cache de uma campanha em tempo real (~500ms).
+
+    Usa MongoDB (já conectado no lifespan) para dados da campanha e pontos.
+    Usa Redis para contagem de tiles e métricas globais.
+
+    Autenticação via query param: ws://...?token=<CACHE_WS_TOKEN>
+    """
+    if not await _validate_ws_auth(ws):
+        await ws.close(code=1008, reason="Unauthorized")
+        return
+    await ws.accept()
+    logger.info(f"WebSocket campaign monitor conectado: {campaign_id}")
+
+    import socket as _socket
+    import redis.asyncio as async_redis
+
+    try:
+        await tile_cache.initialize()
+
+        # Conexão MongoDB — reutiliza a do lifespan (motor singleton)
+        from app.core.mongodb import get_database
+        db = get_database()
+        if db is None:
+            await ws.send_text(orjson.dumps({
+                "error": "MongoDB não conectado",
+            }).decode())
+            await ws.close()
+            return
+
+        # Conexão Celery broker (separada, DB 1)
+        celery_r = async_redis.from_url(
+            settings.get("CELERY_BROKER_URL", "redis://valkey:6379/1"),
+            decode_responses=True,
+        )
+
+        prev_cached = 0
+        prev_time = datetime.now()
+
+        # Busca campanha uma vez (dados estáticos)
+        campaign = await db.campaign.find_one({"_id": campaign_id})
+        if not campaign:
+            await ws.send_text(orjson.dumps({
+                "error": f"Campanha '{campaign_id}' não encontrada",
+            }).decode())
+            await ws.close()
+            return
+
+        total_points = await db.points.count_documents({"campaign": campaign_id})
+        campaign_info = {
+            "campaign_id": campaign_id,
+            "campaign_name": campaign.get("name", campaign_id),
+            "image_type": campaign.get("imageType", "landsat"),
+            "years": f"{campaign.get('initialYear', '?')}-{campaign.get('finalYear', '?')}",
+            "total_points": total_points,
+        }
+
+        while True:
+            try:
+                # Contagem dinâmica
+                cached_points = await db.points.count_documents(
+                    {"campaign": campaign_id, "cached": True}
+                )
+                caching_status = (await db.campaign.find_one(
+                    {"_id": campaign_id}, {"caching_status": 1}
+                ) or {}).get("caching_status", "unknown")
+
+                pct = (cached_points / total_points * 100) if total_points > 0 else 0
+
+                now = datetime.now()
+                dt = (now - prev_time).total_seconds()
+                delta = cached_points - prev_cached
+                rate = delta / dt if dt > 0 else 0
+
+                # Redis global
+                async with tile_cache._get_redis() as r:
+                    dbsize = await r.dbsize()
+                    info = await r.info("memory")
+
+                # Celery queues
+                queue_standard = await celery_r.llen("standard")
+                queue_high = await celery_r.llen("high_priority")
+
+                snapshot = {
+                    **campaign_info,
+                    "caching_status": caching_status,
+                    "cached_points": cached_points,
+                    "pending_points": total_points - cached_points,
+                    "cache_percentage": round(pct, 1),
+                    "delta_cached": delta,
+                    "points_per_sec": round(rate, 2),
+                    "redis_total_keys": dbsize,
+                    "redis_memory": info.get("used_memory_human", "?"),
+                    "celery_queue_standard": queue_standard,
+                    "celery_queue_high": queue_high,
+                    "pod": _socket.gethostname(),
+                    "timestamp": now.isoformat(),
+                }
+
+                prev_cached = cached_points
+                prev_time = now
+
+                await ws.send_text(orjson.dumps(snapshot).decode())
+
+            except Exception as e:
+                await ws.send_text(
+                    orjson.dumps({"error": str(e), "timestamp": datetime.now().isoformat()}).decode()
+                )
+
+            await asyncio.sleep(0.5)
+
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket campaign monitor desconectado: {campaign_id}")
+    except Exception as e:
+        logger.error(f"WebSocket campaign monitor erro: {e}")
+    finally:
+        try:
+            await celery_r.aclose()
+        except Exception:
+            pass

@@ -3,16 +3,21 @@ Cache operation tasks
 Handles campaign caching, point caching, and cache warming operations
 """
 import asyncio
+import calendar
 import math
 import random
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 
+import aiohttp
+import ee
 from celery import group, chord
 from loguru import logger
 
 from app.cache.cache_hybrid import tile_cache
+from app.core.config import settings
+from app.core.gee_pool import gee_retry
 from app.core.mongodb import (
     get_points_collection, get_campaigns_collection,
     connect_to_mongo
@@ -137,7 +142,7 @@ def cache_campaign(self, campaign_id: str, batch_size: int = 100,
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(_cache_campaign())
+        return loop.run_until_complete(asyncio.wait_for(_cache_campaign(), timeout=600))
     finally:
         loop.close()
 
@@ -241,7 +246,7 @@ def cache_point(self, point_id: str, force: bool = False) -> Dict[str, Any]:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(_cache_point())
+        return loop.run_until_complete(asyncio.wait_for(_cache_point(), timeout=300))
     finally:
         loop.close()
 
@@ -355,7 +360,7 @@ def finalize_campaign_caching(results: List[Dict[str, Any]], campaign_id: str) -
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(_finalize())
+        return loop.run_until_complete(asyncio.wait_for(_finalize(), timeout=120))
     finally:
         loop.close()
 
@@ -433,6 +438,229 @@ def cache_warm_regions(self, regions: List[Dict[str, Any]] = None,
         raise self.retry(exc=e, countdown=300)
 
 
+@celery_app.task(bind=True, max_retries=2, queue='standard')
+def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
+                    period: str, year: int, month: int,
+                    visparam: str, composite_mode: str = "BEST_IMAGE") -> Dict[str, Any]:
+    """
+    Gera e cacheia um único tile replicando o fluxo exato da API (_serve_tile).
+
+    Usa a mesma chave de cache que a API HTTP, garantindo que tiles pré-aquecidos
+    sejam servidos como cache hit nos requests subsequentes.
+
+    Execução totalmente síncrona (Celery prefork) — sem event loops.
+    Usa Redis síncrono e urllib para evitar conflitos de async no prefork.
+    """
+    import hashlib
+    import urllib.request
+
+    import orjson
+    import redis as sync_redis
+    from app.services.tile import tile2goehashBBOX
+
+    REDIS_URL = settings.get("REDIS_URL", "redis://valkey:6379")
+    S3_ENDPOINT = settings.get("S3_ENDPOINT", "http://minio:9000")
+    PNG_TTL = 30 * 24 * 3600
+    META_TTL = 7 * 24 * 3600
+
+    try:
+        geohash, bbox = tile2goehashBBOX(x, y, z)
+
+        if layer == "landsat" and composite_mode:
+            path_cache = f"{layer}_{period}_{year}_{month}_{visparam}_{composite_mode}/{geohash}"
+        else:
+            path_cache = f"{layer}_{period}_{year}_{month}_{visparam}/{geohash}"
+        file_cache = f"{path_cache}/{z}/{x}_{y}.png"
+
+        # Redis síncrono — sem conflito de event loops
+        r = sync_redis.from_url(REDIS_URL, decode_responses=False)
+
+        # Já cacheado?
+        if r.exists(f"tile:{file_cache}"):
+            return {"status": "already_cached", "tile": file_cache}
+
+        # Gerar datas do período
+        dates = _build_period_dates(period, year, month)
+
+        # Obter URL do EE (ou do meta cache)
+        raw_meta = r.get(f"meta:{path_cache}")
+        meta = orjson.loads(raw_meta) if raw_meta else None
+        expired = (
+            meta is None or
+            (datetime.now() - datetime.fromisoformat(meta["date"])).total_seconds() / 3600
+            > settings.get("LIFESPAN_URL", 24)
+        )
+
+        if expired:
+            geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
+
+            if layer == "landsat":
+                layer_url = _warm_create_landsat_url(geom, dates, visparam, composite_mode)
+            elif layer == "s2_harmonized":
+                layer_url = _warm_create_s2_url(geom, dates, visparam)
+            else:
+                return {"status": "error", "tile": file_cache, "error": f"Unknown layer: {layer}"}
+
+            r.set(f"meta:{path_cache}", orjson.dumps({"url": layer_url, "date": datetime.now().isoformat()}), ex=META_TTL)
+        else:
+            layer_url = meta["url"]
+
+        # Download do tile (síncrono)
+        tile_url = layer_url.format(x=x, y=y, z=z)
+        req = urllib.request.Request(tile_url)
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            if resp.status != 200:
+                return {"status": "error", "tile": file_cache, "http_status": resp.status}
+            png_bytes = resp.read()
+
+        # Salva metadados no Redis
+        hash_prefix = hashlib.md5(file_cache.encode()).hexdigest()[:2]
+        s3_key = f"tiles/{hash_prefix}/{file_cache}"
+        r.hset(f"tile:{file_cache}", mapping={
+            "s3_key": s3_key,
+            "size": str(len(png_bytes)),
+            "created": datetime.now().isoformat(),
+            "content_type": "image/png",
+            "s3_synced": "0",
+        })
+        r.expire(f"tile:{file_cache}", PNG_TTL)
+
+        # Upload S3 (best-effort, síncrono via boto3)
+        try:
+            import boto3
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=S3_ENDPOINT,
+                aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
+                aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
+                use_ssl=settings.get("S3_USE_SSL", False),
+                verify=settings.get("S3_VERIFY_SSL", False),
+            )
+            s3.put_object(Bucket=settings.get("S3_BUCKET", "tiles-cache"), Key=s3_key, Body=png_bytes, ContentType="image/png")
+            r.hset(f"tile:{file_cache}", "s3_synced", "1")
+        except Exception as s3_err:
+            logger.warning(f"S3 upload falhou (best-effort): {s3_err}")
+
+        r.close()
+
+        logger.info(f"Tile cached: {file_cache} ({len(png_bytes)} bytes)")
+        return {"status": "cached", "tile": file_cache, "size": len(png_bytes)}
+
+    except Exception as e:
+        logger.error(f"Erro warming tile {z}/{x}/{y}: {e}")
+        raise self.retry(exc=e, countdown=5)
+
+
+@celery_app.task(bind=True, max_retries=1, queue='high_priority')
+def cache_warm_from_tiles_json(self, tiles: List[Dict[str, Any]],
+                                batch_size: int = 50) -> Dict[str, Any]:
+    """
+    Enfileira tiles para pré-aquecimento via Celery workers.
+
+    Args:
+        tiles: Lista de dicts com {x, y, z, endpoint, params}
+        batch_size: Número de tiles por grupo
+    """
+    total = len(tiles)
+    batches = math.ceil(total / batch_size)
+
+    subtasks = []
+    for tile in tiles:
+        params = tile.get("params", {})
+        subtasks.append(
+            cache_warm_tile.s(
+                x=tile["x"], y=tile["y"], z=tile["z"],
+                layer=tile.get("endpoint", "landsat"),
+                period=params.get("period", "MONTH"),
+                year=params.get("year", 2023),
+                month=params.get("month", 8),
+                visparam=params.get("visparam", "landsat-tvi-false"),
+                composite_mode=params.get("compositeMode", "BEST_IMAGE"),
+            )
+        )
+
+    # Dispara em grupos para controlar concorrência
+    job = group(subtasks).apply_async()
+
+    return {
+        "status": "warming_started",
+        "total_tiles": total,
+        "job_id": str(job.id) if job else "inline",
+    }
+
+
+# Helpers para cache_warm_tile (execução síncrona dentro do Celery worker)
+def _build_period_dates(period: str, year: int, month: int) -> Dict[str, str]:
+    """Replica _build_periods de layers.py para uso em contexto Celery."""
+    periods = {
+        "WET": {"dtStart": f"{year}-01-01", "dtEnd": f"{year}-04-30"},
+        "DRY": {"dtStart": f"{year}-06-01", "dtEnd": f"{year}-10-30"},
+    }
+    if period == "MONTH":
+        _, last_day = calendar.monthrange(year, month)
+        periods["MONTH"] = {
+            "dtStart": f"{year}-{month:02}-01",
+            "dtEnd": f"{year}-{month:02}-{last_day:02}",
+        }
+    return periods.get(period, periods["WET"])
+
+
+@gee_retry()
+def _warm_create_landsat_url(geom, dates, visparam_name, composite_mode):
+    """Gera URL Landsat EE — réplica simplificada de _create_landsat_layer_sync."""
+    from app.visualization.visParam import get_landsat_collection, get_landsat_vis_params
+
+    year = datetime.fromisoformat(dates["dtStart"]).year
+    collection = get_landsat_collection(year)
+    vis = get_landsat_vis_params(visparam_name, collection)
+
+    for key in ("min", "max", "gamma"):
+        if isinstance(vis.get(key), list):
+            vis[key] = ",".join(map(str, vis[key]))
+
+    def scale(img):
+        return img.addBands(img.select("SR_B.").multiply(0.0000275).add(-0.2), None, True)
+
+    col = (ee.ImageCollection(collection)
+           .filterDate(dates["dtStart"], dates["dtEnd"])
+           .filterBounds(geom))
+
+    if composite_mode == "BEST_IMAGE":
+        col = col.filter(ee.Filter.lt('CLOUD_COVER', 40)).sort('CLOUD_COVER_LAND')
+        image = ee.Algorithms.If(
+            col.size().gt(0),
+            scale(col.first()).select(vis["bands"]),
+            ee.Image.constant(0).rename(['empty'])
+        )
+    else:
+        image = ee.Algorithms.If(
+            col.size().gt(0),
+            col.map(scale).select(vis["bands"]).mosaic(),
+            ee.Image.constant(0).rename(['empty'])
+        )
+
+    map_id = ee.data.getMapId({"image": image, **vis})
+    return map_id["tile_fetcher"].url_format
+
+
+@gee_retry()
+def _warm_create_s2_url(geom, dates, visparam_name):
+    """Gera URL S2 EE — réplica simplificada de _create_s2_layer_sync."""
+    from app.visualization.vis_params_loader import get_VISPARAMS_sync
+
+    visparams = get_VISPARAMS_sync()
+    vis = visparams.get(visparam_name, visparams.get("tvi-red", {}))
+
+    s2 = (ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
+          .filterDate(dates["dtStart"], dates["dtEnd"])
+          .filterBounds(geom)
+          .sort("CLOUDY_PIXEL_PERCENTAGE", False)
+          .select(*vis.get("select", ["B4", "B3", "B2"])))
+    best = s2.mosaic()
+    map_id = ee.data.getMapId({"image": best, **vis.get("visparam", {})})
+    return map_id["tile_fetcher"].url_format
+
+
 @celery_app.task(queue='low_priority')
 def cache_validate(campaign_id: Optional[str] = None) -> Dict[str, Any]:
     """
@@ -492,7 +720,7 @@ def cache_validate(campaign_id: Optional[str] = None) -> Dict[str, Any]:
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(_validate())
+        return loop.run_until_complete(asyncio.wait_for(_validate(), timeout=120))
     finally:
         loop.close()
 

@@ -13,6 +13,9 @@ def created_routes(app):
     
     # Rota unificada para gerenciamento de cache - OCULTA DA DOCUMENTAÇÃO
     app.include_router(cache.router, tags=["Cache Management"], include_in_schema=False)
+
+    # WebSocket de monitoramento de cache (sem autenticação — WebSocket não suporta HTTPBasic)
+    app.include_router(cache.ws_router, tags=["Cache WebSocket"], include_in_schema=False)
     
     # Rota para gerenciamento de parâmetros de visualização - OCULTA DA DOCUMENTAÇÃO
     app.include_router(vis_params.router, tags=["Visualization Parameters"], include_in_schema=False)

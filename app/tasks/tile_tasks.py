@@ -3,24 +3,56 @@ Tile generation and processing tasks
 Handles all tile-related operations including generation, mosaics, and batch processing
 """
 import asyncio
+import hashlib
 import math
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Dict, Any, List
 
 import aiohttp
 import ee
+import redis as sync_redis
 from loguru import logger
 
-from app.cache.cache import aset_png as set_png
+from app.cache.cache import set_png, aset_png
+from app.core.config import settings as _settings
 from app.core.gee_pool import gee_retry
 from app.tasks.celery_app import celery_app
-from app.visualization.vis_params_loader import get_landsat_collection, get_landsat_vis_params, VISPARAMS
+from app.visualization.visParam import get_landsat_collection, get_landsat_vis_params, VISPARAMS
 
 # Configuration
 TILE_SIZE = 256
 MAX_CONCURRENT_TILES = 50
 GEE_TIMEOUT = 300  # 5 minutes
+PNG_TTL = 30 * 24 * 3600  # 30 dias
+
+# Pool Redis síncrono (module-level) — reutilizado por todas as tasks no worker
+_REDIS_URL = _settings.get("REDIS_URL", "redis://valkey:6379")
+_redis_pool = sync_redis.ConnectionPool.from_url(_REDIS_URL, max_connections=20)
+
+
+def _get_sync_redis():
+    """Retorna cliente Redis síncrono usando o pool compartilhado."""
+    return sync_redis.Redis(connection_pool=_redis_pool)
+
+
+def _save_tile_to_redis(cache_key: str, tile_data: bytes):
+    """Salva tile no Redis síncrono via pool compartilhado."""
+    r = _get_sync_redis()
+    try:
+        hash_prefix = hashlib.md5(cache_key.encode()).hexdigest()[:2]
+        s3_key = f"tiles/{hash_prefix}/{cache_key}"
+        r.hset(f"tile:{cache_key}", mapping={
+            "s3_key": s3_key,
+            "size": str(len(tile_data)),
+            "created": datetime.now().isoformat(),
+            "content_type": "image/png",
+            "s3_synced": "0",
+        })
+        r.expire(f"tile:{cache_key}", PNG_TTL)
+    finally:
+        r.close()
 
 
 @celery_app.task(bind=True, max_retries=3, queue='standard')
@@ -56,18 +88,16 @@ def tile_generate(self, z: int, x: int, y: int, layer: str,
         else:
             raise ValueError(f"Unknown layer type: {layer}")
         
-        # Download and cache tile
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            tile_data = loop.run_until_complete(_download_tile(tile_url, x, y, z))
-        finally:
-            loop.close()
-        
-        # Save to cache
+        # Download tile (síncrono)
+        tile_download_url = tile_url.format(x=x, y=y, z=z)
+        req = urllib.request.Request(tile_download_url)
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            tile_data = resp.read()
+
+        # Save to cache via pool compartilhado
         cache_key = f"{layer}/{z}/{x}/{y}"
-        set_png(cache_key, tile_data)
-        
+        _save_tile_to_redis(cache_key, tile_data)
+
         return {
             "status": "success",
             "tile": f"{z}/{x}/{y}",
@@ -251,7 +281,12 @@ def _generate_landsat_tile(bounds: Dict[str, float], params: Dict[str, Any]) -> 
         params.get('vis_param', 'tvi-false'),
         collection_name
     )
-    
+
+    # Converter listas para strings comma-separated (requisito do GEE getMapId)
+    for key in ("min", "max", "gamma"):
+        if isinstance(vis_params.get(key), list):
+            vis_params[key] = ",".join(map(str, vis_params[key]))
+
     # Build image collection
     collection = (ee.ImageCollection(collection_name)
                   .filterDate(f"{year}-01-01", f"{year}-12-31")
@@ -327,7 +362,7 @@ async def _process_mosaic_tiles(mosaic_url: str, tiles: List[Dict[str, int]],
                 
                 # Save to cache
                 cache_key = f"{layer}/{tile['z']}/{tile['x']}/{tile['y']}"
-                await set_png(cache_key, tile_data)
+                await aset_png(cache_key, tile_data)
                 
                 return {
                     "status": "success",
@@ -349,37 +384,38 @@ async def _process_mosaic_tiles(mosaic_url: str, tiles: List[Dict[str, int]],
     return results
 
 
-def _process_single_tile(x: int, y: int, z: int, layer: str, 
+def _process_single_tile(x: int, y: int, z: int, layer: str,
                         params: Dict[str, Any]) -> Dict[str, Any]:
-    """Process a single tile synchronously (for thread pool)"""
+    """Process a single tile synchronously (for thread pool in Celery prefork).
+
+    Usa pool Redis síncrono compartilhado (module-level).
+    """
     try:
         bounds = _get_tile_bounds(x, y, z)
-        
+
         if layer == "landsat":
-            tile_url = _generate_landsat_tile(bounds, params)
+            tile_url_template = _generate_landsat_tile(bounds, params)
         elif layer == "sentinel2":
-            tile_url = _generate_sentinel2_tile(bounds, params)
+            tile_url_template = _generate_sentinel2_tile(bounds, params)
         else:
             raise ValueError(f"Unknown layer type: {layer}")
-        
-        # Download tile
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            tile_data = loop.run_until_complete(_download_tile(tile_url, x, y, z))
-        finally:
-            loop.close()
-        
-        # Save to cache
+
+        # Download tile (síncrono)
+        tile_url = tile_url_template.format(x=x, y=y, z=z)
+        req = urllib.request.Request(tile_url)
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            tile_data = resp.read()
+
+        # Save to cache via pool compartilhado
         cache_key = f"{layer}/{z}/{x}/{y}"
-        set_png(cache_key, tile_data)
-        
+        _save_tile_to_redis(cache_key, tile_data)
+
         return {
             "status": "success",
             "tile": f"{z}/{x}/{y}",
             "size": len(tile_data)
         }
-        
+
     except Exception as e:
         return {
             "status": "error",

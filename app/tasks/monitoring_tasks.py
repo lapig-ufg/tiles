@@ -524,21 +524,13 @@ async def _check_redis_health() -> Dict[str, Any]:
 async def _check_s3_health() -> Dict[str, Any]:
     """Check S3 health"""
     try:
-        async with tile_cache.s3_session.client(
-            's3',
-            endpoint_url=tile_cache.s3_endpoint,
-            aws_access_key_id=settings.get("S3_ACCESS_KEY"),
-            aws_secret_access_key=settings.get("S3_SECRET_KEY"),
-            use_ssl=settings.get("S3_USE_SSL",True),  # <-- ADICIONE ISSO
-            verify=settings.get("S3_VERIFY_SSL", True) 
-        ) as s3:
-            # List buckets to verify connection
-            await s3.list_buckets()
-            
-            return {
-                "status": "healthy",
-                "bucket": tile_cache.s3_bucket
-            }
+        s3 = await tile_cache._ensure_s3_client()
+        await s3.list_buckets()
+
+        return {
+            "status": "healthy",
+            "bucket": tile_cache.s3_bucket
+        }
     except Exception as e:
         return {
             "status": "unhealthy",
