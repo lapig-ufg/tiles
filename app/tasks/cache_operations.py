@@ -88,11 +88,13 @@ def cache_campaign(self, campaign_id: str, batch_size: int = 100,
             # Priority points first
             if priority_mode:
                 query["enhance_in_cache"] = 1
-            
-            points_cursor = points_collection.find(query)
-            points = await points_cursor.to_list(length=None)
-            
-            if not points:
+
+            # Conta total e busca apenas _id para não estourar memória.
+            # Campanhas grandes podem ter centenas de milhares de pontos;
+            # carregar todos os documentos causava OOM (SIGKILL).
+            total_points = await points_collection.count_documents(query)
+
+            if total_points == 0:
                 await campaigns_collection.update_one(
                     {"_id": campaign_id},
                     {"$set": {"caching_status": "completed"}}
@@ -102,26 +104,35 @@ def cache_campaign(self, campaign_id: str, batch_size: int = 100,
                     "message": "All points already cached",
                     "campaign_id": campaign_id
                 }
-            
-            # Process in batches
-            total_points = len(points)
+
             total_batches = math.ceil(total_points / batch_size)
-            
             logger.info(f"Processing {total_points} points in {total_batches} batches")
-            
-            # Create subtasks
+
+            # Streaming: busca apenas _id, em lotes de batch_size
             subtasks = []
-            for i in range(0, total_points, batch_size):
-                batch = points[i:i+batch_size]
-                point_ids = [p["_id"] for p in batch]
-                
+            batch_ids = []
+            batch_index = 0
+            async for doc in points_collection.find(query, {"_id": 1}):
+                batch_ids.append(doc["_id"])
+                if len(batch_ids) >= batch_size:
+                    subtasks.append(
+                        cache_point_batch.s(
+                            batch_ids, campaign_id,
+                            priority=priority_mode or (batch_index == 0)
+                        )
+                    )
+                    batch_ids = []
+                    batch_index += 1
+
+            # Último lote parcial
+            if batch_ids:
                 subtasks.append(
                     cache_point_batch.s(
-                        point_ids, campaign_id,
-                        priority=priority_mode or (i == 0)
+                        batch_ids, campaign_id,
+                        priority=priority_mode or (batch_index == 0)
                     )
                 )
-            
+
             # Execute with chord for coordination
             job = chord(subtasks)(
                 finalize_campaign_caching.s(campaign_id)
@@ -139,12 +150,8 @@ def cache_campaign(self, campaign_id: str, batch_size: int = 100,
             logger.exception(f"Error caching campaign: {e}")
             raise self.retry(exc=e, countdown=60)
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(asyncio.wait_for(_cache_campaign(), timeout=600))
-    finally:
-        loop.close()
+    from app.tasks._loop import run_async
+    return run_async(asyncio.wait_for(_cache_campaign(), timeout=600))
 
 
 @celery_app.task(bind=True, max_retries=3, queue='standard')
@@ -243,12 +250,8 @@ def cache_point(self, point_id: str, force: bool = False) -> Dict[str, Any]:
             logger.exception(f"Error caching point: {e}")
             raise self.retry(exc=e, countdown=30)
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(asyncio.wait_for(_cache_point(), timeout=300))
-    finally:
-        loop.close()
+    from app.tasks._loop import run_async
+    return run_async(asyncio.wait_for(_cache_point(), timeout=300))
 
 
 @celery_app.task(bind=True, max_retries=2, queue='standard')
@@ -357,12 +360,8 @@ def finalize_campaign_caching(results: List[Dict[str, Any]], campaign_id: str) -
             logger.exception(f"Error finalizing campaign caching: {e}")
             return {"status": "error", "error": str(e)}
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(asyncio.wait_for(_finalize(), timeout=120))
-    finally:
-        loop.close()
+    from app.tasks._loop import run_async
+    return run_async(asyncio.wait_for(_finalize(), timeout=120))
 
 
 @celery_app.task(bind=True, max_retries=3, queue='low_priority')
@@ -717,12 +716,8 @@ def cache_validate(campaign_id: Optional[str] = None) -> Dict[str, Any]:
             logger.exception(f"Error validating cache: {e}")
             return {"status": "error", "error": str(e)}
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(asyncio.wait_for(_validate(), timeout=120))
-    finally:
-        loop.close()
+    from app.tasks._loop import run_async
+    return run_async(asyncio.wait_for(_validate(), timeout=120))
 
 
 # Helper functions

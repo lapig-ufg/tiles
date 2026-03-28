@@ -113,12 +113,8 @@ def cleanup_expired_cache(self, dry_run: bool = False,
             })
             raise self.retry(exc=e, countdown=300)
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(asyncio.wait_for(_cleanup(), timeout=600))
-    finally:
-        loop.close()
+    from app.tasks._loop import run_async
+    return run_async(asyncio.wait_for(_cleanup(), timeout=600))
 
 
 @celery_app.task(bind=True, max_retries=2, queue='maintenance')
@@ -197,12 +193,8 @@ def cleanup_orphaned_objects(self, bucket_prefix: Optional[str] = None,
             logger.exception(f"Error cleaning orphaned objects: {e}")
             raise self.retry(exc=e, countdown=180)
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(asyncio.wait_for(_cleanup_orphaned(), timeout=600))
-    finally:
-        loop.close()
+    from app.tasks._loop import run_async
+    return run_async(asyncio.wait_for(_cleanup_orphaned(), timeout=600))
 
 
 @celery_app.task(bind=True, queue='maintenance')
@@ -311,12 +303,8 @@ def cleanup_analyze_usage(self, days: int = 30) -> Dict[str, Any]:
             logger.exception(f"Error analyzing cache usage: {e}")
             return {"error": str(e)}
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(asyncio.wait_for(_analyze(), timeout=300))
-    finally:
-        loop.close()
+    from app.tasks._loop import run_async
+    return run_async(asyncio.wait_for(_analyze(), timeout=300))
 
 
 @celery_app.task(queue='maintenance')
@@ -475,8 +463,8 @@ async def _cleanup_s3_objects(stats: CleanupStats, orphaned_objects: List[Dict[s
 async def _log_cleanup_operation(stats: CleanupStats):
     """Log cleanup operation for auditing"""
     try:
-        from app.core.mongodb import get_db
-        db = await get_db()
+        from app.core.mongodb import get_database
+        db = get_database()
         
         cleanup_logs = db.cleanup_logs
         

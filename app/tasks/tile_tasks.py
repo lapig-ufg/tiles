@@ -202,15 +202,10 @@ def tile_generate_mosaic(self, bounds: Dict[str, float], zoom: int,
             raise ValueError(f"Unknown layer type: {layer}")
         
         # Process tiles from mosaic
-        results = []
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            results = loop.run_until_complete(
-                _process_mosaic_tiles(mosaic_url, tiles, layer)
-            )
-        finally:
-            loop.close()
+        from app.tasks._loop import run_async
+        results = run_async(
+            _process_mosaic_tiles(mosaic_url, tiles, layer)
+        )
         
         successful = sum(1 for r in results if r.get("status") == "success")
         

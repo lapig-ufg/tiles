@@ -2,7 +2,6 @@
 Monitoring and analytics tasks
 Handles metrics collection, pattern analysis, and reporting
 """
-import asyncio
 from collections import defaultdict, Counter
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
@@ -62,12 +61,8 @@ def monitor_collect_metrics(self, hours: int = 24) -> Dict[str, Any]:
             logger.exception(f"Error collecting metrics: {e}")
             return {"error": str(e)}
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(_collect_metrics())
-    finally:
-        loop.close()
+    from app.tasks._loop import run_async
+    return run_async(_collect_metrics())
 
 
 @celery_app.task(bind=True, queue='low_priority')
@@ -127,12 +122,8 @@ def monitor_analyze_patterns(self, days: int = 7) -> Dict[str, Any]:
             logger.exception(f"Error analyzing patterns: {e}")
             return {"error": str(e)}
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(_analyze_patterns())
-    finally:
-        loop.close()
+    from app.tasks._loop import run_async
+    return run_async(_analyze_patterns())
 
 
 @celery_app.task(bind=True, queue='low_priority')
@@ -188,12 +179,8 @@ def monitor_generate_report(self, report_type: str = "daily",
             logger.exception(f"Error generating report: {e}")
             return {"error": str(e)}
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(_generate_report())
-    finally:
-        loop.close()
+    from app.tasks._loop import run_async
+    return run_async(_generate_report())
 
 
 @celery_app.task(queue='low_priority')
@@ -245,12 +232,8 @@ def monitor_check_health() -> Dict[str, Any]:
                 "timestamp": datetime.now().isoformat()
             }
     
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        return loop.run_until_complete(_check_health())
-    finally:
-        loop.close()
+    from app.tasks._loop import run_async
+    return run_async(_check_health())
 
 
 # Helper functions
@@ -377,8 +360,10 @@ async def _store_metrics(metrics: Dict[str, Any]):
     try:
         db = get_database()
         metrics_collection = db.system_metrics
-        
-        await metrics_collection.insert_one(metrics)
+
+        # Cópia para evitar que insert_one adicione _id (ObjectId) ao dict original,
+        # o que causaria EncodeError na serialização JSON do resultado Celery.
+        await metrics_collection.insert_one(dict(metrics))
         
         # Clean up old metrics (keep 30 days)
         cutoff_date = datetime.now() - timedelta(days=30)
@@ -620,34 +605,75 @@ def _get_report_period(report_type: str) -> Dict[str, str]:
 
 
 async def _generate_health_section() -> Dict[str, Any]:
-    """Generate health section for report"""
-    health = await monitor_check_health()
+    """Generate health section for report.
+
+    Chama a coroutine _check_health() diretamente ao invés da task Celery
+    monitor_check_health(), pois já estamos dentro de run_async() —
+    chamar a task causaria nested run_until_complete no mesmo loop.
+    """
+    health = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "components": {}
+    }
+    try:
+        await tile_cache.initialize()
+        health["components"]["redis"] = await _check_redis_health()
+        health["components"]["s3"] = await _check_s3_health()
+        health["components"]["mongodb"] = await _check_mongodb_health()
+        health["components"]["celery"] = _check_celery_health()
+        unhealthy = [k for k, v in health["components"].items()
+                     if v.get("status") != "healthy"]
+        if unhealthy:
+            health["status"] = "degraded"
+            health["unhealthy_components"] = unhealthy
+    except Exception as e:
+        logger.error(f"Error in health section: {e}")
+        health["status"] = "error"
+        health["error"] = str(e)
     return health
 
 
 async def _generate_cache_section() -> Dict[str, Any]:
     """Generate cache section for report"""
-    metrics = await _collect_cache_metrics()
-    return metrics
+    return await _collect_cache_metrics()
 
 
 async def _generate_task_section() -> Dict[str, Any]:
     """Generate task section for report"""
-    metrics = await _collect_task_metrics(24)
-    return metrics
+    return await _collect_task_metrics(24)
 
 
 async def _generate_error_section() -> List[Dict[str, Any]]:
     """Generate error section for report"""
-    errors = await _collect_error_metrics(24)
-    return errors
+    return await _collect_error_metrics(24)
 
 
 async def _generate_recommendations_section() -> List[str]:
-    """Generate recommendations section for report"""
-    # Analyze recent patterns
-    analysis = await monitor_analyze_patterns(7)
-    return analysis.get("recommendations", [])
+    """Generate recommendations section for report.
+
+    Executa a análise de padrões inline ao invés de chamar a task Celery
+    monitor_analyze_patterns(), evitando nested run_until_complete.
+    """
+    try:
+        db = get_database()
+        start_date = datetime.now() - timedelta(days=7)
+        metrics_collection = db.system_metrics
+        cursor = metrics_collection.find({
+            "timestamp": {"$gte": start_date.isoformat()}
+        })
+        all_metrics = await cursor.to_list(length=None)
+        if not all_metrics:
+            return []
+        analysis = {
+            "peak_times": _analyze_peak_times(all_metrics),
+            "popular_regions": await _analyze_popular_regions(7),
+            "usage_patterns": _analyze_usage_patterns(all_metrics),
+        }
+        return _generate_pattern_recommendations(analysis)
+    except Exception as e:
+        logger.error(f"Error generating recommendations: {e}")
+        return []
 
 
 async def _store_report(report: Dict[str, Any]):
@@ -656,7 +682,7 @@ async def _store_report(report: Dict[str, Any]):
         db = get_database()
         reports_collection = db.monitoring_reports
         
-        await reports_collection.insert_one(report)
+        await reports_collection.insert_one(dict(report))
         
         # Keep only last 90 days of reports
         cutoff = datetime.now() - timedelta(days=90)

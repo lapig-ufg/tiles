@@ -19,28 +19,28 @@ from app.core.config import settings
 @worker_process_init.connect
 def _init_gee_for_celery_worker(**kwargs):
     """Cada worker Celery (prefork) adquire uma SA do pool e conecta ao MongoDB ao iniciar."""
-    import asyncio
     from app.core.gee_auth import initialize_earth_engine
+    from app.tasks._loop import run_async
 
     worker_id = f"{socket.gethostname()}-celery-{os.getpid()}"
     initialize_earth_engine(worker_id)
 
-    # Inicializar MongoDB uma vez por worker (em vez de a cada task)
+    # Inicializar MongoDB uma vez por worker usando o loop persistente
     try:
         from app.core.mongodb import connect_to_mongo
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(connect_to_mongo())
-        loop.close()
+        run_async(connect_to_mongo())
     except Exception as e:
         print(f"[Celery] MongoDB init falhou (non-fatal): {e}")
 
 
 @worker_process_shutdown.connect
 def _shutdown_gee_for_celery_worker(**kwargs):
-    """Libera a SA de volta ao pool ao encerrar o worker."""
+    """Libera a SA de volta ao pool e fecha o event loop ao encerrar o worker."""
     from app.core.gee_auth import shutdown_earth_engine
+    from app.tasks._loop import close_worker_loop
 
     shutdown_earth_engine()
+    close_worker_loop()
 
 # Create Celery instance
 celery_app = Celery(
