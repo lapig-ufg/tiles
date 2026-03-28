@@ -80,6 +80,7 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
     private markerLayersByMapId: { [mapId: string]: VectorLayer<any> } = {};
     private centerCoordinates: Coordinate = fromLonLat([-49.2646, -16.6799]);
     pointCreationMode = false;
+    private _syncing = false;
 
     // Point coordinates
     lat: number | null = null;
@@ -412,7 +413,28 @@ export class ImageCatalogComponent implements OnInit, OnDestroy {
             this.addMarker(projectedCoordinate[1], projectedCoordinate[0], map, mapId);
             this.addGeometryLayer(mapId, map);
             this.mapsInstances.push({id: mapId, map});
+            this.addViewSyncListener(map);
         }, 0);
+    }
+
+    private addViewSyncListener(sourceMap: Map): void {
+        sourceMap.getView().on('change:center', () => this.syncViews(sourceMap));
+        sourceMap.getView().on('change:resolution', () => this.syncViews(sourceMap));
+    }
+
+    private syncViews(sourceMap: Map): void {
+        if (this._syncing) return;
+        this._syncing = true;
+        const sourceView = sourceMap.getView();
+        const center = sourceView.getCenter();
+        const zoom = sourceView.getZoom();
+        for (const inst of this.mapsInstances) {
+            if (inst.map === sourceMap) continue;
+            const view = inst.map.getView();
+            if (center) view.setCenter(center);
+            if (zoom !== undefined) view.setZoom(zoom);
+        }
+        this._syncing = false;
     }
 
     private removeImageMap(imageId: string): void {
