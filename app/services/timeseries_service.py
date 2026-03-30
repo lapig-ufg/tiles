@@ -122,6 +122,10 @@ def build_plotly_response(
     precip_dates: List[str],
     precip_values: List[float],
     method: SmoothingMethod,
+    *,
+    ndwi_dates: Optional[List[str]] = None,
+    ndwi_values: Optional[List[float]] = None,
+    ndwi_smoothed: Optional[List[float]] = None,
 ) -> List[Dict]:
     display_name = get_method_display_name(method)
 
@@ -162,6 +166,34 @@ def build_plotly_response(
             "name": f"Média NDVI ({mean_val:.3f})",
             "line": {"color": "rgb(255, 127, 14)", "dash": "dash", "width": 2},
         })
+
+    if ndwi_dates and ndwi_values and ndwi_smoothed:
+        traces.append({
+            "x": list(ndwi_dates),
+            "y": list(ndwi_smoothed),
+            "type": "scatter",
+            "mode": "lines",
+            "name": f"NDWI ({display_name})",
+            "line": {"color": "rgb(31, 119, 180)"},
+        })
+        traces.append({
+            "x": list(ndwi_dates),
+            "y": list(ndwi_values),
+            "type": "scatter",
+            "mode": "markers",
+            "name": "NDWI (Original)",
+            "marker": {"color": "rgba(31, 119, 180, 0.3)"},
+        })
+        if ndwi_values:
+            ndwi_mean = float(np.mean(ndwi_values))
+            traces.append({
+                "x": [ndwi_dates[0], ndwi_dates[-1]],
+                "y": [ndwi_mean, ndwi_mean],
+                "type": "scatter",
+                "mode": "lines",
+                "name": f"Média NDWI ({ndwi_mean:.3f})",
+                "line": {"color": "rgb(214, 39, 40)", "dash": "dash", "width": 2},
+            })
 
     return traces
 

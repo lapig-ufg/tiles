@@ -51,9 +51,7 @@ export class LandsatTimeseriesComponent implements OnChanges, OnDestroy {
             }
         },
         yaxis: {
-            title: 'NDVI',
-            min: 0,
-            max: 1.2,
+            title: 'NDVI / NDWI',
             type: 'linear'
         },
         yaxis2: {
