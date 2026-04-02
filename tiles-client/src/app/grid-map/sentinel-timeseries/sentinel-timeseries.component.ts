@@ -40,7 +40,7 @@ export class SentinelTimeseriesComponent implements OnChanges, OnDestroy {
     private destroy$ = new Subject<void>();
 
     layout = {
-        title: 'Sentinel 2 Timeseries',
+        title: 'Sentinel 2 — NDVI',
         xaxis: {
             title: 'Date',
             ticks: {
@@ -51,7 +51,7 @@ export class SentinelTimeseriesComponent implements OnChanges, OnDestroy {
             }
         },
         yaxis: {
-            title: 'NDVI / NDWI',
+            title: 'NDVI',
             type: 'linear'
         },
         yaxis2: {

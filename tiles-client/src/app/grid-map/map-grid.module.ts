@@ -9,6 +9,8 @@ import * as PlotlyJS from 'plotly.js/dist/plotly.min.js';
 import {SentinelTimeseriesComponent} from "./sentinel-timeseries/sentinel-timeseries.component";
 import {LandsatTimeseriesComponent} from "./landsat-timeseries/landsat-timeseries.component";
 import {ModisTimeseriesComponent} from "./modis-timeseries/modis-timeseries.component";
+import {SentinelNdwiTimeseriesComponent} from "./sentinel-ndwi-timeseries/sentinel-ndwi-timeseries.component";
+import {LandsatNdwiTimeseriesComponent} from "./landsat-ndwi-timeseries/landsat-ndwi-timeseries.component";
 import {TabViewModule} from "primeng/tabview";
 import {FormsModule} from "@angular/forms";
 import {SelectButtonModule} from "primeng/selectbutton";
@@ -31,6 +33,8 @@ PlotlyModule.plotlyjs = PlotlyJS;
         ModisTimeseriesComponent,
         LandsatTimeseriesComponent,
         SentinelTimeseriesComponent,
+        SentinelNdwiTimeseriesComponent,
+        LandsatNdwiTimeseriesComponent,
         TabViewModule,
         FormsModule,
         SelectButtonModule,

@@ -9,7 +9,7 @@ import {ProgressSpinnerModule} from "primeng/progressspinner";
 import {SelectButtonModule} from "primeng/selectbutton";
 
 @Component({
-    selector: 'app-landsat-timeseries',
+    selector: 'app-landsat-ndwi-timeseries',
     standalone: true,
     imports: [
         PlotlySharedModule,
@@ -18,10 +18,10 @@ import {SelectButtonModule} from "primeng/selectbutton";
         ProgressSpinnerModule,
         SelectButtonModule
     ],
-    templateUrl: './landsat-timeseries.component.html',
-    styleUrl: './landsat-timeseries.component.scss'
+    templateUrl: './landsat-ndwi-timeseries.component.html',
+    styleUrl: './landsat-ndwi-timeseries.component.scss'
 })
-export class LandsatTimeseriesComponent implements OnChanges, OnDestroy {
+export class LandsatNdwiTimeseriesComponent implements OnChanges, OnDestroy {
     @Input() lat: number | undefined;
     @Input() lon: number | undefined;
     plotlyData: any;
@@ -40,7 +40,7 @@ export class LandsatTimeseriesComponent implements OnChanges, OnDestroy {
     private destroy$ = new Subject<void>();
 
     layout = {
-        title: 'Landsat — NDVI',
+        title: 'Landsat — NDWI',
         xaxis: {
             title: 'Date',
             ticks: {
@@ -51,7 +51,7 @@ export class LandsatTimeseriesComponent implements OnChanges, OnDestroy {
             }
         },
         yaxis: {
-            title: 'NDVI',
+            title: 'NDWI',
             type: 'linear'
         },
         yaxis2: {
@@ -68,7 +68,7 @@ export class LandsatTimeseriesComponent implements OnChanges, OnDestroy {
             tap(() => { this.loading = true; this.plotlyData = null; }),
             switchMap(({lat, lon, method}) => {
                 const params = new HttpParams().set('method', method);
-                const url = `https://tiles.lapig.iesa.ufg.br/api/timeseries/landsat/${lat}/${lon}`;
+                const url = `https://tiles.lapig.iesa.ufg.br/api/timeseries/ndwi/landsat/${lat}/${lon}`;
                 return this.http.get<any[]>(url, {params}).pipe(
                     catchError(() => of(null))
                 );

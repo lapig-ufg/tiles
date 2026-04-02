@@ -198,6 +198,58 @@ def build_plotly_response(
     return traces
 
 
+def build_ndwi_plotly_response(
+    ndwi_dates: List[str],
+    ndwi_values: List[float],
+    ndwi_smoothed: List[float],
+    precip_dates: List[str],
+    precip_values: List[float],
+    method: SmoothingMethod,
+) -> List[Dict]:
+    """Constrói resposta Plotly exclusiva para NDWI + precipitação."""
+    display_name = get_method_display_name(method)
+
+    traces: List[Dict] = [
+        {
+            "x": list(ndwi_dates),
+            "y": list(ndwi_smoothed),
+            "type": "scatter",
+            "mode": "lines",
+            "name": f"NDWI ({display_name})",
+            "line": {"color": "rgb(31, 119, 180)"},
+        },
+        {
+            "x": list(ndwi_dates),
+            "y": list(ndwi_values),
+            "type": "scatter",
+            "mode": "markers",
+            "name": "NDWI (Original)",
+            "marker": {"color": "rgba(31, 119, 180, 0.3)"},
+        },
+        {
+            "x": list(precip_dates),
+            "y": list(precip_values),
+            "type": "bar",
+            "name": "Precipitation",
+            "marker": {"color": "blue"},
+            "yaxis": "y2",
+        },
+    ]
+
+    if ndwi_values:
+        ndwi_mean = float(np.mean(ndwi_values))
+        traces.append({
+            "x": [ndwi_dates[0], ndwi_dates[-1]],
+            "y": [ndwi_mean, ndwi_mean],
+            "type": "scatter",
+            "mode": "lines",
+            "name": f"Média NDWI ({ndwi_mean:.3f})",
+            "line": {"color": "rgb(214, 39, 40)", "dash": "dash", "width": 2},
+        })
+
+    return traces
+
+
 def parse_smoothing_method(method_str: Optional[str]) -> SmoothingMethod:
     if not method_str:
         return DEFAULT_METHOD

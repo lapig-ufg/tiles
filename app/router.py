@@ -1,4 +1,4 @@
-from .api import layers, timeseries, tile_aggregation, cache, vis_params, capabilities, tasks, admin, imagery, cog_proxy, gee_admin
+from .api import layers, timeseries, timeseries_ndwi, tile_aggregation, cache, vis_params, capabilities, tasks, admin, imagery, cog_proxy, gee_admin
 from .modules.embedding_maps.router import router as embedding_maps_router
 
 
@@ -7,6 +7,7 @@ def created_routes(app):
     app.include_router(layers.router, prefix="/api/layers", tags=["Layers"])
     app.include_router(imagery.router, prefix="/api/imagery", tags=["Imagery"])
     app.include_router(timeseries.router, prefix="/api/timeseries", tags=["Timeseries"])
+    app.include_router(timeseries_ndwi.router, prefix="/api/timeseries/ndwi", tags=["Timeseries NDWI"])
     
     # Rota para agregação de tiles - OCULTA DA DOCUMENTAÇÃO
     app.include_router(tile_aggregation.router, prefix="/api", tags=["Aggregation"], include_in_schema=False)
