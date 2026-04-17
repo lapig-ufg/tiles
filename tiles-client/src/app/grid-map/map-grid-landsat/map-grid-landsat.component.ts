@@ -1,4 +1,4 @@
-import {Component, OnInit} from '@angular/core';
+import {Component, OnDestroy, OnInit} from '@angular/core';
 import Map from 'ol/Map';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/Tile';
@@ -15,7 +15,10 @@ import {Icon, Style} from "ol/style";
 import {marker} from "../../../assets/layout/images/marker";
 import VectorSource from "ol/source/Vector";
 import VectorLayer from "ol/layer/Vector";
-import {Observable} from "rxjs";
+import {Observable, Subject} from "rxjs";
+import {takeUntil} from "rxjs/operators";
+import {EventsKey} from "ol/events";
+import {unByKey} from "ol/Observable";
 
 const currentYear = new Date().getFullYear();
 const currentMonth = new Date().getMonth() + 1;
@@ -37,11 +40,14 @@ const CAPABILITIES = {
     templateUrl: './map-grid-landsat.component.html',
     styleUrls: ['./map-grid-landsat.component.scss']
 })
-export class MapGridLandsatComponent implements OnInit {
+export class MapGridLandsatComponent implements OnInit, OnDestroy {
     public landsatMaps: (PeriodMapItem | MonthMapItem)[] = [];
     private centerCoordinates = fromLonLat([-57.149819, -21.329828]);
     private mapsInstances: { id: string, map: Map }[] = [];
     private markerLayersByMapId: { [mapId: string]: VectorLayer<any> } = {};
+    private viewListenerKeys: { mapId: string, keys: EventsKey[] }[] = [];
+    private pendingTimers: ReturnType<typeof setTimeout>[] = [];
+    private destroy$ = new Subject<void>();
     private _syncing = false;
     public pointCreationMode = false;
     public lat: number | null = null;
@@ -65,20 +71,57 @@ export class MapGridLandsatComponent implements OnInit {
     ngOnInit(): void {
         this.initializeMaps();
         this.pointService.setPoint({lat: -21.329828, lon: -57.149819});
-        this.pointService.point$.subscribe({
-            next: point => {
-                if (point.lat && point.lon) {
-                    this.lat = point.lat;
-                    this.lon = point.lon;
-                    this.updateCenterCoordinates([point.lon, point.lat]);
+        this.pointService.point$
+            .pipe(takeUntil(this.destroy$))
+            .subscribe({
+                next: point => {
+                    if (point.lat && point.lon) {
+                        this.lat = point.lat;
+                        this.lon = point.lon;
+                        this.updateCenterCoordinates([point.lon, point.lat]);
+                    }
                 }
-            }
-        });
+            });
         const landsatCapabilities = CAPABILITIES.collections.find(c => c.name === 'landsat');
         if (landsatCapabilities) {
             this.landsatYears = landsatCapabilities.year;
         }
         this.landsatYears.unshift('Todos');
+    }
+
+    ngOnDestroy(): void {
+        this.destroy$.next();
+        this.destroy$.complete();
+        for (const timer of this.pendingTimers) {
+            clearTimeout(timer);
+        }
+        this.pendingTimers = [];
+        this.disposeAllMaps();
+    }
+
+    private disposeMap(inst: { id: string, map: Map }): void {
+        const entry = this.viewListenerKeys.find(e => e.mapId === inst.id);
+        if (entry) {
+            for (const key of entry.keys) {
+                unByKey(key);
+            }
+            this.viewListenerKeys = this.viewListenerKeys.filter(e => e !== entry);
+        }
+        const markerLayer = this.markerLayersByMapId[inst.id];
+        if (markerLayer) {
+            inst.map.removeLayer(markerLayer);
+            delete this.markerLayersByMapId[inst.id];
+        }
+        inst.map.setTarget(undefined);
+    }
+
+    private disposeAllMaps(): void {
+        for (const inst of this.mapsInstances) {
+            this.disposeMap(inst);
+        }
+        this.mapsInstances = [];
+        this.markerLayersByMapId = {};
+        this.viewListenerKeys = [];
     }
 
     enablePointCreation(): void {
@@ -197,7 +240,8 @@ private loadProdesYearMaps(type: 'landsat', year: number, visparam: string, star
 
     private addMap(type: 'landsat', mapId: string, periodOrMonth: string, year: number, visparam: string, month?: string): void {
         const url = `https://tm{1-5}.lapig.iesa.ufg.br/api/layers/landsat/{x}/{y}/{z}?period=${periodOrMonth}&year=${year}&visparam=${visparam}${periodOrMonth === 'MONTH' ? `&month=${month}` : ''}`;
-        setTimeout(() => {
+        const timer = setTimeout(() => {
+            this.pendingTimers = this.pendingTimers.filter(t => t !== timer);
             const map = new Map({
                 target: mapId,
                 layers: [
@@ -228,13 +272,16 @@ private loadProdesYearMaps(type: 'landsat', year: number, visparam: string, star
             const projectedCoordinate = transform(this.centerCoordinates, 'EPSG:3857', 'EPSG:4326');
             this.addMarker(projectedCoordinate[1], projectedCoordinate[0], map, mapId);
             this.mapsInstances.push({id: mapId, map});
-            this.addViewSyncListener(map);
+            this.addViewSyncListener(mapId, map);
         }, 0);
+        this.pendingTimers.push(timer);
     }
 
-    private addViewSyncListener(sourceMap: Map): void {
-        sourceMap.getView().on('change:center', () => this.syncViews(sourceMap));
-        sourceMap.getView().on('change:resolution', () => this.syncViews(sourceMap));
+    private addViewSyncListener(mapId: string, sourceMap: Map): void {
+        const view = sourceMap.getView();
+        const k1 = view.on('change:center', () => this.syncViews(sourceMap)) as EventsKey;
+        const k2 = view.on('change:resolution', () => this.syncViews(sourceMap)) as EventsKey;
+        this.viewListenerKeys.push({mapId, keys: [k1, k2]});
     }
 
     private syncViews(sourceMap: Map): void {
@@ -270,7 +317,15 @@ private loadProdesYearMaps(type: 'landsat', year: number, visparam: string, star
     }
 
     public updateLandsatMaps(): void {
-        this.mapsInstances = this.mapsInstances.filter(mapInstance => !mapInstance.id.startsWith('landsat-map'));
+        for (const timer of this.pendingTimers) {
+            clearTimeout(timer);
+        }
+        this.pendingTimers = [];
+        const toDispose = this.mapsInstances.filter(m => m.id.startsWith('landsat-map'));
+        for (const inst of toDispose) {
+            this.disposeMap(inst);
+        }
+        this.mapsInstances = this.mapsInstances.filter(m => !m.id.startsWith('landsat-map'));
         this.createMaps('landsat', this.selectedLandsatPeriod, this.selectedLandsatVisParam);
     }
     public getObjectKeys(object: any): string[] {

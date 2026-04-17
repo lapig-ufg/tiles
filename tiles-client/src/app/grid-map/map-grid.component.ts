@@ -19,6 +19,10 @@ import {marker} from "../../assets/layout/images/marker";
 import {ScreenStateConfig, ScreenStateBinder} from '../screen-state/interfaces/screen-state.interfaces';
 import {ScreenStateService} from '../screen-state/services/screen-state.service';
 import {bindState} from '../screen-state/helpers/manual-state.helper';
+import {Subject} from 'rxjs';
+import {takeUntil} from 'rxjs/operators';
+import {EventsKey} from 'ol/events';
+import {unByKey} from 'ol/Observable';
 
 const currentYear = new Date().getFullYear();
 const currentMonth = new Date().getMonth() + 1;
@@ -66,6 +70,9 @@ export class MapGridComponent implements OnInit, OnDestroy {
     private centerCoordinates = fromLonLat([-57.149819, -21.329828]);
     private mapsInstances: { id: string, map: Map }[] = [];
     private markerLayersByMapId: { [mapId: string]: VectorLayer<any> } = {};
+    private viewListenerKeys: { mapId: string, keys: EventsKey[] }[] = [];
+    private pendingTimers: ReturnType<typeof setTimeout>[] = [];
+    private destroy$ = new Subject<void>();
     private _syncing = false;
     public pointCreationMode = false;
     public lat: number | null = null;
@@ -119,19 +126,53 @@ export class MapGridComponent implements OnInit, OnDestroy {
 
         this.initializeMaps();
         this.pointService.setPoint({lat: -21.329828, lon: -57.149819})
-        this.pointService.point$.subscribe({
-            next: point => {
-                if (point.lat && point.lon) {
-                    this.lat = point.lat;
-                    this.lon = point.lon;
-                    this.updateCenterCoordinates([point.lon, point.lat]);
+        this.pointService.point$
+            .pipe(takeUntil(this.destroy$))
+            .subscribe({
+                next: point => {
+                    if (point.lat && point.lon) {
+                        this.lat = point.lat;
+                        this.lon = point.lon;
+                        this.updateCenterCoordinates([point.lon, point.lat]);
+                    }
                 }
-            }
-        });
+            });
     }
 
     ngOnDestroy(): void {
+        this.destroy$.next();
+        this.destroy$.complete();
+        for (const timer of this.pendingTimers) {
+            clearTimeout(timer);
+        }
+        this.pendingTimers = [];
+        this.disposeAllMaps();
         this.stateBinder.destroy();
+    }
+
+    private disposeMap(inst: { id: string, map: Map }): void {
+        const entry = this.viewListenerKeys.find(e => e.mapId === inst.id);
+        if (entry) {
+            for (const key of entry.keys) {
+                unByKey(key);
+            }
+            this.viewListenerKeys = this.viewListenerKeys.filter(e => e !== entry);
+        }
+        const markerLayer = this.markerLayersByMapId[inst.id];
+        if (markerLayer) {
+            inst.map.removeLayer(markerLayer);
+            delete this.markerLayersByMapId[inst.id];
+        }
+        inst.map.setTarget(undefined);
+    }
+
+    private disposeAllMaps(): void {
+        for (const inst of this.mapsInstances) {
+            this.disposeMap(inst);
+        }
+        this.mapsInstances = [];
+        this.markerLayersByMapId = {};
+        this.viewListenerKeys = [];
     }
 
     enablePointCreation(): void {
@@ -217,7 +258,8 @@ export class MapGridComponent implements OnInit, OnDestroy {
     }
 
     private createMap(mapId: string, periodOrMonth: string, year: number, type: string, visparam: string, month?: string): void {
-        setTimeout(() => {
+        const timer = setTimeout(() => {
+            this.pendingTimers = this.pendingTimers.filter(t => t !== timer);
             const url = `https://tm{1-5}.lapig.iesa.ufg.br/api/layers/${type === 'sentinel' ? 's2_harmonized' : 'landsat'}/{x}/{y}/{z}?period=${periodOrMonth}&year=${year}&visparam=${visparam}${periodOrMonth === 'MONTH' ? `&month=${month}` : ''}`;
             // const url = `http://127.0.0.1:8000/api/layers/${type === 'sentinel' ? 's2_harmonized' : 'landsat'}/{x}/{y}/{z}?period=${periodOrMonth}&year=${year}&visparam=${visparam}${periodOrMonth === 'MONTH' ? `&month=${month}` : ''}`;
             const map = new Map({
@@ -251,13 +293,16 @@ export class MapGridComponent implements OnInit, OnDestroy {
             this.addMarker(projectedCoordinate[1], projectedCoordinate[0], map, mapId);
 
             this.mapsInstances.push({id: mapId, map});
-            this.addViewSyncListener(map);
+            this.addViewSyncListener(mapId, map);
         }, 0);
+        this.pendingTimers.push(timer);
     }
 
-    private addViewSyncListener(sourceMap: Map): void {
-        sourceMap.getView().on('change:center', () => this.syncViews(sourceMap));
-        sourceMap.getView().on('change:resolution', () => this.syncViews(sourceMap));
+    private addViewSyncListener(mapId: string, sourceMap: Map): void {
+        const view = sourceMap.getView();
+        const k1 = view.on('change:center', () => this.syncViews(sourceMap)) as EventsKey;
+        const k2 = view.on('change:resolution', () => this.syncViews(sourceMap)) as EventsKey;
+        this.viewListenerKeys.push({mapId, keys: [k1, k2]});
     }
 
     private syncViews(sourceMap: Map): void {
@@ -292,8 +337,16 @@ export class MapGridComponent implements OnInit, OnDestroy {
         }
     }
 
+    private disposeSentinelMaps(): void {
+        const toDispose = this.mapsInstances.filter(m => m.id.startsWith('sentinel-map'));
+        for (const inst of toDispose) {
+            this.disposeMap(inst);
+        }
+        this.mapsInstances = this.mapsInstances.filter(m => !m.id.startsWith('sentinel-map'));
+    }
+
     public updateSentinelMaps(): void {
-        this.mapsInstances = this.mapsInstances.filter(mapInstance => !mapInstance.id.startsWith('sentinel-map'));
+        this.disposeSentinelMaps();
         this.createMaps('sentinel', this.selectedSentinelPeriod, this.selectedSentinelVisParam);
         this.stateBinder.patchAndPersist({
             selectedSentinelPeriod: this.selectedSentinelPeriod,
@@ -308,7 +361,7 @@ export class MapGridComponent implements OnInit, OnDestroy {
         this.selectedSentinelPeriod = s.selectedSentinelPeriod;
         this.selectedSentinelYear = currentYear;
         this.selectedSentinelVisParam = s.selectedSentinelVisParam;
-        this.mapsInstances = this.mapsInstances.filter(m => !m.id.startsWith('sentinel-map'));
+        this.disposeSentinelMaps();
         this.createMaps('sentinel', this.selectedSentinelPeriod, this.selectedSentinelVisParam);
     }
 }

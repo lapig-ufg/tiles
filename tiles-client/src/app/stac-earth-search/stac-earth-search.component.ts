@@ -241,7 +241,7 @@ export class StacEarthSearchComponent implements OnInit, OnDestroy {
     // Add sortby — Earth Search v1 supports the STAC Sort Extension
     params.sortby = [{ field: 'properties.datetime', direction: 'desc' }];
 
-    this.stacService.search(EARTH_SEARCH_BASE_URL, params).subscribe({
+    const searchSub = this.stacService.search(EARTH_SEARCH_BASE_URL, params).subscribe({
       next: (response) => {
         this.items = response.features;
         this.totalResults = response.context?.matched ?? response.numberMatched ?? response.features.length;
@@ -267,6 +267,7 @@ export class StacEarthSearchComponent implements OnInit, OnDestroy {
         this.cdr.detectChanges();
       }
     });
+    this.subscriptions.push(searchSub);
   }
 
   clearResults(): void {

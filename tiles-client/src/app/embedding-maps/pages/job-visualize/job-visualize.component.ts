@@ -6,6 +6,8 @@ import TileLayer from 'ol/layer/Tile';
 import XYZ from 'ol/source/XYZ';
 import OSM from 'ol/source/OSM';
 import {fromLonLat, transformExtent} from 'ol/proj';
+import {Subject} from 'rxjs';
+import {takeUntil} from 'rxjs/operators';
 import {EmbeddingMapsApiService} from '../../services/embedding-maps-api.service';
 import {EmbeddingMapsStateService} from '../../services/embedding-maps-state.service';
 import {JobResponse, ProductType, PRODUCT_OPTIONS} from '../../interfaces/embedding-maps.interfaces';
@@ -23,6 +25,7 @@ export class JobVisualizeComponent implements OnInit, OnDestroy, AfterViewInit {
 
   private map: Map | null = null;
   private embeddingLayer: TileLayer<XYZ> | null = null;
+  private destroy$ = new Subject<void>();
 
   productOptions = PRODUCT_OPTIONS;
 
@@ -42,6 +45,12 @@ export class JobVisualizeComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   ngOnDestroy(): void {
+    this.destroy$.next();
+    this.destroy$.complete();
+    if (this.map && this.embeddingLayer) {
+      this.map.removeLayer(this.embeddingLayer);
+      this.embeddingLayer = null;
+    }
     if (this.map) {
       this.map.setTarget(undefined);
       this.map = null;
@@ -50,7 +59,7 @@ export class JobVisualizeComponent implements OnInit, OnDestroy, AfterViewInit {
 
   private loadJob(): void {
     this.loading = true;
-    this.api.getJob(this.jobId).subscribe({
+    this.api.getJob(this.jobId).pipe(takeUntil(this.destroy$)).subscribe({
       next: job => {
         this.job = job;
         this.stateService.setActiveJob(job);
