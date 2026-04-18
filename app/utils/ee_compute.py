@@ -165,12 +165,29 @@ async def compute_value(
                     return data.get("result")
 
                 if resp.status == 429:
-                    _report_429()
+                    # Na 2ª tentativa 429 (attempt >= 1), rotacionar a SA do
+                    # worker para a próxima tentativa — evita insistir na
+                    # mesma conta sobrecarregada. Só rotaciona quando usamos
+                    # a SA do pool (credentials não fornecida externamente).
+                    rotated = False
+                    if attempt >= 1 and credentials is None:
+                        loop = asyncio.get_event_loop()
+                        rotated = await loop.run_in_executor(None, _rotate_sa_on_429)
+                        if rotated:
+                            creds = _resolve_credentials(None)
+                            new_proj = project or _resolve_project(creds)
+                            if new_proj != proj:
+                                proj = new_proj
+                                url = f"{_BASE_URL}/projects/{proj}/value:compute"
+
+                    if not rotated:
+                        _report_429()
 
                     if attempt < max_retries - 1:
                         delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
                         logger.warning(
-                            f"EE REST API 429. "
+                            f"EE REST API 429 "
+                            f"(SA {'rotacionada' if rotated else 'mantida'}). "
                             f"Tentativa {attempt + 1}/{max_retries}, "
                             f"retry em {delay:.1f}s"
                         )
@@ -248,3 +265,20 @@ def _report_429() -> None:
             mgr.report_http_429()
     except Exception:
         pass
+
+
+def _rotate_sa_on_429() -> bool:
+    """Solicita rotação de SA ao manager do worker. Retorna True se rotacionou.
+
+    Executado em run_in_executor pois rotate_on_429 é síncrono e chama
+    ee.Initialize(), bloqueante por alguns segundos.
+    """
+    try:
+        from app.core.gee_auth import get_gee_manager
+        mgr = get_gee_manager()
+        if mgr:
+            mgr.rotate_on_429()
+            return True
+    except Exception as exc:
+        logger.warning(f"Falha ao rotacionar SA no 429 do REST API: {exc}")
+    return False
