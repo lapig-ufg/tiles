@@ -15,6 +15,7 @@ import functools
 import glob
 import json
 import os
+import random
 import socket
 import threading
 import time
@@ -157,8 +158,14 @@ class ServiceAccountPool:
         now = time.time()
         cooldown_seconds = settings.get("GEE_SA_COOLDOWN_SECONDS", 60)
 
-        # Buscar SAs ordenadas por uso (menor primeiro)
-        candidates = self._redis.zrangebyscore(self._KEY_POOL, "-inf", "+inf")
+        # Buscar SAs ordenadas por uso (menor primeiro) com desempate aleatório
+        # entre scores iguais — evita viés lexicográfico do zrangebyscore que
+        # faz as SAs alfabeticamente menores absorverem todo o tráfego quando
+        # os scores voltam a 0 após release.
+        scored = self._redis.zrange(self._KEY_POOL, 0, -1, withscores=True)
+        candidates = [
+            name for name, _ in sorted(scored, key=lambda sc: (sc[1], random.random()))
+        ]
 
         best_sa: str | None = None
         best_cooldown_end: float = float("inf")
@@ -250,10 +257,35 @@ class ServiceAccountPool:
         )
 
     def report_http_429(self, sa_name: str) -> None:
-        """Registra um 429 de download HTTP (métrica apenas, sem cooldown)."""
+        """Registra um 429 de download HTTP e aplica cooldown curto.
+
+        Cooldown menor que o de report_429 (REST API) porque a janela de
+        rate-limiting do endpoint de tiles recupera mais rápido. Preserva
+        um cooldown maior já ativo para não encurtar penalidades.
+        """
+        cooldown_seconds = settings.get("GEE_SA_HTTP_COOLDOWN_SECONDS", 15)
+        now = time.time()
+        new_cooldown_end = now + cooldown_seconds
+
         metrics_key = self._KEY_METRICS.format(sa_name)
-        self._redis.hincrby(metrics_key, "errors_429", 1)
-        self._redis.hset(metrics_key, "last_429_at", str(time.time()))
+
+        existing = self._redis.hget(metrics_key, "cooldown_until")
+        if existing:
+            try:
+                if float(existing) > new_cooldown_end:
+                    pipe = self._redis.pipeline()
+                    pipe.hincrby(metrics_key, "errors_429", 1)
+                    pipe.hset(metrics_key, "last_429_at", str(now))
+                    pipe.execute()
+                    return
+            except ValueError:
+                pass
+
+        pipe = self._redis.pipeline()
+        pipe.hincrby(metrics_key, "errors_429", 1)
+        pipe.hset(metrics_key, "last_429_at", str(now))
+        pipe.hset(metrics_key, "cooldown_until", str(new_cooldown_end))
+        pipe.execute()
 
     # ---- Heartbeat ----
 
