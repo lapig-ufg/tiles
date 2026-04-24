@@ -15,7 +15,7 @@ from typing import Any, Dict, Literal, Optional
 
 import ee
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.cache.cache import (
     aget_meta as get_meta,
@@ -25,7 +25,7 @@ from app.cache.cache import (
     atile_lock as tile_lock,
 )
 from app.core.config import logger, settings
-from app.core.errors import generate_error_image
+from app.core.errors import tile_error_response
 from app.middleware.rate_limiter import limit_imagery
 from app.core.gee_pool import gee_retry
 from app.utils.ee_compute import compute_value
@@ -453,8 +453,9 @@ async def image_tile(
                 await set_meta(meta_key, {"url": layer_url, "date": datetime.now().isoformat()})
             except Exception as e:
                 logger.exception(f"Erro ao criar layer EE para imagem {imageId}")
-                return FileResponse("data/blank.png", media_type="image/png",
-                                    headers={"X-Error": str(e), "X-Image-Id": imageId})
+                resp = tile_error_response.from_exception(e)
+                resp.headers["X-Image-Id"] = imageId
+                return resp
         else:
             layer_url = meta["url"]
 
@@ -469,11 +470,9 @@ async def image_tile(
             )
         except HTTPException as exc:
             logger.exception(f"Erro ao baixar tile da imagem {imageId}")
-            return StreamingResponse(
-                generate_error_image(str(exc.detail)),
-                media_type="image/png",
-                headers={"X-Error": str(exc.detail), "X-Image-Id": imageId},
-            )
+            resp = tile_error_response.from_exception(exc)
+            resp.headers["X-Image-Id"] = imageId
+            return resp
 
 
 # --------------------------------------------------------------------------- #
