@@ -13,15 +13,29 @@ from fastapi import HTTPException
 from app.core.config import logger
 
 
-async def http_get_bytes(url: str, *, max_retries: int = 5, base_delay: float = 1.0) -> bytes:
+async def http_get_bytes(
+    url: str,
+    *,
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+    timeout: float = 10.0,
+) -> bytes:
     """Faz download de bytes via HTTP GET com retry e backoff exponencial.
 
     Trata 429 (rate limit) com backoff exponencial + jitter.
     Retorna os bytes da resposta em caso de 200.
+
+    Parâmetros:
+    - `max_retries`: reduzido de 5 para 3 (PR #5) — retry excessivo amplifica
+      carga no EE sob degradação sem melhorar taxa de sucesso.
+    - `timeout`: total em segundos por tentativa. Sem timeout explícito o
+      worker trava em EE lento, esgota o thread pool.
     """
+    client_timeout = aiohttp.ClientTimeout(total=timeout)
+
     for attempt in range(max_retries):
         try:
-            async with aiohttp.ClientSession() as sess, sess.get(url) as resp:
+            async with aiohttp.ClientSession(timeout=client_timeout) as sess, sess.get(url) as resp:
                 if resp.status == 200:
                     return await resp.read()
                 elif resp.status == 429:
