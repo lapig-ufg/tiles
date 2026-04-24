@@ -7,6 +7,22 @@ from loguru import logger
 from app.core.otel import setup_otel_logging, create_loguru_otel_sink
 
 
+def _inject_request_id(record):
+    """Enriquece todos os records Loguru com `extra["request_id"]`.
+
+    Valor default `-` quando fora de contexto de request (ex: lifespan,
+    warm-up). Dentro de request, vem do `RequestIdMiddleware`.
+    """
+    try:
+        from app.middleware.request_id import request_id_var
+        record["extra"]["request_id"] = request_id_var.get()
+    except Exception:
+        record["extra"]["request_id"] = "-"
+
+
+logger = logger.patch(_inject_request_id)
+
+
 def start_logger():
     type_logger = "development"
     if os.environ.get("TILES_ENV") == "production":
@@ -24,7 +40,10 @@ def start_logger():
     logger.info(f"The system is operating in mode {type_logger}")
 
 
-confi_format = "[ {time} | process: {process.id} | {level: <8}] {module}.{function}:{line} {message}"
+confi_format = (
+    "[ {time} | process: {process.id} | rid: {extra[request_id]} | "
+    "{level: <8}] {module}.{function}:{line} {message}"
+)
 rotation = "500 MB"
 
 
