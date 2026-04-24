@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import ee
 import orjson
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from google.oauth2 import service_account
 import valkey
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,11 +14,12 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-# from prometheus_client import Counter, Histogram, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core import settings, logger
 from app.core.config import start_logger, REDIS_URL
+from app.core.metrics import observe_request
 from app.core.database import Base, engine
 from app.router import created_routes
 from app.utils.cors import origin_regex, allow_origins
@@ -47,19 +48,28 @@ class ORJSONResponse(JSONResponse):
     def render(self, content: typing.Any) -> bytes:
         return orjson.dumps(content)
 
-# Middleware simplificado para timing
+# Middleware simplificado para timing + métricas Prometheus.
 class TimingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
-        
+
         response = await call_next(request)
-        
-        # Calcula duração
+
         duration = time.time() - start_time
-        
-        # Adiciona header de tempo de resposta
         response.headers["X-Response-Time"] = f"{duration:.3f}"
-        
+
+        # Observa métrica de tile. `observe_request` ignora paths fora dos
+        # layers (health, metrics, root) — sem label cardinality explosion.
+        try:
+            observe_request(
+                path=request.url.path,
+                status_code=response.status_code,
+                error_reason=response.headers.get("X-Error-Reason"),
+                duration_seconds=duration,
+            )
+        except Exception:  # nunca quebrar request por falha de métrica
+            logger.exception("Falha ao observar métrica")
+
         return response
 
 # Lifespan manager para inicialização assíncrona
@@ -129,8 +139,15 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Middleware de timing
+# Request ID precisa vir ANTES do timing middleware para que a contextvar
+# esteja setada quando observe_request() lê. ASGI middlewares executam
+# em ordem inversa da adição — então este precisa ser o último add_middleware
+# chamado entre os dois.
+from app.middleware.request_id import RequestIdMiddleware
+
+# Middleware de timing + métricas (inclui request_id no contexto via loguru)
 app.add_middleware(TimingMiddleware)
+app.add_middleware(RequestIdMiddleware)
 
 # Proteção contra hosts não confiáveis
 app.add_middleware(
@@ -149,6 +166,16 @@ app.add_middleware(
     expose_headers=["X-Response-Time", "X-Cache-Status"],
     max_age=3600,
 )
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics() -> Response:
+    """Endpoint Prometheus. Exposto sem rate-limit para scraping interno.
+
+    Em produção, proteger via network policy (Traefik restringe a rede do
+    cluster Prometheus) — o próprio endpoint não valida origem.
+    """
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
 
 @app.get("/", include_in_schema=False)
 @limiter.limit("100/minute")

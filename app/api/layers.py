@@ -17,20 +17,23 @@ from typing import Dict, Any, Literal
 
 import ee
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse
 
 from app.cache.cache import (
     aget_png as get_png, aset_png as set_png,  # bytes (tile)
     aget_meta as get_meta, aset_meta as set_meta,  # {"url": str, "date": iso}
     atile_lock as tile_lock,
 )
+from app.core.circuit_breaker import get_ee_circuit_breaker
 from app.core.config import logger, settings
-from app.core.errors import generate_error_image
+from app.core.errors import generate_error_image, tile_error_response
+from app.core.metrics import observe_cache_hit
 from app.middleware.rate_limiter import limit_sentinel, limit_landsat
 from app.services.tile import tile2goehashBBOX
 from app.utils.capabilities import get_capabilities_provider
 from app.core.gee_pool import gee_retry
 from app.utils.http import http_get_bytes as _http_get_bytes
+from app.visualization.validation import validate_landsat_request
 from app.visualization.vis_params_db import get_landsat_vis_params_async
 from app.visualization.vis_params_loader import get_visparams, get_landsat_vis_params, get_landsat_collection
 
@@ -55,6 +58,50 @@ ee_executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS_EE)
 # --------------------------------------------------------------------------- #
 # Utils comuns                                                                #
 # --------------------------------------------------------------------------- #
+
+
+def _empty_image_with_bands(bands: list[str]):
+    """Imagem server-side totalmente transparente com as bandas solicitadas.
+
+    Usada quando a coleção Landsat filtrada está vazia (area+date sem passagens
+    ou filtros eliminaram tudo). Evita `no band named SR_B4` ao alimentar
+    `getMapId`, que exige que as bandas pedidas em `vis["bands"]` existam no
+    `ee.Image` passado.
+
+    Sem round-trip ao EE (expressão lazy, avaliada apenas no `getMapId` final).
+    O tile PNG resultante é totalmente transparente — o cliente (OpenLayers)
+    renderiza como "sem dados" visualmente.
+    """
+    if not bands:
+        raise ValueError("bands must not be empty")
+    return ee.Image.constant([0] * len(bands)).rename(list(bands)).updateMask(0)
+
+
+def _retry_with_mosaic_if_band_missing(func, exc, composite_mode, call_args, collection, bands):
+    """Fallback automático BEST_IMAGE → MOSAIC quando o EE retorna
+    `Image has no band named ...`.
+
+    Cenas Landsat reprocessadas às vezes chegam à coleção sem todas as bandas.
+    Em BEST_IMAGE a seleção pode cair numa dessas cenas; MOSAIC compõe várias
+    e o problema some. Tentamos uma única vez — em MOSAIC não há para onde
+    recuar, então erro propaga como 500.
+    """
+    error_msg = str(exc)
+    logger.error(f"Earth Engine error in {composite_mode} mode: {error_msg}")
+
+    if "no band named" in error_msg.lower():
+        logger.error(f"Band mismatch error. Collection: {collection}, Required bands: {bands}")
+        if composite_mode == "BEST_IMAGE":
+            logger.warning(
+                f"Retrying with MOSAIC (retry_reason=band_missing_best_image, "
+                f"collection={collection}, bands={bands})"
+            )
+            return func(*call_args, composite_mode="MOSAIC")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Band compatibility error in {composite_mode} mode. Some images do not have the required bands: {bands}.",
+        )
+    raise exc
 
 def _build_periods(period: str | Period, year: int, month: int) -> Dict[str, str]:
     periods = {
@@ -220,7 +267,7 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
         landsat = ee.Algorithms.If(
             size.gt(0),
             process_best_image(),
-            ee.Image.constant(0).rename(['empty'])
+            _empty_image_with_bands(vis["bands"])
         )
         
     else:
@@ -247,7 +294,7 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
             processed = ee.Algorithms.If(
                 num_available.eq(0),
                 # No bands available - return empty image
-                ee.Image.constant(0).rename(['empty']),
+                _empty_image_with_bands(vis["bands"]),
                 # Process normally with available bands
                 landsat_collection.map(scale).select(available_bands).mosaic()
             )
@@ -258,28 +305,17 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
         landsat = ee.Algorithms.If(
             size.gt(0),
             process_with_bands(),
-            ee.Image.constant(0).rename(['empty'])
+            _empty_image_with_bands(vis["bands"])
         )
 
     try:
         map_id = ee.data.getMapId({"image": landsat, **vis})
         return map_id["tile_fetcher"].url_format
     except ee.EEException as e:
-        # Log detailed error for debugging
-        error_msg = str(e)
-        logger.error(f"Earth Engine error in {composite_mode} mode: {error_msg}")
-        
-        # Check if it's a band-related error
-        if "no band named" in error_msg.lower():
-            logger.error(f"Band mismatch error. Collection: {collection}, Required bands: {vis.get('bands', [])}")
-            # Raise a more informative error
-            raise HTTPException(
-                status_code=500,
-                detail=f"Band compatibility error in {composite_mode} mode. Some images in the collection do not have the required bands: {vis.get('bands', [])}. Try using MOSAIC mode instead."
-            )
-        else:
-            # Re-raise the original error
-            raise
+        return _retry_with_mosaic_if_band_missing(
+            _create_landsat_layer_sync, e, composite_mode,
+            (geom, dates, visparam_name), collection, vis.get("bands", []),
+        )
 
 
 @gee_retry()
@@ -354,7 +390,7 @@ def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], 
                             lambda band: img.bandNames().contains(band)
                         ).reduce(ee.Reducer.min()),
                         img.select(required_bands),
-                        ee.Image.constant(0).rename(['empty'])
+                        _empty_image_with_bands(vis["bands"])
                     )
                 ).mosaic()
             
@@ -367,7 +403,7 @@ def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], 
         landsat = ee.Algorithms.If(
             size.gt(0),
             process_best_image(),
-            ee.Image.constant(0).rename(['empty'])
+            _empty_image_with_bands(vis["bands"])
         )
         
     else:
@@ -394,7 +430,7 @@ def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], 
             processed = ee.Algorithms.If(
                 num_available.eq(0),
                 # No bands available - return empty image
-                ee.Image.constant(0).rename(['empty']),
+                _empty_image_with_bands(vis["bands"]),
                 # Process normally with available bands
                 landsat_collection.map(mask_clouds).map(scale).select(available_bands).mosaic()
             )
@@ -405,28 +441,17 @@ def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], 
         landsat = ee.Algorithms.If(
             size.gt(0),
             process_with_bands(),
-            ee.Image.constant(0).rename(['empty'])
+            _empty_image_with_bands(vis["bands"])
         )
 
     try:
         map_id = ee.data.getMapId({"image": landsat, **vis})
         return map_id["tile_fetcher"].url_format
     except ee.EEException as e:
-        # Log detailed error for debugging
-        error_msg = str(e)
-        logger.error(f"Earth Engine error in {composite_mode} mode: {error_msg}")
-        
-        # Check if it's a band-related error
-        if "no band named" in error_msg.lower():
-            logger.error(f"Band mismatch error. Collection: {collection}, Required bands: {vis.get('bands', [])}")
-            # Raise a more informative error
-            raise HTTPException(
-                status_code=500,
-                detail=f"Band compatibility error in {composite_mode} mode. Some images in the collection do not have the required bands: {vis.get('bands', [])}. Try using MOSAIC mode instead."
-            )
-        else:
-            # Re-raise the original error
-            raise
+        return _retry_with_mosaic_if_band_missing(
+            _create_landsat_layer_with_params, e, composite_mode,
+            (geom, dates, vis), collection, vis.get("bands", []),
+        )
 
 # --------------------------------------------------------------------------- #
 # Fluxo genérico de tile                                                      #
@@ -477,6 +502,21 @@ async def _serve_tile(layer: str,
             > settings.LIFESPAN_URL
         )
         if expired:
+            # Circuit breaker: fail-fast quando EE está degradado. Libera
+            # threads EE para outros endpoints e evita retry storm.
+            breaker = get_ee_circuit_breaker()
+            if await breaker.is_open():
+                retry_after = await breaker.seconds_until_retry()
+                logger.warning(
+                    f"CB OPEN — rejeitando tile {file_cache} "
+                    f"(retry_after={retry_after}s)"
+                )
+                return tile_error_response(
+                    status_code=503,
+                    reason="ee_unavailable",
+                    retry_after=retry_after,
+                )
+
             async with tile_lock(f"url:{path_cache}") as should_generate_url:
                 if should_generate_url:
                     geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
@@ -495,9 +535,14 @@ async def _serve_tile(layer: str,
                                 ee_executor, builder_sync, geom, dates, vis
                             )
                         await set_meta(path_cache, {"url": layer_url, "date": datetime.now().isoformat()})
+                        await breaker.record_success()
                     except Exception as e:
                         logger.exception("Erro criar layer EE")
-                        return FileResponse("data/blank.png", media_type="image/png")
+                        try:
+                            await breaker.record_failure()
+                        except Exception:
+                            logger.exception("Falha ao registrar evento no CB")
+                        return tile_error_response.from_exception(e)
                 else:
                     # Outro worker gerou a URL enquanto esperávamos
                     meta = await get_meta(path_cache)
@@ -522,7 +567,7 @@ async def _serve_tile(layer: str,
                             await set_meta(path_cache, {"url": layer_url, "date": datetime.now().isoformat()})
                         except Exception as e:
                             logger.exception("Erro criar layer EE (fallback)")
-                            return FileResponse("data/blank.png", media_type="image/png")
+                            return tile_error_response.from_exception(e)
         else:
             layer_url = meta["url"]
 
@@ -535,8 +580,7 @@ async def _serve_tile(layer: str,
             return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
         except HTTPException as exc:
             logger.exception("Erro ao baixar tile")
-            return StreamingResponse(generate_error_image(str(exc.detail)),
-                                     media_type="image/png")
+            return tile_error_response.from_exception(exc)
 
 # --------------------------------------------------------------------------- #
 # Endpoints                                                                   #
@@ -556,20 +600,10 @@ async def s2_harmonized(x: int, y: int, z: int,
                                  visparam, _create_s2_layer_sync)
     except HTTPException as exc:
         logger.error(f"Erro no tile s2_harmonized/{x}/{y}/{z}: {exc.detail}")
-        error_img = generate_error_image(str(exc.detail))
-        return StreamingResponse(
-            error_img,
-            media_type="image/png",
-            headers={"X-Error": str(exc.detail)}
-        )
+        return tile_error_response.from_exception(exc)
     except Exception as exc:
         logger.exception(f"Erro inesperado no tile s2_harmonized/{x}/{y}/{z}")
-        error_img = generate_error_image("Erro interno do servidor")
-        return StreamingResponse(
-            error_img,
-            media_type="image/png",
-            headers={"X-Error": "Internal Server Error"}
-        )
+        return tile_error_response.from_exception(exc)
 
 
 @router.get("/landsat/{x}/{y}/{z}")
@@ -581,6 +615,14 @@ async def landsat(x: int, y: int, z: int,
                   month: int = datetime.now().month,
                   visparam: str = "landsat-tvi-false",
                   compositeMode: Literal["MOSAIC", "BEST_IMAGE"] = "BEST_IMAGE"):
+    err = validate_landsat_request(year, visparam, compositeMode)
+    if err is not None:
+        logger.info(
+            f"Rejected landsat/{x}/{y}/{z} reason={err.reason} "
+            f"year={year} visparam={visparam} composite={compositeMode}"
+        )
+        return tile_error_response(status_code=err.status_code, reason=err.reason)
+
     try:
         # Create a lambda to pass composite mode to the sync function
         builder = lambda geom, dates, visparam_name: _create_landsat_layer_sync(geom, dates, visparam_name, compositeMode)
@@ -590,18 +632,8 @@ async def landsat(x: int, y: int, z: int,
                                  compositeMode)
     except HTTPException as exc:
         logger.error(f"Erro no tile landsat/{x}/{y}/{z}: {exc.detail}")
-        error_img = generate_error_image(str(exc.detail))
-        return StreamingResponse(
-            error_img,
-            media_type="image/png",
-            headers={"X-Error": str(exc.detail)}
-        )
+        return tile_error_response.from_exception(exc)
     except Exception as exc:
         logger.exception(f"Erro inesperado no tile landsat/{x}/{y}/{z}")
-        error_img = generate_error_image("Erro interno do servidor")
-        return StreamingResponse(
-            error_img,
-            media_type="image/png",
-            headers={"X-Error": "Internal Server Error"}
-        )
+        return tile_error_response.from_exception(exc)
 
