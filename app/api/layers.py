@@ -525,7 +525,7 @@ async def _serve_tile(layer: str,
                 if should_generate_url:
                     geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
                     try:
-                        loop = asyncio.get_event_loop()
+                        loop = asyncio.get_running_loop()
                         if layer == "landsat":
                             year = datetime.fromisoformat(dates["dtStart"]).year
                             collection = get_landsat_collection(year)
@@ -556,7 +556,7 @@ async def _serve_tile(layer: str,
                         # Fallback: gera a URL (caso raro de expiração durante espera)
                         geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
                         try:
-                            loop = asyncio.get_event_loop()
+                            loop = asyncio.get_running_loop()
                             if layer == "landsat":
                                 year = datetime.fromisoformat(dates["dtStart"]).year
                                 collection = get_landsat_collection(year)

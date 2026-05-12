@@ -440,7 +440,7 @@ async def image_tile(
 
         if expired:
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 if layer == "s2_harmonized":
                     vis = await _vis_param_for_s2(visparam)
                     layer_url = await loop.run_in_executor(

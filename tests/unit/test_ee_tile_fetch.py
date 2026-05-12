@@ -79,7 +79,7 @@ async def test_429_triggers_full_rotation_cycle(fake_manager):
 
     assert result == b"PNG-NEW"
     assert fake_get.await_count == 2
-    fake_manager.rotate_on_429.assert_called_once()
+    fake_manager.rotate_on_429.assert_called_once_with(trigger="http_429")
     fake_del.assert_awaited_once_with("landsat_MONTH_2007_7_landsat-tvi-false/abc")
     url_factory.assert_awaited_once()
     fake_set.assert_awaited_once()
