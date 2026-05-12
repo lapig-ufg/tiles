@@ -65,24 +65,45 @@ async def fetch_tile_with_rotation(
         return await http_get_bytes(cached_url.format(x=x, y=y, z=z))
     except EarthEngineRateLimitedError as exc:
         sa_old = exc.sa_name or "<unknown>"
+
+        # Log de detecção do 429 — antes de qualquer ação. Diferenciado do
+        # log de rotação efetiva para evitar mentir sobre o que aconteceu.
         logger.warning(
-            f"sa_rotated_http_429 layer={layer} cache_key={cache_key} "
+            f"tile_429_detected layer={layer} cache_key={cache_key} "
             f"sa_from={sa_old} reason=tile_429"
         )
 
+        # Invalidar PRIMEIRO. Mesmo que a rotação falhe (saturação total
+        # do pool, Redis offline, ee.Initialize quebrado), o próximo request
+        # ainda regenera com SA fresca em vez de reusar a URL podre.
+        # delete_meta é idempotente — DEL em chave ausente é no-op.
+        try:
+            await adelete_meta(cache_key)
+        except Exception as del_exc:
+            logger.warning(f"Falha ao invalidar meta cache {cache_key}: {del_exc}")
+
+        # Tentar rotacionar a SA do worker.
         manager = get_gee_manager()
         if manager is not None:
             # rotate_on_429 é síncrono (segura init_lock + ee.Initialize).
             # Passa trigger="http_429" para diferenciar das rotações REST API
             # nas métricas (gee_sa_rotation_total).
             rotate = functools.partial(manager.rotate_on_429, trigger="http_429")
-            await asyncio.get_event_loop().run_in_executor(None, rotate)
-
-        # Invalidar a URL cacheada — assinada com a SA antiga.
-        try:
-            await adelete_meta(cache_key)
-        except Exception as del_exc:
-            logger.warning(f"Falha ao invalidar meta cache {cache_key}: {del_exc}")
+            try:
+                await asyncio.get_running_loop().run_in_executor(None, rotate)
+                logger.info(
+                    f"sa_rotated_http_429 layer={layer} sa_from={sa_old} "
+                    f"sa_to={manager.current_sa_name}"
+                )
+            except Exception as rot_exc:
+                # Rotação falhou — prossegue para regenerar URL na SA atual
+                # (que pode ser a mesma). É melhor tentar do que abortar:
+                # cache já foi invalidado, e a SA pode ter saído do cooldown
+                # entre o 429 e agora.
+                logger.warning(
+                    f"sa_rotation_failed layer={layer} sa_from={sa_old} "
+                    f"error={rot_exc}"
+                )
 
         # Regenerar a URL com a SA nova (via getMapId no url_factory).
         new_url = await url_factory()
