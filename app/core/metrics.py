@@ -50,6 +50,8 @@ gee_sa_in_cooldown = Gauge(
     labelnames=("sa_name",),
 )
 
+# Counter instrumentado em app/utils/ee_tile_fetch.py (Task 4 do plano).
+# Definição vive aqui para manter as métricas do pool no mesmo módulo.
 gee_tile_url_regen_total = Counter(
     "gee_tile_url_regen_total",
     "Regenerações de URL do EE disparadas por 429, por layer",

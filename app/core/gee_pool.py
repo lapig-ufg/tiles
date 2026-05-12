@@ -221,6 +221,14 @@ class ServiceAccountPool:
         sa_info = self._accounts[sa_name]
         sa_info.load_credentials()
 
+        # Auto-reset do gauge: SA atribuída por `acquire` significa que passou
+        # pelo filtro de cooldown — logo, está fora dele agora.
+        try:
+            from app.core.metrics import gee_sa_in_cooldown
+            gee_sa_in_cooldown.labels(sa_name=sa_name).set(0)
+        except Exception:
+            pass
+
         logger.info(f"Worker {worker_id} adquiriu SA {sa_name}")
         return sa_info
 
@@ -446,11 +454,17 @@ class WorkerGEEManager:
         )
         self._heartbeat_thread.start()
 
-    def rotate_on_429(self) -> None:
+    def rotate_on_429(self, trigger: str = "rest_api_429") -> None:
         """Rotaciona para uma nova SA após erro 429.
 
         Libera a SA atual, reporta o 429, adquire nova SA e re-inicializa.
         Thread-safe via RLock.
+
+        Args:
+            trigger: Origem do 429 — `"rest_api_429"` (default, chamadas via
+                ee_compute / @gee_retry) ou `"http_429"` (download de tile via
+                fetch_tile_with_rotation). Usado em métricas para discriminar
+                causas raiz com SLAs diferentes.
         """
         if not self._worker_id or not self._current_sa:
             logger.error("Tentativa de rotação sem inicialização prévia")
@@ -481,7 +495,7 @@ class WorkerGEEManager:
                 gee_sa_rotation_total.labels(
                     from_sa=old_sa,
                     to_sa=self._current_sa.name,
-                    trigger="http_429",
+                    trigger=trigger,
                 ).inc()
             except Exception:
                 pass
