@@ -2,6 +2,11 @@
 GEE_SERVICE_ACCOUNT_FILE='/app/.service-accounts/gee.json'
 LIFESPAN_URL = 24  # Aumentado para 24 horas
 
+# Timeout total (segundos) por tentativa de download de tile do EE.
+# 10s era insuficiente sob carga (EE responde em 8–12s); 20s reduz
+# TimeoutErrors sem prolongar excessivamente requests com EE realmente lento.
+HTTP_GET_BYTES_TIMEOUT = 20
+
 # Cache híbrido
 REDIS_URL = 'redis://valkey:6379'
 S3_ENDPOINT = 'http://minio:9000'

@@ -297,6 +297,15 @@ class HybridTileCache:
         async with self._get_redis() as r:
             await r.set(f"meta:{key}", orjson.dumps(meta), ex=ttl)
 
+    async def delete_meta(self, key: str) -> None:
+        """Remove metadados (URL EE etc.) do Redis. Usado para invalidar
+        URLs cacheadas vinculadas a SAs penalizadas por 429.
+
+        Idempotente — DEL em chave inexistente é no-op no Redis.
+        """
+        async with self._get_redis() as r:
+            await r.delete(f"meta:{key}")
+
     async def batch_get_tiles(self, keys: List[str]) -> Dict[str, Optional[bytes]]:
         """Busca múltiplos tiles em paralelo para melhor performance"""
         tasks = [self.get_png(key) for key in keys]
