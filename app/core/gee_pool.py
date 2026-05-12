@@ -277,6 +277,11 @@ class ServiceAccountPool:
                     pipe.hincrby(metrics_key, "errors_429", 1)
                     pipe.hset(metrics_key, "last_429_at", str(now))
                     pipe.execute()
+                    try:
+                        from app.core.metrics import gee_sa_http_429_total
+                        gee_sa_http_429_total.labels(sa_name=sa_name).inc()
+                    except Exception:
+                        pass
                     return
             except ValueError:
                 pass
@@ -286,6 +291,15 @@ class ServiceAccountPool:
         pipe.hset(metrics_key, "last_429_at", str(now))
         pipe.hset(metrics_key, "cooldown_until", str(new_cooldown_end))
         pipe.execute()
+
+        try:
+            from app.core.metrics import gee_sa_http_429_total, gee_sa_in_cooldown
+            gee_sa_http_429_total.labels(sa_name=sa_name).inc()
+            gee_sa_in_cooldown.labels(sa_name=sa_name).set(1)
+        except Exception:
+            # Métrica é best-effort — falha de instrumentação não pode
+            # quebrar a rotação que é caminho crítico.
+            pass
 
     # ---- Heartbeat ----
 
@@ -347,6 +361,11 @@ class ServiceAccountPool:
             in_cooldown = bool(
                 cooldown_until and cooldown_until != "" and float(cooldown_until) > now
             )
+            try:
+                from app.core.metrics import gee_sa_in_cooldown
+                gee_sa_in_cooldown.labels(sa_name=sa_name).set(1 if in_cooldown else 0)
+            except Exception:
+                pass
 
             result["accounts"][sa_name] = {
                 "active_workers": int(score),
@@ -457,6 +476,15 @@ class WorkerGEEManager:
                 f"Worker {self._worker_id} rotacionou: "
                 f"{old_sa} → {self._current_sa.name}"
             )
+            try:
+                from app.core.metrics import gee_sa_rotation_total
+                gee_sa_rotation_total.labels(
+                    from_sa=old_sa,
+                    to_sa=self._current_sa.name,
+                    trigger="http_429",
+                ).inc()
+            except Exception:
+                pass
 
     def report_http_429(self) -> None:
         """Registra um 429 de download HTTP (métrica, sem rotação de SA)."""
