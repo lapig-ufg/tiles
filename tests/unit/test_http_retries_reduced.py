@@ -24,6 +24,14 @@ def test_timeout_parameter_present():
 
 def test_default_timeout_resolves_to_twenty_seconds():
     """Default é resolvido em runtime via settings.HTTP_GET_BYTES_TIMEOUT;
-    a constante esperada é 20 s — margem para EE responder em 8–12 s sob carga."""
+    a constante esperada é 20 s — margem para EE responder em 8–12 s sob carga.
+
+    Verifica que a chave existe no settings (não apenas que o fallback bate).
+    Se HTTP_GET_BYTES_TIMEOUT for removido do settings.toml por engano,
+    este teste deve falhar."""
     from app.core.config import settings
-    assert settings.get("HTTP_GET_BYTES_TIMEOUT", 20.0) == 20
+    # Sentinela único: detecta a ausência da chave (sem confundir com o default 20.0).
+    _MISSING = object()
+    value = settings.get("HTTP_GET_BYTES_TIMEOUT", _MISSING)
+    assert value is not _MISSING, "HTTP_GET_BYTES_TIMEOUT deve estar definida em settings.toml"
+    assert value == 20

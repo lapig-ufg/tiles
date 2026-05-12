@@ -39,13 +39,16 @@ async def test_exception_class_exists_and_carries_sa_name():
 @pytest.mark.asyncio
 async def test_persistent_429_raises_typed_exception():
     """Após esgotar todas as tentativas com 429, deve subir
-    EarthEngineRateLimitedError — não HTTPException."""
+    EarthEngineRateLimitedError — não HTTPException. No ambiente de teste
+    não há gee_manager inicializado, então sa_name deve ser None."""
     fake = _fake_aiohttp_session(status=429)
 
     with patch("app.utils.http.aiohttp.ClientSession", return_value=fake):
-        with pytest.raises(EarthEngineRateLimitedError):
+        with pytest.raises(EarthEngineRateLimitedError) as exc_info:
             await http_get_bytes(
                 "http://example.com/tile.png",
                 max_retries=2,
                 base_delay=0.0,
             )
+
+    assert exc_info.value.sa_name is None
