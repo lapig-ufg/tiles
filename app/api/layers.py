@@ -32,7 +32,6 @@ from app.middleware.rate_limiter import limit_sentinel, limit_landsat
 from app.services.tile import tile2goehashBBOX
 from app.utils.capabilities import get_capabilities_provider
 from app.core.gee_pool import gee_retry
-from app.utils.http import http_get_bytes as _http_get_bytes
 from app.utils.ee_tile_fetch import fetch_tile_with_rotation
 from app.utils.http import EarthEngineRateLimitedError
 from app.visualization.validation import validate_landsat_request
@@ -498,6 +497,10 @@ async def _serve_tile(layer: str,
         # 3 ▸ URL EE: meta cache + TTL
         #     Lock separado por path_cache evita thundering herd na geração de URL
         meta      = await get_meta(path_cache)
+        # Circuit breaker hoistado: precisa estar disponível tanto na geração
+        # da URL (record_success/record_failure no expired branch) quanto no
+        # download (record_failure em 429 persistente após rotação do helper).
+        breaker = get_ee_circuit_breaker()
         expired   = (
             meta is None or
             (datetime.now() - datetime.fromisoformat(meta["date"])).total_seconds()/3600
@@ -506,7 +509,6 @@ async def _serve_tile(layer: str,
         if expired:
             # Circuit breaker: fail-fast quando EE está degradado. Libera
             # threads EE para outros endpoints e evita retry storm.
-            breaker = get_ee_circuit_breaker()
             if await breaker.is_open():
                 retry_after = await breaker.seconds_until_retry()
                 logger.warning(
@@ -578,7 +580,7 @@ async def _serve_tile(layer: str,
         #     regenera URL via url_factory → tenta uma vez mais.
         async def _regenerate_url() -> str:
             geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             if layer == "landsat":
                 _year = datetime.fromisoformat(dates["dtStart"]).year
                 collection = get_landsat_collection(_year)
@@ -605,7 +607,14 @@ async def _serve_tile(layer: str,
             logger.info(f"Tile cached: {file_cache}")
             return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
         except EarthEngineRateLimitedError as exc:
-            logger.warning(f"Tile 503 ee_rate_limit (após rotação): {exc}")
+            logger.warning(
+                f"tile_429_persistent_after_rotation layer={layer} "
+                f"cache_key={path_cache} sa_name={exc.sa_name} action=return_503"
+            )
+            try:
+                await breaker.record_failure()
+            except Exception:
+                logger.exception("Falha ao registrar evento no CB")
             return tile_error_response(status_code=503, reason="ee_unavailable")
         except HTTPException as exc:
             logger.exception("Erro ao baixar tile")

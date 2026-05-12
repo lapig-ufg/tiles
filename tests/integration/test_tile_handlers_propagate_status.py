@@ -271,3 +271,47 @@ def test_internal_serve_tile_tile_download_failure_returns_real_status(
     assert resp.headers["retry-after"] == "30"
     assert resp.headers["x-error-reason"] == "ee_rate_limit"
     assert resp.headers["cache-control"] == "no-store, must-revalidate"
+
+
+def test_internal_serve_tile_persistent_429_returns_503_ee_unavailable(
+    app_with_layers, monkeypatch,
+):
+    """Quando fetch_tile_with_rotation lança EarthEngineRateLimitedError
+    (429 persistente após rotação), _serve_tile retorna 503 com X-Error-Reason
+    'ee_unavailable' e não 'ee_rate_limit' — após rotação, o EE está
+    efetivamente indisponível para o cliente, não apenas rate-limited.
+
+    Verifica também que breaker.record_failure() é chamado: o CB não pode ficar
+    cego a esta classe de falha (429 persistente sob carga é a mais relevante).
+    """
+    from app.api import layers
+    from unittest.mock import AsyncMock
+
+    _cb = AsyncMock()
+    _cb.is_open = AsyncMock(return_value=False)
+    _cb.record_success = AsyncMock()
+    _cb.record_failure = AsyncMock()
+    monkeypatch.setattr(layers, "get_ee_circuit_breaker", lambda: _cb)
+
+    # Cache meta válido → pula branch de criação de layer, vai direto pro download.
+    async def _valid_meta(*_a, **_k):
+        return {"url": "https://ee.example/{x}/{y}/{z}",
+                "date": "2999-01-01T00:00:00"}
+    monkeypatch.setattr(layers, "get_meta", _valid_meta)
+
+    # Simula 429 persistente: helper esgotou todos os SAs disponíveis.
+    fake_exc = layers.EarthEngineRateLimitedError("esgotado", sa_name="sa-x@proj")
+
+    async def _boom(*_a, **_k):
+        raise fake_exc
+
+    monkeypatch.setattr(layers, "fetch_tile_with_rotation", _boom)
+
+    client = TestClient(app_with_layers)
+    resp = client.get("/landsat/100/100/10?year=2020&visparam=landsat-tvi-true")
+
+    assert resp.status_code == 503
+    assert resp.headers.get("x-error-reason") == "ee_unavailable"
+    assert "no-store" in resp.headers.get("cache-control", "")
+    # CB deve ter sido notificado da falha persistente.
+    _cb.record_failure.assert_called_once()
