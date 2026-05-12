@@ -25,7 +25,6 @@ from app.cache.cache import (
 from app.core.config import logger, settings
 from app.core.errors import generate_error_image
 from app.middleware.rate_limiter import limit_embedding
-from app.utils.http import http_get_bytes as _http_get_bytes
 from app.utils.ee_tile_fetch import fetch_tile_with_rotation
 from app.utils.http import EarthEngineRateLimitedError
 
