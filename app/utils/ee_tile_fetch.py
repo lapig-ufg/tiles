@@ -20,6 +20,16 @@ Idempotência: o ciclo é seguro em concorrência. Múltiplos workers podem
 invalidar a mesma chave; `delete_meta` é no-op em chave ausente. Múltiplas
 regenerações simultâneas geram URLs equivalentes — set_meta da última
 prevalece, sem perda funcional.
+
+Sobre `tile_lock` na regeneração: a spec mencionou aplicar lock distribuído
+ao redor do `url_factory()` para evitar thundering herd de `getMapId`
+sob saturação. A implementação atual NÃO usa lock — decisão deliberada
+para manter o helper genérico (sem dependência de tile_lock) e porque a
+regeneração só ocorre no path de exceção 429, que já é raro. Sob saturação
+extrema com N workers atingindo 429 simultaneamente, podem ocorrer N
+chamadas redundantes de `getMapId` (200–500ms cada), amplificando a carga
+no EE. Se a métrica `gee_tile_url_regen_total` mostrar volume sustentado,
+considerar adicionar lock distribuído como follow-up.
 """
 from __future__ import annotations
 

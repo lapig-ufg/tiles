@@ -474,8 +474,16 @@ class WorkerGEEManager:
             old_sa = self._current_sa.name
             logger.warning(f"Rotacionando SA {old_sa} por 429 no worker {self._worker_id}")
 
-            # Reportar 429 e liberar
-            self._pool.report_429(old_sa)
+            # Reportar 429 e liberar. Cada trigger tem um cooldown próprio:
+            # - rest_api_429: 60s (REST API recupera mais devagar).
+            # - http_429: 15s (endpoint de tiles recupera mais rápido).
+            # `report_http_429` preserva um cooldown maior já ativo, garantindo
+            # que `report_429` chamado depois sempre vence — então o método
+            # certo precisa ser chamado de acordo com a origem do 429.
+            if trigger == "http_429":
+                self._pool.report_http_429(old_sa)
+            else:
+                self._pool.report_429(old_sa)
             self._pool.release(self._worker_id)
 
             # Adquirir nova SA (excluindo a atual)
