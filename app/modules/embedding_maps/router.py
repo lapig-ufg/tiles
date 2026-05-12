@@ -26,6 +26,8 @@ from app.core.config import logger, settings
 from app.core.errors import generate_error_image
 from app.middleware.rate_limiter import limit_embedding
 from app.utils.http import http_get_bytes as _http_get_bytes
+from app.utils.ee_tile_fetch import fetch_tile_with_rotation
+from app.utils.http import EarthEngineRateLimitedError
 
 from . import repository
 from .schemas import (
@@ -277,45 +279,45 @@ async def serve_tile(
             > settings.get("LIFESPAN_URL", 24)
         )
 
+        # Extrair config do produto antes do branch — usado tanto na geração
+        # inicial quanto na regeneração por 429.
+        config = job.get("config", {})
+        roi_config = config.get("roi", {})
+        year = config.get("year", 2023)
+        processing = config.get("processing", {})
+        scale = processing.get("scale", 10)
+
+        product_cfg = {}
+        for p in config.get("products", []):
+            if p.get("product") == product:
+                product_cfg = p
+                break
+
+        def _build_and_get_url():
+            from .schemas import RoiConfig
+            roi = RoiConfig(**roi_config)
+            ee_roi = roi_to_ee_geometry(roi)
+            img = build_product_image(
+                year, ee_roi, product,
+                rgb_bands=product_cfg.get("rgb_bands"),
+                pca_components=product_cfg.get("pca_components", 3),
+                kmeans_k=product_cfg.get("kmeans_k", 8),
+                scale=scale,
+                sample_size=processing.get("sample_size", 5000),
+                year_b=product_cfg.get("year_b"),
+            )
+            vis = build_vis_params(
+                product,
+                palette=product_cfg.get("palette"),
+                vis_min=product_cfg.get("vis_min", -0.3),
+                vis_max=product_cfg.get("vis_max", 0.3),
+                kmeans_k=product_cfg.get("kmeans_k", 8),
+            )
+            return get_map_id_from_image(img, vis)
+
         if expired:
-            config = job.get("config", {})
-            roi_config = config.get("roi", {})
-            year = config.get("year", 2023)
-            processing = config.get("processing", {})
-            scale = processing.get("scale", 10)
-
-            # Encontrar config do produto especifico
-            product_cfg = {}
-            for p in config.get("products", []):
-                if p.get("product") == product:
-                    product_cfg = p
-                    break
-
             try:
-                loop = asyncio.get_event_loop()
-
-                def _build_and_get_url():
-                    from .schemas import RoiConfig
-                    roi = RoiConfig(**roi_config)
-                    ee_roi = roi_to_ee_geometry(roi)
-                    img = build_product_image(
-                        year, ee_roi, product,
-                        rgb_bands=product_cfg.get("rgb_bands"),
-                        pca_components=product_cfg.get("pca_components", 3),
-                        kmeans_k=product_cfg.get("kmeans_k", 8),
-                        scale=scale,
-                        sample_size=processing.get("sample_size", 5000),
-                        year_b=product_cfg.get("year_b"),
-                    )
-                    vis = build_vis_params(
-                        product,
-                        palette=product_cfg.get("palette"),
-                        vis_min=product_cfg.get("vis_min", -0.3),
-                        vis_max=product_cfg.get("vis_max", 0.3),
-                        kmeans_k=product_cfg.get("kmeans_k", 8),
-                    )
-                    return get_map_id_from_image(img, vis)
-
+                loop = asyncio.get_running_loop()
                 layer_url = await loop.run_in_executor(ee_executor, _build_and_get_url)
                 await set_meta(meta_key, {"url": layer_url, "date": datetime.now().isoformat()}, META_TTL)
             except Exception:
@@ -325,9 +327,19 @@ async def serve_tile(
         else:
             layer_url = meta["url"]
 
-        # 4. Download tile remoto
+        # 4. Download tile remoto via helper com rotação reativa.
+        async def _regenerate_url() -> str:
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(ee_executor, _build_and_get_url)
+
         try:
-            png_bytes = await _http_get_bytes(layer_url.format(x=x, y=y, z=z))
+            png_bytes = await fetch_tile_with_rotation(
+                cache_key=meta_key,
+                cached_url=layer_url,
+                url_factory=_regenerate_url,
+                x=x, y=y, z=z,
+                layer="embedding_maps",
+            )
             await set_png(cache_key, png_bytes, PNG_TTL)
             elapsed = (time.monotonic() - t0) * 1000
             return StreamingResponse(
@@ -335,6 +347,13 @@ async def serve_tile(
                 media_type="image/png",
                 headers={"X-Cache-Status": "MISS", "X-Response-Time": f"{elapsed:.0f}ms"},
             )
+        except EarthEngineRateLimitedError:
+            logger.warning(
+                f"tile_embedding_maps_429_persistent job={job_id} product={product} "
+                f"action=return_503"
+            )
+            error_img = generate_error_image("EE rate limited")
+            return StreamingResponse(error_img, media_type="image/png", status_code=503)
         except HTTPException:
             logger.exception(f"Erro ao baixar tile para job {job_id}")
             error_img = generate_error_image("Erro ao baixar tile")
