@@ -33,6 +33,8 @@ from app.services.tile import tile2goehashBBOX
 from app.utils.capabilities import get_capabilities_provider
 from app.core.gee_pool import gee_retry
 from app.utils.http import http_get_bytes as _http_get_bytes
+from app.utils.ee_tile_fetch import fetch_tile_with_rotation
+from app.utils.http import EarthEngineRateLimitedError
 from app.visualization.validation import validate_landsat_request
 from app.visualization.vis_params_db import get_landsat_vis_params_async
 from app.visualization.vis_params_loader import get_visparams, get_landsat_vis_params, get_landsat_collection
@@ -571,13 +573,40 @@ async def _serve_tile(layer: str,
         else:
             layer_url = meta["url"]
 
-        # 4 ▸ Faz download do tile remoto
+        # 4 ▸ Faz download do tile remoto via helper com rotação reativa.
+        #     Em 429, o helper: rotaciona SA → invalida meta cache →
+        #     regenera URL via url_factory → tenta uma vez mais.
+        async def _regenerate_url() -> str:
+            geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
+            loop = asyncio.get_event_loop()
+            if layer == "landsat":
+                _year = datetime.fromisoformat(dates["dtStart"]).year
+                collection = get_landsat_collection(_year)
+                landsat_vis = await get_landsat_vis_params_async(visparam, collection)
+                return await loop.run_in_executor(
+                    ee_executor,
+                    _create_landsat_layer_with_params,
+                    geom, dates, landsat_vis, composite_mode or "BEST_IMAGE",
+                )
+            return await loop.run_in_executor(
+                ee_executor, builder_sync, geom, dates, vis,
+            )
+
         try:
-            png_bytes = await _http_get_bytes(layer_url.format(x=x, y=y, z=z))
+            png_bytes = await fetch_tile_with_rotation(
+                cache_key=path_cache,
+                cached_url=layer_url,
+                url_factory=_regenerate_url,
+                x=x, y=y, z=z,
+                layer=layer,
+            )
             logger.info(f"Tile downloaded: {file_cache} ({len(png_bytes)} bytes), saving to cache...")
             await set_png(file_cache, png_bytes)
             logger.info(f"Tile cached: {file_cache}")
             return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
+        except EarthEngineRateLimitedError as exc:
+            logger.warning(f"Tile 503 ee_rate_limit (após rotação): {exc}")
+            return tile_error_response(status_code=503, reason="ee_unavailable")
         except HTTPException as exc:
             logger.exception("Erro ao baixar tile")
             return tile_error_response.from_exception(exc)

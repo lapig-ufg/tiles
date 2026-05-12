@@ -35,6 +35,7 @@ def app_with_layers():
     cache_mod.aset_png = _noop
     cache_mod.aget_meta = _none
     cache_mod.aset_meta = _noop
+    cache_mod.adelete_meta = _noop
     cache_mod.atile_lock = _fake_lock
     sys.modules["app.cache.cache"] = cache_mod
 
@@ -110,7 +111,17 @@ def app_with_layers():
     http_util = type(sys)("app.utils.http")
     async def _hgb(url, **k): return b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
     http_util.http_get_bytes = _hgb
+    class _EarthEngineRateLimitedError(Exception):
+        def __init__(self, message: str = "", sa_name=None):
+            super().__init__(message)
+            self.sa_name = sa_name
+    http_util.EarthEngineRateLimitedError = _EarthEngineRateLimitedError
     sys.modules["app.utils.http"] = http_util
+
+    ee_tile_fetch_mod = type(sys)("app.utils.ee_tile_fetch")
+    async def _fetch_tile(*_a, **_k): return b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+    ee_tile_fetch_mod.fetch_tile_with_rotation = _fetch_tile
+    sys.modules["app.utils.ee_tile_fetch"] = ee_tile_fetch_mod
 
     from app.api import layers
 
@@ -249,7 +260,9 @@ def test_internal_serve_tile_tile_download_failure_returns_real_status(
 
     async def _boom(*_a, **_k):
         raise HTTPException(status_code=429, detail="rate limited")
-    monkeypatch.setattr(layers, "_http_get_bytes", _boom)
+    # layers.py agora usa fetch_tile_with_rotation; _http_get_bytes não é mais
+    # chamado no caminho de download do tile.
+    monkeypatch.setattr(layers, "fetch_tile_with_rotation", _boom)
 
     client = TestClient(app_with_layers)
     resp = client.get("/landsat/100/100/10?year=2020&visparam=landsat-tvi-true")
