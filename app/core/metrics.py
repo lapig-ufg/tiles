@@ -50,6 +50,11 @@ gee_sa_in_cooldown = Gauge(
     labelnames=("sa_name",),
 )
 
+gee_pool_exhausted_total = Counter(
+    "gee_pool_exhausted_total",
+    "Eventos de exaustão do pool: todas as SAs em cooldown além do timeout aceitável.",
+)
+
 # Counter instrumentado em app/utils/ee_tile_fetch.py (Task 4 do plano).
 # Definição vive aqui para manter as métricas do pool no mesmo módulo.
 gee_tile_url_regen_total = Counter(

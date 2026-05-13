@@ -23,6 +23,7 @@ from app.cache.cache import (
     aget_png as get_png, aset_png as set_png,  # bytes (tile)
     aget_meta as get_meta, aset_meta as set_meta,  # {"url": str, "date": iso}
     atile_lock as tile_lock,
+    PNG_TTL, PNG_TTL_HISTORICAL,
 )
 from app.core.circuit_breaker import get_ee_circuit_breaker
 from app.core.config import logger, settings
@@ -483,7 +484,10 @@ async def _serve_tile(layer: str,
     # 1 ▸ PNG já cacheado?
     png_bytes = await get_png(file_cache)
     if png_bytes:
+        observe_cache_hit(layer=layer, type_="png_hit")
         return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
+
+    observe_cache_hit(layer=layer, type_="png_miss")
 
     # 2 ▸ Lock distribuído: evita que dois workers gerem o mesmo tile
     async with tile_lock(file_cache) as should_generate:
@@ -491,6 +495,7 @@ async def _serve_tile(layer: str,
             # Outro worker gerou enquanto esperávamos — tenta o cache
             png_bytes = await get_png(file_cache)
             if png_bytes:
+                observe_cache_hit(layer=layer, type_="png_hit")
                 return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
             # Se ainda não tem, gera normalmente (lock expirou ou falhou)
 
@@ -506,6 +511,7 @@ async def _serve_tile(layer: str,
             (datetime.now() - datetime.fromisoformat(meta["date"])).total_seconds()/3600
             > settings.LIFESPAN_URL
         )
+        observe_cache_hit(layer=layer, type_="meta_miss" if expired else "meta_hit")
         if expired:
             # Circuit breaker: fail-fast quando EE está degradado. Libera
             # threads EE para outros endpoints e evita retry storm.
@@ -603,8 +609,12 @@ async def _serve_tile(layer: str,
                 layer=layer,
             )
             logger.info(f"Tile downloaded: {file_cache} ({len(png_bytes)} bytes), saving to cache...")
-            await set_png(file_cache, png_bytes)
-            logger.info(f"Tile cached: {file_cache}")
+            # Anos passados são imutáveis (mosaico/best image já consolidado) —
+            # cacheia por 1 ano. Ano corrente pode ainda receber novas passagens
+            # de satélite, então mantém TTL curto de 30 dias.
+            tile_ttl = PNG_TTL_HISTORICAL if year < datetime.utcnow().year else PNG_TTL
+            await set_png(file_cache, png_bytes, ttl=tile_ttl)
+            logger.info(f"Tile cached: {file_cache} (ttl={tile_ttl}s)")
             return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
         except EarthEngineRateLimitedError as exc:
             logger.warning(
