@@ -1,0 +1,310 @@
+version: '3.8'
+x-common-config: &common-config
+  image: lapig/tiles:prod_latest
+  labels:
+    com.docker.compose.project: tiles
+  volumes:
+    - /etc/localtime:/etc/localtime:ro
+    - /glusterfs/aplications/secrets/gee-sa-pool:/app/.service-accounts:ro
+  networks:
+    - traefik-public
+    - tiles-valkey-network
+    - mongo-network
+
+x-common-celery-env: &common-celery-env
+  GEE_SA_DIRECTORY: /app/.service-accounts/
+  LIFESPAN_URL: "24"
+  LOG_LEVEL: WARNING
+  REDIS_URL: redis://tile-valkey:6379
+  CELERY_BROKER_URL: redis://tile-valkey:6379/1
+  CELERY_RESULT_BACKEND: redis://tile-valkey:6379/2
+  S3_ACCESS_KEY: 70432355FDB551434E63
+  S3_BUCKET: cache
+  S3_ENDPOINT: https://s3-tiles:8333
+  S3_SECRET_KEY: M5cRMmsO9ns81Znm9LJafKHJMhM1zi3NvD4WAGe7
+  S3_USE_SSL: "false"
+  S3_VERIFY_SSL: "false"
+  SKIP_GEE_INIT: "false"
+  TILES_ENV: production
+  MONGODB_URL: mongodb://mongoprod:27017
+  MONGODB_DB: tvi
+
+x-common-tile-env: &common-tile-env
+  ALLOW_ORIGINS: http://localhost:4200
+  GEE_SA_DIRECTORY: /app/.service-accounts/
+  LIFESPAN_URL: "24"
+  LOCAL_CACHE_SIZE: "10000"
+  LOG_LEVEL: WARNING
+  MAX_REQUESTS: "50000"
+  MAX_REQUESTS_JITTER: "5000"
+  PORT: "8080"
+  RATE_LIMIT_BURST: "500"
+  RATE_LIMIT_PER_MINUTE: "5000"
+  REDIS_URL: redis://tile-valkey:6379
+  S3_ACCESS_KEY: 70432355FDB551434E63
+  S3_BUCKET: cache
+  S3_ENDPOINT: http://s3-tiles:8333
+  S3_SECRET_KEY: M5cRMmsO9ns81Znm9LJafKHJMhM1zi3NvD4WAGe7
+  S3_USE_SSL: "false"
+  S3_VERIFY_SSL: "false"
+  SKIP_GEE_INIT: "false"
+  TILES_ENV: production
+  WORKER_CONNECTIONS: "4000"
+  WORKERS: "8"
+  MONGODB_URL: mongodb://mongoprod:27017
+  MONGODB_DB: tvi
+  CELERY_BROKER_URL: redis://tile-valkey:6379/1
+  CELERY_RESULT_BACKEND: redis://tile-valkey:6379/2
+
+x-deploy-celery-worker: &deploy-celery-worker
+  mode: replicated
+  placement:
+    preferences:
+      - spread: node.labels.name
+  labels:
+    traefik.enable: 'false'
+  restart_policy:
+    condition: any
+  resources:
+    limits:
+      memory: 2g
+    reservations:
+      memory: 1g
+
+x-deploy-celery-light: &deploy-celery-light
+  mode: replicated
+  placement:
+    preferences:
+      - spread: node.labels.name
+  labels:
+    traefik.enable: 'false'
+  restart_policy:
+    condition: any
+  resources:
+    limits:
+      memory: 512m
+    reservations:
+      memory: 256m
+
+# ========================================
+# Services
+# ========================================
+services:
+  # ========================================
+  # Celery Services
+  # ========================================
+  celery_beat:
+    <<: *common-config
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app
+      - beat
+      - --loglevel=info
+    environment:
+      <<: *common-celery-env
+    deploy:
+      <<: *deploy-celery-light
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == vm1
+
+  celery_flower:
+    <<: *common-config
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app
+      - flower
+      - --loglevel=info
+      - --port=5555
+      - --basic-auth=admin:lapig2024
+    environment:
+      <<: *common-celery-env
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.labels.name == vm2
+      labels:
+        traefik.enable: 'true'
+        traefik.http.routers.flower.rule: Host(`flower-tiles.lapig.iesa.ufg.br`)
+        traefik.http.routers.flower.tls: 'true'
+        traefik.http.routers.flower.tls.certresolver: le
+        traefik.http.routers.flower.entrypoints: websecure
+        traefik.http.routers.flower.service: flower
+        traefik.http.services.flower.loadbalancer.server.port: '5555'
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 512m
+        reservations:
+          memory: 256m
+
+  celery_worker_default_high:
+    <<: *common-config
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app
+      - worker
+      - --loglevel=info
+      - --concurrency=8
+      - --max-tasks-per-child=1000
+      - --pool=prefork
+      - --queues=default,high_priority,standard
+      - --without-gossip
+      - --without-mingle
+      - --without-heartbeat
+    environment:
+      <<: *common-celery-env
+    deploy:
+      <<: *deploy-celery-worker
+      replicas: 2
+
+  celery_worker_default_low:
+    <<: *common-config
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app
+      - worker
+      - --loglevel=info
+      - --concurrency=8
+      - --max-tasks-per-child=1000
+      - --pool=prefork
+      - --queues=default,low_priority,standard
+      - --without-gossip
+      - --without-mingle
+      - --without-heartbeat
+    environment:
+      <<: *common-celery-env
+    deploy:
+      <<: *deploy-celery-worker
+      replicas: 2
+
+  celery_worker_high_priority:
+    <<: *common-config
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app
+      - worker
+      - --loglevel=info
+      - --concurrency=8
+      - --max-tasks-per-child=1000
+      - --pool=prefork
+      - --queues=high_priority
+      - --without-gossip
+      - --without-mingle
+      - --without-heartbeat
+    environment:
+      <<: *common-celery-env
+    deploy:
+      <<: *deploy-celery-worker
+      replicas: 2
+      resources:
+        limits:
+          memory: 3g
+        reservations:
+          memory: 1536m
+
+  celery_worker_cache:
+    <<: *common-config
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app
+      - worker
+      - --loglevel=info
+      - --concurrency=4
+      - --max-tasks-per-child=1000
+      - --pool=prefork
+      - --queues=default,cache_operations,maintenance
+      - --without-gossip
+      - --without-mingle
+      - --without-heartbeat
+    environment:
+      <<: *common-celery-env
+    deploy:
+      <<: *deploy-celery-worker
+      replicas: 2
+      resources:
+        limits:
+          memory: 4g
+        reservations:
+          memory: 2g
+
+  # ========================================
+  # Tile Services (distribuído entre vm1 e vm2)
+  # 20 réplicas (max 10 por nó) para escalar throughput.
+  # Subdomínios tm1..tm5 + tiles são mantidos por compatibilidade com
+  # navegadores que paralelizam por hostname; o roteamento real usa o mesmo
+  # service tiles-loadbalancer.
+  # ========================================
+  tile:
+    <<: *common-config
+    command:
+      - uvicorn
+      - --host
+      - 0.0.0.0
+      - --port
+      - '8080'
+      - --workers
+      - '8'
+      - main:app
+      - --timeout-keep-alive
+      - '300'
+    environment:
+      <<: *common-tile-env
+    deploy:
+      mode: replicated
+      replicas: 20
+      placement:
+        max_replicas_per_node: 10
+        preferences:
+          - spread: node.labels.name
+      labels:
+        - "com.docker.compose.project=tiles"
+        - "com.docker.compose.service=api-tiles"
+        - "traefik.enable=true"
+        - "traefik.http.routers.tiles-unified.rule=Host(`tiles.lapig.iesa.ufg.br`) || Host(`tm1.lapig.iesa.ufg.br`) || Host(`tm2.lapig.iesa.ufg.br`) || Host(`tm3.lapig.iesa.ufg.br`) || Host(`tm4.lapig.iesa.ufg.br`) || Host(`tm5.lapig.iesa.ufg.br`)"
+        - "traefik.http.routers.tiles-unified.tls=true"
+        - "traefik.http.routers.tiles-unified.tls.certresolver=le"
+        - "traefik.http.routers.tiles-unified.entrypoints=websecure"
+        - "traefik.http.routers.tiles-unified.service=tiles-loadbalancer"
+        - "traefik.http.routers.tiles-unified.middlewares=rate-limit-tiles@file,compress@file,cache-headers-tiles@file,upload-bypass@file"
+        - "traefik.http.services.tiles-loadbalancer.loadbalancer.server.port=8080"
+        # Sticky cookie removido — causava desbalanceamento (cliente pesado
+        # ficava pinned a um único pod, gerando 17× a carga mediana).
+        # Cache locality é preservada pelo cache local maior (LOCAL_CACHE_SIZE)
+        # mais Valkey/S3 compartilhados. Detalhes em
+        # docs/RUNBOOK_LB_REBALANCING.md.
+        - "traefik.http.services.tiles-loadbalancer.loadbalancer.healthcheck.path=/health/light"
+        - "traefik.http.services.tiles-loadbalancer.loadbalancer.healthcheck.interval=10s"
+        - "traefik.http.services.tiles-loadbalancer.loadbalancer.healthcheck.timeout=3s"
+        - "traefik.http.services.tiles-loadbalancer.loadbalancer.healthcheck.scheme=http"
+        - "traefik.http.services.tiles-loadbalancer.loadbalancer.passhostheader=true"
+      update_config:
+        parallelism: 2
+        delay: 15s
+        order: start-first
+        failure_action: rollback
+      restart_policy:
+        condition: any
+      resources:
+        limits:
+          memory: 4g
+        reservations:
+          memory: 2g
+
+networks:
+  traefik-public:
+    external: true
+  tiles-valkey-network:
+    external: true
+  mongo-network:
+    external: true

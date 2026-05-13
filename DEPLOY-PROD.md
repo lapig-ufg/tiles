@@ -1,5 +1,14 @@
 # Deploy em Produção — Pool de Service Accounts GEE
 
+> **Nota — Topologia atual (Docker Swarm).** A produção real roda como stack
+> Swarm `prod_tiles`, com 20 réplicas do serviço `tile` distribuídas entre
+> `vm1` e `vm2`. O arquivo de stack autoritativo é
+> [`config/swarm/prod.compose.yml`](config/swarm/prod.compose.yml) no repositório,
+> deployado em `/glusterfs/aplications/services/tiles/prod.compose.yml` via
+> `docker stack deploy`. Para rebalanceamento de load balancer e remoção de
+> sticky session, consulte
+> [`docs/RUNBOOK_LB_REBALANCING.md`](docs/RUNBOOK_LB_REBALANCING.md).
+
 ## Pré-requisitos
 
 - [ ] Todos os 12 arquivos `.json` de SAs no diretório `.service-accounts/` de cada instância

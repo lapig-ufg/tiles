@@ -495,4 +495,5 @@ tile_cache = HybridTileCache(
     redis_url=REDIS_URL,
     s3_endpoint=settings.get("S3_ENDPOINT", "http://minio:9000"),
     s3_bucket=settings.get("S3_BUCKET", "tiles-cache"),
+    local_cache_size=int(settings.get("LOCAL_CACHE_SIZE", 1000)),
 )
