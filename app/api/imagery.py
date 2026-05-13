@@ -29,7 +29,8 @@ from app.core.errors import tile_error_response
 from app.middleware.rate_limiter import limit_imagery
 from app.core.gee_pool import gee_retry
 from app.utils.ee_compute import compute_value
-from app.utils.http import http_get_bytes
+from app.utils.ee_tile_fetch import fetch_tile_with_rotation
+from app.utils.http import EarthEngineRateLimitedError
 from app.visualization.vis_params_db import get_landsat_vis_params_async
 from app.visualization.vis_params_loader import get_visparams, generate_landsat_list
 
@@ -439,7 +440,7 @@ async def image_tile(
 
         if expired:
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 if layer == "s2_harmonized":
                     vis = await _vis_param_for_s2(visparam)
                     layer_url = await loop.run_in_executor(
@@ -459,15 +460,41 @@ async def image_tile(
         else:
             layer_url = meta["url"]
 
-        # 4 ▸ Download do tile remoto
+        # 4 ▸ Download do tile remoto via helper com rotação reativa.
+        async def _regenerate_url() -> str:
+            loop = asyncio.get_running_loop()
+            if layer == "s2_harmonized":
+                vis = await _vis_param_for_s2(visparam)
+                return await loop.run_in_executor(
+                    ee_executor, _create_s2_image_layer_sync, imageId, vis,
+                )
+            vis = await _vis_param_for_landsat(visparam, imageId)
+            return await loop.run_in_executor(
+                ee_executor, _create_landsat_image_layer_sync, imageId, vis,
+            )
+
         try:
-            png_bytes = await http_get_bytes(layer_url.format(x=x, y=y, z=z))
+            png_bytes = await fetch_tile_with_rotation(
+                cache_key=meta_key,
+                cached_url=layer_url,
+                url_factory=_regenerate_url,
+                x=x, y=y, z=z,
+                layer="imagery",
+            )
             await set_png(tile_key, png_bytes)
             return StreamingResponse(
                 io.BytesIO(png_bytes),
                 media_type="image/png",
                 headers={"X-Cache": "MISS", "X-Image-Id": imageId},
             )
+        except EarthEngineRateLimitedError as exc:
+            logger.warning(
+                f"tile_imagery_429_persistent layer={layer} imageId={imageId} "
+                f"sa_name={exc.sa_name} action=return_503"
+            )
+            resp = tile_error_response(status_code=503, reason="ee_unavailable")
+            resp.headers["X-Image-Id"] = imageId
+            return resp
         except HTTPException as exc:
             logger.exception(f"Erro ao baixar tile da imagem {imageId}")
             resp = tile_error_response.from_exception(exc)

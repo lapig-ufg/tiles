@@ -124,6 +124,45 @@ ssh prod-lapig 'docker exec $(docker ps -qf name=valkey | head -1) \
   redis-cli DEL cb:ee:open_until'
 ```
 
+## Purge continuado via Celery beat (recomendado)
+
+Execução manual ampla do `purge_poisoned_tiles.py` causou contenção no
+Valkey (latência 2× em batches sequenciais, taxa de 5xx subiu de 2,7 % para
+10 % durante a operação). A limpeza total deve ser feita em janelas de
+baixa carga.
+
+**Recomendação:** Celery beat diário às 03:00 BRT com batch pequeno e
+scan não-agressivo:
+
+```python
+# app/tasks/tile.py
+@celery_app.task(name="tiles.purge_poisoned_nightly")
+def purge_poisoned_nightly():
+    """Remove 50k tiles envenenados por execução (≤ 30 min de Valkey pressure)."""
+    import subprocess
+    subprocess.run([
+        "python", "/app/scripts/purge_poisoned_tiles.py",
+        "--apply",
+        "--limit", "50000",
+        "--scan-count", "500",   # menos agressivo que o manual (5000)
+    ], check=False)
+
+# celery beat schedule (settings.toml ou celery config)
+# purge-poisoned-nightly:
+#   task: tiles.purge_poisoned_nightly
+#   schedule: crontab(hour=3, minute=0)
+```
+
+**Expectativa:** ~100k envenenadas removidas a cada 2 dias (beat + cache
+expirando naturalmente em 30d). Estoque de ~700k deve zerar em ≤ 14 dias.
+
+**Monitorar:** adicionar painel Grafana com `DBSIZE` e `used_memory_human`
+do Valkey; alerta se `DBSIZE` não decrescer ~50k/dia.
+
+**Desativar após limpeza**: quando métrica `tiles_poisoned_count` cair para
+< 1000, remover o beat (sem mais utilidade — fixes do deploy impedem
+novos placeholders).
+
 ## Rollback
 
 Em caso de regressão grave (quebra de UX, explosão de erro sustentada):
@@ -138,3 +177,43 @@ Os tiles transparentes criados pelo `_empty_image_with_bands` continuarão em ca
 ## Contato
 
 Em caso de dúvida durante deploy, escalar para o time de backend antes de aplicar rollback.
+
+## Expansão do pool de Service Accounts do GEE
+
+A taxa de 503 (`ee_unavailable`) sob carga é limitada pela cota das SAs
+ativas no pool, não pelo código. O fix de rotação reativa (entrega de
+2026-05-12) mitiga picos transitórios; o teto sustentável depende do
+número de SAs com cota disponível.
+
+### Sintomas que indicam saturação de capacidade
+
+- Métrica `gee_sa_rotation_total` cresce continuamente, sem estabilizar.
+- Métrica `gee_sa_in_cooldown` mostra todas as SAs alternando em cooldown.
+- `gee_tile_url_regen_total` alto e sustentado — confirma que 429 não é
+  pico transitório, é teto de capacidade.
+
+### Ação operacional
+
+1. Provisionar SAs adicionais no GCP Console (projeto `earthengine-legacy`
+   ou equivalente). Cada SA tem cota independente no endpoint de tiles.
+2. Baixar o JSON da nova SA e depositar em `.service-accounts/`:
+   ```bash
+   scp nova-sa.json prod-lapig:/path/to/.service-accounts/
+   ```
+3. Hot-reload do pool — sem necessidade de redeploy:
+   ```bash
+   curl -X POST http://localhost:8080/admin/gee-pool/refresh
+   ```
+4. Verificar que a nova SA foi descoberta:
+   ```bash
+   curl http://localhost:8080/admin/gee-pool/metrics
+   ```
+5. Acompanhar `gee_sa_http_429_total` por SA: distribuição deve ficar
+   mais equilibrada à medida que o pool absorve a carga.
+
+### Quando reduzir a frota
+
+Se `gee_sa_in_cooldown` raramente passa de 0 e `gee_sa_rotation_total`
+fica estagnado por dias seguidos, há overprovisionamento. SAs ociosas
+não custam, mas complicam a rotação dos JSONs — manter o pool em
+tamanho mínimo necessário para sustentar o pico observado.

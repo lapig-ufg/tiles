@@ -28,6 +28,7 @@ def app_with_cb(monkeypatch):
     cache_mod.aset_png = _noop
     cache_mod.aget_meta = _none
     cache_mod.aset_meta = _noop
+    cache_mod.adelete_meta = _noop
     cache_mod.atile_lock = _fake_lock
     sys.modules["app.cache.cache"] = cache_mod
 
@@ -93,7 +94,17 @@ def app_with_cb(monkeypatch):
     http_util = type(sys)("app.utils.http")
     async def _hgb(url, **k): return b""
     http_util.http_get_bytes = _hgb
+    class _EarthEngineRateLimitedError(Exception):
+        def __init__(self, message: str = "", sa_name=None):
+            super().__init__(message)
+            self.sa_name = sa_name
+    http_util.EarthEngineRateLimitedError = _EarthEngineRateLimitedError
     sys.modules["app.utils.http"] = http_util
+
+    ee_tile_fetch_mod = type(sys)("app.utils.ee_tile_fetch")
+    async def _fetch_tile(*_a, **_k): return b""
+    ee_tile_fetch_mod.fetch_tile_with_rotation = _fetch_tile
+    sys.modules["app.utils.ee_tile_fetch"] = ee_tile_fetch_mod
 
     from app.api import layers
     app = FastAPI()

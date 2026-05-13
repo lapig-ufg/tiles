@@ -88,6 +88,14 @@ async def aset_meta(key: str, meta: dict[str, Any], ttl: int = META_TTL) -> None
     """Salva metadados no cache híbrido (assíncrono)"""
     await tile_cache.set_meta(key, meta, ttl)
 
+async def adelete_meta(key: str) -> None:
+    """Remove metadados do cache híbrido (assíncrono).
+
+    Usado pelo helper de rotação para invalidar URLs do EE quando a SA
+    que as assinou recebeu 429.
+    """
+    await tile_cache.delete_meta(key)
+
 def atile_lock(key: str):
     """Lock distribuído para geração de tile (assíncrono context manager)"""
     return tile_cache.tile_lock(key)

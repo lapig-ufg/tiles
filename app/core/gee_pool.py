@@ -221,6 +221,14 @@ class ServiceAccountPool:
         sa_info = self._accounts[sa_name]
         sa_info.load_credentials()
 
+        # Auto-reset do gauge: SA atribuída por `acquire` significa que passou
+        # pelo filtro de cooldown — logo, está fora dele agora.
+        try:
+            from app.core.metrics import gee_sa_in_cooldown
+            gee_sa_in_cooldown.labels(sa_name=sa_name).set(0)
+        except Exception:
+            pass
+
         logger.info(f"Worker {worker_id} adquiriu SA {sa_name}")
         return sa_info
 
@@ -277,6 +285,11 @@ class ServiceAccountPool:
                     pipe.hincrby(metrics_key, "errors_429", 1)
                     pipe.hset(metrics_key, "last_429_at", str(now))
                     pipe.execute()
+                    try:
+                        from app.core.metrics import gee_sa_http_429_total
+                        gee_sa_http_429_total.labels(sa_name=sa_name).inc()
+                    except Exception:
+                        pass
                     return
             except ValueError:
                 pass
@@ -286,6 +299,15 @@ class ServiceAccountPool:
         pipe.hset(metrics_key, "last_429_at", str(now))
         pipe.hset(metrics_key, "cooldown_until", str(new_cooldown_end))
         pipe.execute()
+
+        try:
+            from app.core.metrics import gee_sa_http_429_total, gee_sa_in_cooldown
+            gee_sa_http_429_total.labels(sa_name=sa_name).inc()
+            gee_sa_in_cooldown.labels(sa_name=sa_name).set(1)
+        except Exception:
+            # Métrica é best-effort — falha de instrumentação não pode
+            # quebrar a rotação que é caminho crítico.
+            pass
 
     # ---- Heartbeat ----
 
@@ -347,6 +369,11 @@ class ServiceAccountPool:
             in_cooldown = bool(
                 cooldown_until and cooldown_until != "" and float(cooldown_until) > now
             )
+            try:
+                from app.core.metrics import gee_sa_in_cooldown
+                gee_sa_in_cooldown.labels(sa_name=sa_name).set(1 if in_cooldown else 0)
+            except Exception:
+                pass
 
             result["accounts"][sa_name] = {
                 "active_workers": int(score),
@@ -427,11 +454,17 @@ class WorkerGEEManager:
         )
         self._heartbeat_thread.start()
 
-    def rotate_on_429(self) -> None:
+    def rotate_on_429(self, trigger: str = "rest_api_429") -> None:
         """Rotaciona para uma nova SA após erro 429.
 
         Libera a SA atual, reporta o 429, adquire nova SA e re-inicializa.
         Thread-safe via RLock.
+
+        Args:
+            trigger: Origem do 429 — `"rest_api_429"` (default, chamadas via
+                ee_compute / @gee_retry) ou `"http_429"` (download de tile via
+                fetch_tile_with_rotation). Usado em métricas para discriminar
+                causas raiz com SLAs diferentes.
         """
         if not self._worker_id or not self._current_sa:
             logger.error("Tentativa de rotação sem inicialização prévia")
@@ -441,8 +474,16 @@ class WorkerGEEManager:
             old_sa = self._current_sa.name
             logger.warning(f"Rotacionando SA {old_sa} por 429 no worker {self._worker_id}")
 
-            # Reportar 429 e liberar
-            self._pool.report_429(old_sa)
+            # Reportar 429 e liberar. Cada trigger tem um cooldown próprio:
+            # - rest_api_429: 60s (REST API recupera mais devagar).
+            # - http_429: 15s (endpoint de tiles recupera mais rápido).
+            # `report_http_429` preserva um cooldown maior já ativo, garantindo
+            # que `report_429` chamado depois sempre vence — então o método
+            # certo precisa ser chamado de acordo com a origem do 429.
+            if trigger == "http_429":
+                self._pool.report_http_429(old_sa)
+            else:
+                self._pool.report_429(old_sa)
             self._pool.release(self._worker_id)
 
             # Adquirir nova SA (excluindo a atual)
@@ -457,6 +498,15 @@ class WorkerGEEManager:
                 f"Worker {self._worker_id} rotacionou: "
                 f"{old_sa} → {self._current_sa.name}"
             )
+            try:
+                from app.core.metrics import gee_sa_rotation_total
+                gee_sa_rotation_total.labels(
+                    from_sa=old_sa,
+                    to_sa=self._current_sa.name,
+                    trigger=trigger,
+                ).inc()
+            except Exception:
+                pass
 
     def report_http_429(self) -> None:
         """Registra um 429 de download HTTP (métrica, sem rotação de SA)."""

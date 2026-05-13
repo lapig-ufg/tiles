@@ -5,7 +5,7 @@ ASGI que inspeciona status e header `X-Error-Reason` nas respostas.
 """
 from __future__ import annotations
 
-from prometheus_client import Counter, Histogram
+from prometheus_client import Counter, Gauge, Histogram
 
 
 # -- Registry -----------------------------------------------------------------
@@ -27,6 +27,35 @@ cache_hits_total = Counter(
     "cache_hits_total",
     "Outcome do cache por layer e tipo (png_hit, png_miss, meta_hit, meta_miss, neg_hit)",
     labelnames=("layer", "type"),
+)
+
+
+# -- Métricas do pool de Service Accounts do GEE ------------------------------
+
+gee_sa_http_429_total = Counter(
+    "gee_sa_http_429_total",
+    "Contagem de 429 do endpoint de tiles do EE por service account",
+    labelnames=("sa_name",),
+)
+
+gee_sa_rotation_total = Counter(
+    "gee_sa_rotation_total",
+    "Rotações de SA realizadas por trigger (http_429 ou rest_api_429)",
+    labelnames=("from_sa", "to_sa", "trigger"),
+)
+
+gee_sa_in_cooldown = Gauge(
+    "gee_sa_in_cooldown",
+    "1 se a SA está em cooldown por 429, 0 caso contrário",
+    labelnames=("sa_name",),
+)
+
+# Counter instrumentado em app/utils/ee_tile_fetch.py (Task 4 do plano).
+# Definição vive aqui para manter as métricas do pool no mesmo módulo.
+gee_tile_url_regen_total = Counter(
+    "gee_tile_url_regen_total",
+    "Regenerações de URL do EE disparadas por 429, por layer",
+    labelnames=("layer",),
 )
 
 
