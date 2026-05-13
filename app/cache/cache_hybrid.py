@@ -45,10 +45,11 @@ class HybridTileCache:
         self.local_cache_size = local_cache_size
 
         # Configurações de TTL otimizadas
-        self.PNG_TTL = 30 * 24 * 3600   # 30 dias para tiles
-        self.META_TTL = 7 * 24 * 3600    # 7 dias para metadados
-        self.URL_TTL = 24 * 3600         # 24 horas para URLs do Earth Engine
-        self.LOCK_TTL = 60               # Lock expira em 60s (safety net)
+        self.PNG_TTL = 30 * 24 * 3600        # 30 dias — tiles do ano corrente
+        self.PNG_TTL_HISTORICAL = 365 * 24 * 3600  # 1 ano — rasters imutáveis
+        self.META_TTL = 7 * 24 * 3600         # 7 dias para metadados
+        self.URL_TTL = 24 * 3600              # 24h — limite imposto pelo Earth Engine
+        self.LOCK_TTL = 60                    # Lock expira em 60s (safety net)
 
         # Pool de conexões
         self._redis_pool = None

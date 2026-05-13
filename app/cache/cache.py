@@ -11,8 +11,9 @@ from typing import Any, Optional
 from app.cache.cache_hybrid import tile_cache
 
 # TTLs otimizados para alta performance
-PNG_TTL = 30 * 24 * 3600   # 30 dias para tiles (eram 24h)
-META_TTL = 7 * 24 * 3600    # 7 dias para metadados (eram 6h)
+PNG_TTL = 30 * 24 * 3600              # 30 dias — tiles do ano corrente
+PNG_TTL_HISTORICAL = 365 * 24 * 3600  # 1 ano — rasters de anos passados (imutáveis)
+META_TTL = 7 * 24 * 3600              # 7 dias para metadados (eram 6h)
 
 # ----------------------- helpers síncronos (compatibilidade) ----------------------------- #
 # NOTA: Estas funções são para compatibilidade com código legado (ex: Celery tasks em prefork)

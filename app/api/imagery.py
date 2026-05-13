@@ -26,6 +26,7 @@ from app.cache.cache import (
 )
 from app.core.config import logger, settings
 from app.core.errors import tile_error_response
+from app.core.metrics import observe_cache_hit
 from app.middleware.rate_limiter import limit_imagery
 from app.core.gee_pool import gee_retry
 from app.utils.ee_compute import compute_value
@@ -353,7 +354,10 @@ async def catalog(
     cached = await get_meta(cache_key)
     if cached:
         logger.info(f"Catalog cache HIT: {cache_key}")
+        observe_cache_hit(layer="imagery", type_="catalog_hit")
         return JSONResponse(cached, headers={"X-Cache": "HIT"})
+
+    observe_cache_hit(layer="imagery", type_="catalog_miss")
 
     # EE query
     region = _point_to_region(lat, lon, bufferMeters)
@@ -412,17 +416,21 @@ async def image_tile(
     tile_key = _tile_cache_key(layer, imageId, visparam, x, y, z)
     png_bytes = await get_png(tile_key)
     if png_bytes:
+        observe_cache_hit(layer="imagery", type_="png_hit")
         return StreamingResponse(
             io.BytesIO(png_bytes),
             media_type="image/png",
             headers={"X-Cache": "HIT", "X-Image-Id": imageId},
         )
 
+    observe_cache_hit(layer="imagery", type_="png_miss")
+
     # 2 ▸ Lock distribuído: evita que dois workers gerem o mesmo tile
     async with tile_lock(tile_key) as should_generate:
         if not should_generate:
             png_bytes = await get_png(tile_key)
             if png_bytes:
+                observe_cache_hit(layer="imagery", type_="png_hit")
                 return StreamingResponse(
                     io.BytesIO(png_bytes),
                     media_type="image/png",
@@ -437,6 +445,7 @@ async def image_tile(
             or (datetime.now() - datetime.fromisoformat(meta["date"])).total_seconds() / 3600
             > settings.LIFESPAN_URL
         )
+        observe_cache_hit(layer="imagery", type_="meta_miss" if expired else "meta_hit")
 
         if expired:
             try:
