@@ -49,6 +49,24 @@ class ServiceAccountInfo:
 
 
 # ---------------------------------------------------------------------------
+# Erros
+# ---------------------------------------------------------------------------
+
+
+class PoolExhaustedError(RuntimeError):
+    """Sinalizado quando todas as SAs estão em cooldown além do timeout aceitável.
+
+    O caller deve mapear para HTTP 503 com cabeçalho ``Retry-After``.
+    """
+
+    def __init__(self, retry_after: float, message: str | None = None) -> None:
+        self.retry_after = float(retry_after)
+        super().__init__(
+            message or f"Pool de SAs esgotado, retry após {self.retry_after:.1f}s"
+        )
+
+
+# ---------------------------------------------------------------------------
 # ServiceAccountPool — coordenação centralizada via Redis
 # ---------------------------------------------------------------------------
 
@@ -152,11 +170,14 @@ class ServiceAccountPool:
             ServiceAccountInfo com credenciais carregadas.
 
         Raises:
-            RuntimeError: Se nenhuma SA estiver disponível.
+            PoolExhaustedError: Quando todas as SAs estão em cooldown e o tempo
+                de espera necessário excede ``GEE_SA_ACQUIRE_TIMEOUT_SECONDS``.
+                O caller deve mapear para HTTP 503 com ``Retry-After``.
+            RuntimeError: Quando o pool não possui nenhuma SA registrada.
         """
         exclude = exclude or set()
         now = time.time()
-        cooldown_seconds = settings.get("GEE_SA_COOLDOWN_SECONDS", 60)
+        acquire_timeout = float(settings.get("GEE_SA_ACQUIRE_TIMEOUT_SECONDS", 2))
 
         # Buscar SAs ordenadas por uso (menor primeiro) com desempate aleatório
         # entre scores iguais — evita viés lexicográfico do zrangebyscore que
@@ -192,9 +213,25 @@ class ServiceAccountPool:
             # SA disponível — adquirir
             return self._assign(sa_name, worker_id)
 
-        # Nenhuma SA livre — esperar pelo cooldown mais curto
+        # Nenhuma SA livre — política do circuit breaker
         if best_sa is not None:
-            wait_time = min(best_cooldown_end - now, cooldown_seconds)
+            wait_time = best_cooldown_end - now
+            if wait_time > acquire_timeout:
+                # Espera longa: fail-fast em vez de bloquear o worker.
+                logger.warning(
+                    f"Pool exhausted: todas as SAs em cooldown, "
+                    f"próximo disponível em {wait_time:.1f}s (timeout={acquire_timeout}s). "
+                    f"Retornando PoolExhaustedError."
+                )
+                try:
+                    from app.core.metrics import gee_pool_exhausted_total
+                    gee_pool_exhausted_total.inc()
+                except Exception:
+                    pass
+                raise PoolExhaustedError(retry_after=wait_time)
+
+            # Espera curta aceitável — preserva comportamento antigo para
+            # casos benignos onde uma SA está a poucos segundos do retorno.
             logger.warning(
                 f"Todas as SAs em cooldown. Aguardando {wait_time:.1f}s pela SA {best_sa}"
             )

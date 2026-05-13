@@ -40,3 +40,4 @@ GEE_SA_HTTP_COOLDOWN_SECONDS = 15  # Cooldown após 429 do download HTTP de tile
 GEE_SA_MAX_RETRIES = 2             # Máximo de rotações de SA por requisição
 GEE_SA_HEARTBEAT_INTERVAL = 30     # Intervalo de heartbeat (segundos)
 GEE_SA_ASSIGNMENT_TTL = 90         # TTL do assignment no Redis (segundos)
+GEE_SA_ACQUIRE_TIMEOUT_SECONDS = 2 # Máximo aceitável de espera no acquire antes de retornar 503

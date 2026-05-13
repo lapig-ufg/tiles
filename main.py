@@ -167,6 +167,26 @@ app.add_middleware(
     max_age=3600,
 )
 
+from app.core.gee_pool import PoolExhaustedError
+
+
+@app.exception_handler(PoolExhaustedError)
+async def handle_pool_exhausted(request: Request, exc: PoolExhaustedError) -> Response:
+    """Mapeia exaustão do pool de SAs para 503 com cabeçalho ``Retry-After``."""
+    retry_after = max(1, int(exc.retry_after) + 1)
+    logger.warning(
+        f"PoolExhausted handler: 503 retry_after={retry_after}s "
+        f"path={request.url.path}"
+    )
+    return Response(
+        status_code=503,
+        headers={
+            "Retry-After": str(retry_after),
+            "X-Error-Reason": "gee_pool_exhausted",
+        },
+    )
+
+
 @app.get("/metrics", include_in_schema=False)
 async def metrics() -> Response:
     """Endpoint Prometheus. Exposto sem rate-limit para scraping interno.
