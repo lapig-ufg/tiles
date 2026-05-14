@@ -11,7 +11,7 @@ import asyncio
 import calendar
 import io
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Dict, Any, Literal
 
@@ -105,22 +105,50 @@ def _retry_with_mosaic_if_band_missing(func, exc, composite_mode, call_args, col
         )
     raise exc
 
-def _build_periods(period: str | Period, year: int, month: int) -> Dict[str, str]:
-    periods = {
-        "WET":  {"dtStart": f"{year}-01-01", "dtEnd": f"{year}-04-30"},
-        "DRY":  {"dtStart": f"{year}-06-01", "dtEnd": f"{year}-10-30"},
+def _build_periods(period: str | Period, year: int, month: int) -> list[Dict[str, str]]:
+    # dtEnd é EXCLUSIVO (alinhado com a semântica half-open de ee.ImageCollection.filterDate).
+    # WET = jan-mai ∪ nov-dez; DRY = jun-out.
+    periods: Dict[str, list[Dict[str, str]]] = {
+        "WET": [
+            {"dtStart": f"{year}-01-01", "dtEnd": f"{year}-06-01"},
+            {"dtStart": f"{year}-11-01", "dtEnd": f"{year + 1}-01-01"},
+        ],
+        "DRY": [
+            {"dtStart": f"{year}-06-01", "dtEnd": f"{year}-11-01"},
+        ],
     }
     if period == "MONTH":
         if not 1 <= month <= 12:
             raise HTTPException(400, "month deve estar entre 1-12")
         _, last_day = calendar.monthrange(year, month)
-        periods["MONTH"] = {
-            "dtStart": f"{year}-{month:02}-01",
-            "dtEnd":   f"{year}-{month:02}-{last_day:02}",
-        }
+        end = (datetime(year, month, last_day) + timedelta(days=1)).date().isoformat()
+        periods["MONTH"] = [
+            {"dtStart": f"{year}-{month:02}-01", "dtEnd": end},
+        ]
     if period not in periods:
         raise HTTPException(404, f"Período inválido. Use {list(periods)}")
     return periods[period]
+
+
+def _filter_collection_by_periods(
+    collection: "ee.ImageCollection",
+    dates: list[Dict[str, str]],
+    geom: "ee.Geometry | None" = None,
+) -> "ee.ImageCollection":
+    """Aplica filterDate em N intervalos e mergeia o resultado.
+
+    Para WET com dois intervalos disjuntos (jan-mai + nov-dez), produz uma única
+    ImageCollection equivalente à união. Mantém ordem de filtros estável.
+    """
+    if not dates:
+        raise ValueError("dates must not be empty")
+    parts = [collection.filterDate(d["dtStart"], d["dtEnd"]) for d in dates]
+    merged = parts[0]
+    for part in parts[1:]:
+        merged = merged.merge(part)
+    if geom is not None:
+        merged = merged.filterBounds(geom)
+    return merged
 
 
 def _check_zoom(z: int):
@@ -157,10 +185,9 @@ async def _vis_param(visparam: str) -> dict[str, Any]:
 
 
 @gee_retry()
-def _create_s2_layer_sync(geom: ee.Geometry, dates: Dict[str, str], vis: dict) -> str:
-    s2 = (ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
-          .filterDate(dates["dtStart"], dates["dtEnd"])
-          .filterBounds(geom)
+def _create_s2_layer_sync(geom: ee.Geometry, dates: list[Dict[str, str]], vis: dict) -> str:
+    base = ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
+    s2 = (_filter_collection_by_periods(base, dates, geom)
           .sort("CLOUDY_PIXEL_PERCENTAGE", False)
           .select(*vis["select"]))
     best = s2.mosaic()
@@ -222,10 +249,10 @@ def add_cloud_score_fast(image, tile_geometry):
 
 @gee_retry()
 def _create_landsat_layer_sync(geom: ee.Geometry,
-                               dates: Dict[str, str],
+                               dates: list[Dict[str, str]],
                                visparam_name: str,
                                composite_mode: str = "BEST_IMAGE") -> str:
-    year = datetime.fromisoformat(dates["dtStart"]).year
+    year = datetime.fromisoformat(dates[0]["dtStart"]).year
     collection = get_landsat_collection(year)
     vis = get_landsat_vis_params(visparam_name, collection)
 
@@ -242,9 +269,8 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
     if composite_mode == "BEST_IMAGE":
         # Best image selection mode - use native CLOUD_COVER_LAND property for performance
         # This avoids expensive pixel-level calculations
-        landsat_collection = (ee.ImageCollection(collection)
-                            .filterDate(dates["dtStart"], dates["dtEnd"])
-                            .filterBounds(geom)
+        base = ee.ImageCollection(collection)
+        landsat_collection = (_filter_collection_by_periods(base, dates, geom)
                             .filter(ee.Filter.lt('CLOUD_COVER', 40))  # Pre-filter more aggressive
                             .sort('CLOUD_COVER_LAND')  # Use native property, no calculation needed
                             .sort('CLOUD_COVER', False))  # Secondary sort by CLOUD_COVER if CLOUD_COVER_LAND is -1
@@ -274,24 +300,26 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
         
     else:
         # Default MOSAIC mode - original behavior
-        landsat_collection = ee.ImageCollection(collection).filterDate(dates["dtStart"], dates["dtEnd"]).filterBounds(geom)
-        
+        landsat_collection = _filter_collection_by_periods(
+            ee.ImageCollection(collection), dates, geom
+        )
+
         # Check if collection has images
         size = landsat_collection.size()
-        
+
         # Only process if there are images in the collection
         def process_with_bands():
             # Get first image to check available bands
             first = landsat_collection.first()
             band_names = first.bandNames()
-            
+
             # Check if requested bands exist
             requested_bands = vis["bands"]
-            
+
             # Filter to only available bands
             available_bands = band_names.filter(ee.Filter.inList('item', requested_bands))
             num_available = available_bands.size()
-            
+
             # If no requested bands are available, use default bands based on satellite
             processed = ee.Algorithms.If(
                 num_available.eq(0),
@@ -300,9 +328,9 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
                 # Process normally with available bands
                 landsat_collection.map(scale).select(available_bands).mosaic()
             )
-            
+
             return processed
-        
+
         # Only process if collection has images
         landsat = ee.Algorithms.If(
             size.gt(0),
@@ -321,7 +349,7 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
 
 
 @gee_retry()
-def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], vis: dict, composite_mode: str = "BEST_IMAGE") -> str:
+def _create_landsat_layer_with_params(geom: ee.Geometry, dates: list[Dict[str, str]], vis: dict, composite_mode: str = "BEST_IMAGE") -> str:
     """Create Landsat layer with pre-processed vis params (no async calls)"""
     def scale(img):
         return img.addBands(img.select("SR_B.").multiply(0.0000275).add(-0.2),
@@ -336,19 +364,18 @@ def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], 
         return image.updateMask(mask)
 
     # Get collection from vis params (already determined)
-    year = datetime.fromisoformat(dates["dtStart"]).year
+    year = datetime.fromisoformat(dates[0]["dtStart"]).year
     collection = get_landsat_collection(year)
-    
+
     # Log the composite mode and required bands
     logger.debug(f"Landsat composite mode: {composite_mode}, collection: {collection}, required bands: {vis.get('bands', [])}")
-    
+
     # Process based on composite mode
     if composite_mode == "BEST_IMAGE":
         # Best image selection mode - use native CLOUD_COVER_LAND property for performance
         # This avoids expensive pixel-level calculations
-        landsat_collection = (ee.ImageCollection(collection)
-                            .filterDate(dates["dtStart"], dates["dtEnd"])
-                            .filterBounds(geom)
+        base = ee.ImageCollection(collection)
+        landsat_collection = (_filter_collection_by_periods(base, dates, geom)
                             .filter(ee.Filter.lt('CLOUD_COVER', 40))  # Pre-filter more aggressive
                             .sort('CLOUD_COVER_LAND')  # Use native property, no calculation needed
                             .sort('CLOUD_COVER', False))  # Secondary sort by CLOUD_COVER if CLOUD_COVER_LAND is -1
@@ -410,24 +437,26 @@ def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], 
         
     else:
         # Default MOSAIC mode - original behavior
-        landsat_collection = ee.ImageCollection(collection).filterDate(dates["dtStart"], dates["dtEnd"]).filterBounds(geom)
-        
+        landsat_collection = _filter_collection_by_periods(
+            ee.ImageCollection(collection), dates, geom
+        )
+
         # Check if collection has images
         size = landsat_collection.size()
-        
+
         # Only process if there are images in the collection
         def process_with_bands():
             # Get first image to check available bands
             first = landsat_collection.first()
             band_names = first.bandNames()
-            
+
             # Check if requested bands exist
             requested_bands = vis["bands"]
-            
+
             # Filter to only available bands
             available_bands = band_names.filter(ee.Filter.inList('item', requested_bands))
             num_available = available_bands.size()
-            
+
             # If no requested bands are available, use default bands based on satellite
             processed = ee.Algorithms.If(
                 num_available.eq(0),
@@ -533,7 +562,7 @@ async def _serve_tile(layer: str,
                     try:
                         loop = asyncio.get_running_loop()
                         if layer == "landsat":
-                            year = datetime.fromisoformat(dates["dtStart"]).year
+                            year = datetime.fromisoformat(dates[0]["dtStart"]).year
                             collection = get_landsat_collection(year)
                             landsat_vis = await get_landsat_vis_params_async(visparam, collection)
 
@@ -564,7 +593,7 @@ async def _serve_tile(layer: str,
                         try:
                             loop = asyncio.get_running_loop()
                             if layer == "landsat":
-                                year = datetime.fromisoformat(dates["dtStart"]).year
+                                year = datetime.fromisoformat(dates[0]["dtStart"]).year
                                 collection = get_landsat_collection(year)
                                 landsat_vis = await get_landsat_vis_params_async(visparam, collection)
                                 layer_url = await loop.run_in_executor(
@@ -588,7 +617,7 @@ async def _serve_tile(layer: str,
             geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
             loop = asyncio.get_running_loop()
             if layer == "landsat":
-                _year = datetime.fromisoformat(dates["dtStart"]).year
+                _year = datetime.fromisoformat(dates[0]["dtStart"]).year
                 collection = get_landsat_collection(_year)
                 landsat_vis = await get_landsat_vis_params_async(visparam, collection)
                 return await loop.run_in_executor(

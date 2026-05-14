@@ -7,7 +7,7 @@ import calendar
 import math
 import random
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
 import aiohttp
@@ -589,19 +589,43 @@ def cache_warm_from_tiles_json(self, tiles: List[Dict[str, Any]],
 
 
 # Helpers para cache_warm_tile (execução síncrona dentro do Celery worker)
-def _build_period_dates(period: str, year: int, month: int) -> Dict[str, str]:
-    """Replica _build_periods de layers.py para uso em contexto Celery."""
-    periods = {
-        "WET": {"dtStart": f"{year}-01-01", "dtEnd": f"{year}-04-30"},
-        "DRY": {"dtStart": f"{year}-06-01", "dtEnd": f"{year}-10-30"},
+# Mantém duplicata de _build_periods de layers.py para evitar import de FastAPI/HTTPException
+# no contexto Celery prefork. MUST mirror app.api.layers._build_periods.
+def _build_period_dates(period: str, year: int, month: int) -> list[Dict[str, str]]:
+    """Replica _build_periods de layers.py para uso em contexto Celery.
+
+    dtEnd EXCLUSIVO (alinhado com filterDate half-open).
+    WET = jan-mai ∪ nov-dez; DRY = jun-out.
+    """
+    periods: Dict[str, list[Dict[str, str]]] = {
+        "WET": [
+            {"dtStart": f"{year}-01-01", "dtEnd": f"{year}-06-01"},
+            {"dtStart": f"{year}-11-01", "dtEnd": f"{year + 1}-01-01"},
+        ],
+        "DRY": [
+            {"dtStart": f"{year}-06-01", "dtEnd": f"{year}-11-01"},
+        ],
     }
     if period == "MONTH":
         _, last_day = calendar.monthrange(year, month)
-        periods["MONTH"] = {
-            "dtStart": f"{year}-{month:02}-01",
-            "dtEnd": f"{year}-{month:02}-{last_day:02}",
-        }
+        end = (datetime(year, month, last_day) + timedelta(days=1)).date().isoformat()
+        periods["MONTH"] = [
+            {"dtStart": f"{year}-{month:02}-01", "dtEnd": end},
+        ]
     return periods.get(period, periods["WET"])
+
+
+def _filter_warm(collection: "ee.ImageCollection", dates: list[Dict[str, str]]) -> "ee.ImageCollection":
+    """Aplica filterDate em N intervalos e mergeia (réplica local de
+    `app.api.layers._filter_collection_by_periods` sem dependência de FastAPI).
+    """
+    if not dates:
+        raise ValueError("dates must not be empty")
+    parts = [collection.filterDate(d["dtStart"], d["dtEnd"]) for d in dates]
+    merged = parts[0]
+    for part in parts[1:]:
+        merged = merged.merge(part)
+    return merged
 
 
 @gee_retry()
@@ -609,7 +633,7 @@ def _warm_create_landsat_url(geom, dates, visparam_name, composite_mode):
     """Gera URL Landsat EE — réplica simplificada de _create_landsat_layer_sync."""
     from app.visualization.visParam import get_landsat_collection, get_landsat_vis_params
 
-    year = datetime.fromisoformat(dates["dtStart"]).year
+    year = datetime.fromisoformat(dates[0]["dtStart"]).year
     collection = get_landsat_collection(year)
     vis = get_landsat_vis_params(visparam_name, collection)
 
@@ -620,9 +644,7 @@ def _warm_create_landsat_url(geom, dates, visparam_name, composite_mode):
     def scale(img):
         return img.addBands(img.select("SR_B.").multiply(0.0000275).add(-0.2), None, True)
 
-    col = (ee.ImageCollection(collection)
-           .filterDate(dates["dtStart"], dates["dtEnd"])
-           .filterBounds(geom))
+    col = _filter_warm(ee.ImageCollection(collection), dates).filterBounds(geom)
 
     if composite_mode == "BEST_IMAGE":
         col = col.filter(ee.Filter.lt('CLOUD_COVER', 40)).sort('CLOUD_COVER_LAND')
@@ -650,8 +672,7 @@ def _warm_create_s2_url(geom, dates, visparam_name):
     visparams = get_VISPARAMS_sync()
     vis = visparams.get(visparam_name, visparams.get("tvi-red", {}))
 
-    s2 = (ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
-          .filterDate(dates["dtStart"], dates["dtEnd"])
+    s2 = (_filter_warm(ee.ImageCollection("COPERNICUS/S2_HARMONIZED"), dates)
           .filterBounds(geom)
           .sort("CLOUDY_PIXEL_PERCENTAGE", False)
           .select(*vis.get("select", ["B4", "B3", "B2"])))

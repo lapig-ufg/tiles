@@ -123,7 +123,7 @@ def test_fallback_retries_with_mosaic_when_best_image_has_no_band(layers_module)
     with patch.object(ee.data, "getMapId", side_effect=fake_getMapId):
         url = layers_module._create_landsat_layer_with_params(
             geom=None,
-            dates={"dtStart": "2006-01-01", "dtEnd": "2006-04-30"},
+            dates=[{"dtStart": "2006-01-01", "dtEnd": "2006-05-01"}],
             vis={"bands": ["SR_B4", "SR_B5", "SR_B3"], "min": 0, "max": 1},
             composite_mode="BEST_IMAGE",
         )
@@ -147,7 +147,7 @@ def test_fallback_does_not_loop_if_mosaic_also_fails(layers_module):
         with pytest.raises(HTTPException) as exc_info:
             layers_module._create_landsat_layer_with_params(
                 geom=None,
-                dates={"dtStart": "2006-01-01", "dtEnd": "2006-04-30"},
+                dates=[{"dtStart": "2006-01-01", "dtEnd": "2006-05-01"}],
                 vis={"bands": ["SR_B4", "SR_B5", "SR_B3"], "min": 0, "max": 1},
                 composite_mode="BEST_IMAGE",
             )
@@ -172,7 +172,7 @@ def test_mosaic_mode_does_not_retry_on_band_missing(layers_module):
         with pytest.raises(HTTPException):
             layers_module._create_landsat_layer_with_params(
                 geom=None,
-                dates={"dtStart": "2006-01-01", "dtEnd": "2006-04-30"},
+                dates=[{"dtStart": "2006-01-01", "dtEnd": "2006-05-01"}],
                 vis={"bands": ["SR_B4", "SR_B5", "SR_B3"], "min": 0, "max": 1},
                 composite_mode="MOSAIC",
             )
@@ -194,7 +194,7 @@ def test_non_band_ee_error_is_not_retried(layers_module):
         with pytest.raises(ee.EEException):
             layers_module._create_landsat_layer_with_params(
                 geom=None,
-                dates={"dtStart": "2006-01-01", "dtEnd": "2006-04-30"},
+                dates=[{"dtStart": "2006-01-01", "dtEnd": "2006-05-01"}],
                 vis={"bands": ["SR_B4", "SR_B5", "SR_B3"], "min": 0, "max": 1},
                 composite_mode="BEST_IMAGE",
             )
