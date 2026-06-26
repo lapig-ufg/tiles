@@ -26,6 +26,10 @@ from app.utils.smoothing.config import Satellite
 
 router = APIRouter()
 
+# Data de início da coleção COPERNICUS/S2_SR_HARMONIZED (primeira imagem disponível).
+# Usada como default de data_inicio para que a série temporal Sentinel-2 cubra todo o histórico.
+S2_SR_HARMONIZED_START = "2017-03-28"
+
 
 def _handle_ee_quota_error(exc: ee.EEException) -> None:
     """Registra rotação de SA quando o erro é de quota/429."""
@@ -173,7 +177,9 @@ async def timeseries_sentinel2(
         if not data_fim:
             data_fim = datetime.now().strftime('%Y-%m-%d')
         if not data_inicio:
-            data_inicio = (datetime.now() - timedelta(days=365 * 4.5)).strftime('%Y-%m-%d')
+            # Cobre toda a série do S2_SR_HARMONIZED (início da coleção: 2017-03-28).
+            # Antes usava janela deslizante de 4,5 anos, que truncava o início em ~2022.
+            data_inicio = S2_SR_HARMONIZED_START
 
         smoothing_method = parse_smoothing_method(method)
         point = ee.Geometry.Point([lon, lat])
