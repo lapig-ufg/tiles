@@ -158,4 +158,3 @@ python -m app.prewarm popular
 4. Push para a branch (`git push origin feature/AmazingFeature`).
 5. Abra um Pull Request.
 
-
