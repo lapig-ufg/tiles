@@ -77,9 +77,14 @@ async def aget_png(key: str) -> Optional[bytes]:
     """Busca PNG do cache híbrido (assíncrono)"""
     return await tile_cache.get_png(key)
 
-async def aset_png(key: str, data: bytes, ttl: int = PNG_TTL) -> None:
-    """Salva PNG no cache híbrido (assíncrono)"""
-    await tile_cache.set_png(key, data, ttl)
+async def aset_png(key: str, data: bytes, ttl: int = PNG_TTL,
+                   *, background: bool = False) -> None:
+    """Salva PNG no cache híbrido (assíncrono).
+
+    background=True agenda a persistência (S3 + meta Redis) em segundo
+    plano — usar nos handlers HTTP para não bloquear a resposta.
+    """
+    await tile_cache.set_png(key, data, ttl, background=background)
 
 async def aget_meta(key: str) -> Optional[dict[str, Any]]:
     """Busca metadados do cache híbrido (assíncrono)"""

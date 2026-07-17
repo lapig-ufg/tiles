@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional, List
 import aioboto3
 import orjson
 import redis.asyncio as redis
+from botocore.config import Config as BotoConfig
 from botocore.exceptions import ClientError
 
 from app.core.config import logger, settings, REDIS_URL
@@ -59,6 +60,10 @@ class HybridTileCache:
         self._initialized = False
         self.LOCAL_CACHE_TTL = 3600  # 1 hora de TTL no cache local
 
+        # Uploads S3 em background (referência forte evita GC das tasks)
+        self._bg_tasks: set[asyncio.Task] = set()
+        self.MAX_BG_UPLOADS = 512  # backpressure se o S3 degradar
+
     def _s3_client_params(self) -> dict:
         """Parâmetros comuns para criação do cliente S3."""
         return {
@@ -68,6 +73,15 @@ class HybridTileCache:
             "aws_secret_access_key": settings.get("S3_SECRET_KEY", "minioadmin"),
             "use_ssl": settings.get("S3_USE_SSL", True),
             "verify": settings.get("S3_VERIFY_SSL", True),
+            # Cache indisponível deve custar milissegundos, não minutos:
+            # sem retry do botocore (a app já tenta 3x) e timeouts curtos.
+            # Incidente 2026-07: SeaweedFS sem volumes graváveis + retries
+            # padrão bloqueavam cada tile por ~230s.
+            "config": BotoConfig(
+                connect_timeout=2,
+                read_timeout=10,
+                retries={"max_attempts": 1, "mode": "standard"},
+            ),
         }
 
     async def _ensure_s3_client(self):
@@ -220,19 +234,50 @@ class HybridTileCache:
             self._s3_client = None
             return None
 
-    async def set_png(self, key: str, data: bytes, ttl: int = None) -> None:
-        """Salva tile PNG no cache híbrido.
+    async def set_png(self, key: str, data: bytes, ttl: int = None,
+                      *, background: bool = False) -> None:
+        """Salva tile PNG no cache híbrido. Best-effort — nunca propaga exceção.
 
-        Best-effort: se o S3 estiver indisponível, o tile é salvo no Redis e
-        no cache local para continuar servindo. Nunca propaga exceção.
+        O cache local é atualizado imediatamente. A persistência (S3 + meta
+        no Redis) é síncrona por padrão (Celery/pré-aquecimento, onde o
+        objetivo é persistir). Com background=True a persistência roda em
+        segundo plano — usar nos handlers HTTP para nunca bloquear a
+        resposta em falha de S3.
         """
         if ttl is None:
             ttl = self.PNG_TTL
 
         self._update_local_cache(key, data)
 
+        if not background:
+            await self._persist_png(key, data, ttl)
+            return
+
+        if len(self._bg_tasks) >= self.MAX_BG_UPLOADS:
+            # S3 degradado acumularia tasks (e PNGs em memória) sem limite.
+            # O tile já está no cache local; descarta a persistência.
+            logger.warning(
+                f"Upload S3 em background descartado (fila cheia, "
+                f"{len(self._bg_tasks)} pendentes): {key}"
+            )
+            return
+
+        task = asyncio.create_task(self._persist_png(key, data, ttl))
+        self._bg_tasks.add(task)
+        task.add_done_callback(self._bg_tasks.discard)
+
+    async def _persist_png(self, key: str, data: bytes, ttl: int) -> None:
+        """Persiste tile no S3 e grava meta no Redis. Nunca propaga exceção.
+
+        A meta só é gravada quando o upload S3 tem sucesso: meta apontando
+        para objeto inexistente faz o próximo get_png receber NoSuchKey,
+        apagar a meta e re-baixar o tile do GEE, multiplicando a carga
+        exatamente quando o S3 está indisponível.
+        """
         s3_key = self._generate_s3_key(key)
         s3_ok = await self._upload_to_s3(s3_key, data)
+        if not s3_ok:
+            return
 
         try:
             async with self._get_redis() as r:
@@ -241,7 +286,7 @@ class HybridTileCache:
                     'size': str(len(data)),
                     'created': datetime.now().isoformat(),
                     'content_type': 'image/png',
-                    's3_synced': '1' if s3_ok else '0',
+                    's3_synced': '1',
                 }
                 await r.hset(f"tile:{key}", mapping=meta)
                 await r.expire(f"tile:{key}", ttl)
@@ -480,6 +525,11 @@ class HybridTileCache:
 
     async def close(self):
         """Fecha conexões ao desligar"""
+        # Drena uploads pendentes antes de fechar o cliente S3 (bounded:
+        # com max_attempts=1 e timeouts curtos cada upload termina rápido)
+        pending = [t for t in self._bg_tasks if not t.done()]
+        if pending:
+            await asyncio.wait(pending, timeout=15)
         if self._s3_client is not None:
             try:
                 await self._s3_ctx.__aexit__(None, None, None)

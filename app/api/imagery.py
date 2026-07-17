@@ -490,7 +490,7 @@ async def image_tile(
                 x=x, y=y, z=z,
                 layer="imagery",
             )
-            await set_png(tile_key, png_bytes)
+            await set_png(tile_key, png_bytes, background=True)
             return StreamingResponse(
                 io.BytesIO(png_bytes),
                 media_type="image/png",

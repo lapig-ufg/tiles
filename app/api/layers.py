@@ -613,8 +613,8 @@ async def _serve_tile(layer: str,
             # cacheia por 1 ano. Ano corrente pode ainda receber novas passagens
             # de satélite, então mantém TTL curto de 30 dias.
             tile_ttl = PNG_TTL_HISTORICAL if year < datetime.utcnow().year else PNG_TTL
-            await set_png(file_cache, png_bytes, ttl=tile_ttl)
-            logger.info(f"Tile cached: {file_cache} (ttl={tile_ttl}s)")
+            await set_png(file_cache, png_bytes, ttl=tile_ttl, background=True)
+            logger.info(f"Tile cache scheduled: {file_cache} (ttl={tile_ttl}s)")
             return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
         except EarthEngineRateLimitedError as exc:
             logger.warning(
