@@ -65,7 +65,11 @@ if "ee" not in sys.modules:
 
     ee.EEException = EEException
     ee.Geometry = type("Geometry", (), {"BBox": staticmethod(lambda *_a, **_k: _CHAIN)})
-    ee.Image = type("Image", (), {"constant": staticmethod(lambda *_a, **_k: _CHAIN)})
+    ee.Image = type("Image", (), {
+        "constant": staticmethod(lambda *_a, **_k: _CHAIN),
+        "__init__": lambda self, *_a, **_k: None,
+        "__getattr__": lambda self, _name: _CHAIN,
+    })
     ee.ImageCollection = lambda *_a, **_k: _CHAIN
     ee.Filter = type("Filter", (), {"lt": staticmethod(lambda *_a, **_k: _CHAIN),
                                      "eq": staticmethod(lambda *_a, **_k: _CHAIN),

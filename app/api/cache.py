@@ -41,6 +41,10 @@ ws_router = APIRouter(prefix="/api/cache", tags=["Cache WebSocket"])
 class CachePointRequest(BaseModel):
     """Request to cache a single point"""
     point_id: str = Field(..., description="Point ID to cache")
+    tvi_campaign_id: Optional[str] = Field(
+        None,
+        description="Campanha do TVI moderno - usa a credencial do responsavel GEE via tvi-api",
+    )
 
 class CacheCampaignRequest(BaseModel):
     """Request to cache all points in a campaign with optimizations"""
@@ -48,6 +52,10 @@ class CacheCampaignRequest(BaseModel):
     batch_size: Optional[int] = Field(50, ge=1, le=200, description="Batch size for processing")
     use_grid: Optional[bool] = Field(True, description="Use grid-based optimization")
     priority_recent_years: Optional[bool] = Field(True, description="Prioritize recent years")
+    tvi_campaign_id: Optional[str] = Field(
+        None,
+        description="Campanha do TVI moderno - usa a credencial do responsavel GEE via tvi-api",
+    )
 
 class CacheWarmupRequest(BaseModel):
     """Request for cache warming"""
@@ -459,7 +467,7 @@ async def start_point_cache(request: CachePointRequest) -> CacheStatusResponse:
             )
         
         # Start cache task
-        task = cache_point.delay(request.point_id)
+        task = cache_point.delay(request.point_id, tvi_campaign_id=request.tvi_campaign_id)
         
         logger.info(f"Started cache task {task.id} for point {request.point_id}")
         
@@ -535,7 +543,7 @@ async def start_campaign_cache(request: CacheCampaignRequest) -> CacheStatusResp
             optimal_batch_size = max(request.batch_size // 2, 10)  # Smaller batches for small campaigns
         
         # Start optimized cache task (cache_campaign já possui todas as otimizações)
-        task = cache_campaign.delay(request.campaign_id, optimal_batch_size)
+        task = cache_campaign.delay(request.campaign_id, optimal_batch_size, tvi_campaign_id=request.tvi_campaign_id)
         
         # Estimate processing time
         tiles_per_point = len(campaign.get("visParamsEnable", [])) * (campaign.get("finalYear", 2024) - campaign.get("initialYear", 2020) + 1) * 3  # 3 zoom levels

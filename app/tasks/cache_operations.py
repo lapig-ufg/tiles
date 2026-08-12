@@ -18,6 +18,8 @@ from loguru import logger
 from app.cache.cache_hybrid import tile_cache
 from app.core.config import settings
 from app.core.gee_pool import gee_retry
+from app.core.tvi_token import TviTokenDenied, get_campaign_token
+from app.utils.ee_maps import create_map_with_credential
 from app.core.mongodb import (
     get_points_collection, get_campaigns_collection,
     connect_to_mongo
@@ -40,7 +42,8 @@ STANDARD_ZOOM_LEVELS = [13, 14]
 
 @celery_app.task(bind=True, max_retries=3, queue='high_priority')
 def cache_campaign(self, campaign_id: str, batch_size: int = 100,
-                  priority_mode: bool = False) -> Dict[str, Any]:
+                  priority_mode: bool = False,
+                  tvi_campaign_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Cache all points in a campaign
     
@@ -118,7 +121,8 @@ def cache_campaign(self, campaign_id: str, batch_size: int = 100,
                     subtasks.append(
                         cache_point_batch.s(
                             batch_ids, campaign_id,
-                            priority=priority_mode or (batch_index == 0)
+                            priority=priority_mode or (batch_index == 0),
+                            tvi_campaign_id=tvi_campaign_id
                         )
                     )
                     batch_ids = []
@@ -129,7 +133,8 @@ def cache_campaign(self, campaign_id: str, batch_size: int = 100,
                 subtasks.append(
                     cache_point_batch.s(
                         batch_ids, campaign_id,
-                        priority=priority_mode or (batch_index == 0)
+                        priority=priority_mode or (batch_index == 0),
+                        tvi_campaign_id=tvi_campaign_id
                     )
                 )
 
@@ -155,14 +160,17 @@ def cache_campaign(self, campaign_id: str, batch_size: int = 100,
 
 
 @celery_app.task(bind=True, max_retries=3, queue='standard')
-def cache_point(self, point_id: str, force: bool = False) -> Dict[str, Any]:
+def cache_point(self, point_id: str, force: bool = False,
+                tvi_campaign_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Cache all tiles for a single point
-    
+
     Args:
         point_id: Point identifier
         force: Force recaching even if already cached
-        
+        tvi_campaign_id: Campanha do TVI moderno — roteia o warming pelo
+            caminho com credencial do responsável GEE (cache_warm_tile)
+
     Returns:
         Dict with caching results
     """
@@ -205,19 +213,37 @@ def cache_point(self, point_id: str, force: bool = False) -> Dict[str, Any]:
             
             # Generate cache tasks
             cache_tasks = []
-            for year in years:
-                for vis_param in vis_params:
-                    params = {
-                        "year": year,
-                        "vis_param": vis_param,
-                        "image_type": image_type
-                    }
-                    
-                    # Create tile generation task
-                    cache_tasks.append(
-                        tile_generate_batch.s(tiles, image_type, params)
-                    )
-            
+            if tvi_campaign_id:
+                # Caminho do TVI moderno: cada tile passa pelo cache_warm_tile
+                # (mesma chave da API HTTP) com a credencial da campanha,
+                # cobrindo as duas estações do mosaico anual.
+                for year in years:
+                    for vis_param in vis_params:
+                        for period in ("WET", "DRY"):
+                            for tile in tiles:
+                                cache_tasks.append(
+                                    cache_warm_tile.s(
+                                        x=tile["x"], y=tile["y"], z=tile["z"],
+                                        layer=image_type,
+                                        period=period, year=year, month=1,
+                                        visparam=vis_param,
+                                        tvi_campaign_id=tvi_campaign_id,
+                                    )
+                                )
+            else:
+                for year in years:
+                    for vis_param in vis_params:
+                        params = {
+                            "year": year,
+                            "vis_param": vis_param,
+                            "image_type": image_type
+                        }
+
+                        # Create tile generation task
+                        cache_tasks.append(
+                            tile_generate_batch.s(tiles, image_type, params)
+                        )
+
             # Execute tasks
             job = group(cache_tasks).apply_async()
             
@@ -256,7 +282,8 @@ def cache_point(self, point_id: str, force: bool = False) -> Dict[str, Any]:
 
 @celery_app.task(bind=True, max_retries=2, queue='standard')
 def cache_point_batch(self, point_ids: List[str], campaign_id: str,
-                     priority: bool = False) -> Dict[str, Any]:
+                     priority: bool = False,
+                     tvi_campaign_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Cache multiple points in batch
     
@@ -278,6 +305,7 @@ def cache_point_batch(self, point_ids: List[str], campaign_id: str,
         try:
             result = cache_point.apply_async(
                 args=[point_id],
+                kwargs={"tvi_campaign_id": tvi_campaign_id},
                 queue='high_priority' if priority else 'standard'
             )
             results["successful"] += 1
@@ -440,7 +468,8 @@ def cache_warm_regions(self, regions: List[Dict[str, Any]] = None,
 @celery_app.task(bind=True, max_retries=2, queue='standard')
 def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                     period: str, year: int, month: int,
-                    visparam: str, composite_mode: str = "BEST_IMAGE") -> Dict[str, Any]:
+                    visparam: str, composite_mode: str = "BEST_IMAGE",
+                    tvi_campaign_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Gera e cacheia um único tile replicando o fluxo exato da API (_serve_tile).
 
@@ -481,8 +510,14 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
         # Gerar datas do período
         dates = _build_period_dates(period, year, month)
 
-        # Obter URL do EE (ou do meta cache)
-        raw_meta = r.get(f"meta:{path_cache}")
+        # Obter URL do EE (ou do meta cache). URLs geradas com credencial de
+        # campanha ficam em namespace próprio: o mapa carrega a identidade de
+        # quem o registrou e não pode vazar para o caminho público (nem o
+        # contrário) — o PNG resultante é idêntico e continua compartilhado.
+        meta_key = (
+            f"meta:tvi:{tvi_campaign_id}:{path_cache}" if tvi_campaign_id else f"meta:{path_cache}"
+        )
+        raw_meta = r.get(meta_key)
         meta = orjson.loads(raw_meta) if raw_meta else None
         expired = (
             meta is None or
@@ -493,14 +528,29 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
         if expired:
             geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
 
-            if layer == "landsat":
-                layer_url = _warm_create_landsat_url(geom, dates, visparam, composite_mode)
-            elif layer == "s2_harmonized":
-                layer_url = _warm_create_s2_url(geom, dates, visparam)
-            else:
-                return {"status": "error", "tile": file_cache, "error": f"Unknown layer: {layer}"}
+            try:
+                if layer == "landsat":
+                    layer_url = _warm_create_landsat_url(
+                        geom, dates, visparam, composite_mode, tvi_campaign_id=tvi_campaign_id
+                    )
+                elif layer == "s2_harmonized":
+                    layer_url = _warm_create_s2_url(
+                        geom, dates, visparam, tvi_campaign_id=tvi_campaign_id
+                    )
+                else:
+                    return {"status": "error", "tile": file_cache, "error": f"Unknown layer: {layer}"}
+            except TviTokenDenied as denied:
+                # Erro de negócio do tvi-api (conta revogada/desvinculada):
+                # falha legível, sem retentativa cega.
+                logger.warning(f"Warming negado para campanha {tvi_campaign_id}: {denied}")
+                return {
+                    "status": "failed",
+                    "reason": "gee_credential_denied",
+                    "tile": file_cache,
+                    "detail": denied.detail,
+                }
 
-            r.set(f"meta:{path_cache}", orjson.dumps({"url": layer_url, "date": datetime.now().isoformat()}), ex=META_TTL)
+            r.set(meta_key, orjson.dumps({"url": layer_url, "date": datetime.now().isoformat()}), ex=META_TTL)
         else:
             layer_url = meta["url"]
 
@@ -552,13 +602,16 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
 
 @celery_app.task(bind=True, max_retries=1, queue='high_priority')
 def cache_warm_from_tiles_json(self, tiles: List[Dict[str, Any]],
-                                batch_size: int = 50) -> Dict[str, Any]:
+                                batch_size: int = 50,
+                                tvi_campaign_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Enfileira tiles para pré-aquecimento via Celery workers.
 
     Args:
         tiles: Lista de dicts com {x, y, z, endpoint, params}
         batch_size: Número de tiles por grupo
+        tvi_campaign_id: Campanha do TVI moderno — usa a credencial do
+            responsável GEE (via tvi-api) em vez do pool de SAs
     """
     total = len(tiles)
     batches = math.ceil(total / batch_size)
@@ -575,6 +628,7 @@ def cache_warm_from_tiles_json(self, tiles: List[Dict[str, Any]],
                 month=params.get("month", 8),
                 visparam=params.get("visparam", "landsat-tvi-false"),
                 composite_mode=params.get("compositeMode", "BEST_IMAGE"),
+                tvi_campaign_id=tvi_campaign_id,
             )
         )
 
@@ -604,18 +658,13 @@ def _build_period_dates(period: str, year: int, month: int) -> Dict[str, str]:
     return periods.get(period, periods["WET"])
 
 
-@gee_retry()
-def _warm_create_landsat_url(geom, dates, visparam_name, composite_mode):
-    """Gera URL Landsat EE — réplica simplificada de _create_landsat_layer_sync."""
+def _build_landsat_image(geom, dates, visparam_name, composite_mode):
+    """Monta a imagem Landsat e devolve (image, vis) sem visualização aplicada."""
     from app.visualization.visParam import get_landsat_collection, get_landsat_vis_params
 
     year = datetime.fromisoformat(dates["dtStart"]).year
     collection = get_landsat_collection(year)
     vis = get_landsat_vis_params(visparam_name, collection)
-
-    for key in ("min", "max", "gamma"):
-        if isinstance(vis.get(key), list):
-            vis[key] = ",".join(map(str, vis[key]))
 
     def scale(img):
         return img.addBands(img.select("SR_B.").multiply(0.0000275).add(-0.2), None, True)
@@ -637,13 +686,31 @@ def _warm_create_landsat_url(geom, dates, visparam_name, composite_mode):
             col.map(scale).select(vis["bands"]).mosaic(),
             ee.Image.constant(0).rename(['empty'])
         )
+    return image, vis
 
+
+@gee_retry()
+def _warm_create_landsat_url(geom, dates, visparam_name, composite_mode, tvi_campaign_id=None):
+    """Gera URL Landsat EE — réplica simplificada de _create_landsat_layer_sync.
+
+    Com ``tvi_campaign_id``, o mapa é registrado com a credencial do
+    responsável GEE da campanha (tvi-api) em vez da SA do pool.
+    """
+    image, vis = _build_landsat_image(geom, dates, visparam_name, composite_mode)
+
+    if tvi_campaign_id:
+        credential = get_campaign_token(tvi_campaign_id)
+        return create_map_with_credential(ee.Image(image), vis, credential)
+
+    for key in ("min", "max", "gamma"):
+        if isinstance(vis.get(key), list):
+            vis[key] = ",".join(map(str, vis[key]))
     map_id = ee.data.getMapId({"image": image, **vis})
     return map_id["tile_fetcher"].url_format
 
 
 @gee_retry()
-def _warm_create_s2_url(geom, dates, visparam_name):
+def _warm_create_s2_url(geom, dates, visparam_name, tvi_campaign_id=None):
     """Gera URL S2 EE — réplica simplificada de _create_s2_layer_sync."""
     from app.visualization.vis_params_loader import get_VISPARAMS_sync
 
@@ -656,6 +723,11 @@ def _warm_create_s2_url(geom, dates, visparam_name):
           .sort("CLOUDY_PIXEL_PERCENTAGE", False)
           .select(*vis.get("select", ["B4", "B3", "B2"])))
     best = s2.mosaic()
+
+    if tvi_campaign_id:
+        credential = get_campaign_token(tvi_campaign_id)
+        return create_map_with_credential(best, vis.get("visparam", {}), credential)
+
     map_id = ee.data.getMapId({"image": best, **vis.get("visparam", {})})
     return map_id["tile_fetcher"].url_format
 
