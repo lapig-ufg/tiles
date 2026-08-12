@@ -33,6 +33,11 @@ MONGODB_URL='mongodb://localhost:27017'
 MONGODB_DB='tvi'
 USE_MONGODB_VIS_PARAMS=true  # Set to true after running migration script
 
+# TVI moderno (tvi-api) — tokens GEE efêmeros por campanha
+# (POST /internal/gee/token; vazio desabilita o caminho por credencial)
+TVI_API_URL = ''
+TVI_INTERNAL_TOKEN = ''
+
 # GEE Service Account Pool
 GEE_SA_DIRECTORY = '/app/.service-accounts/'
 GEE_SA_COOLDOWN_SECONDS = 60       # Cooldown após 429 (segundos)
