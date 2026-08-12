@@ -78,3 +78,7 @@ if "ee" not in sys.modules:
     data = _stub("ee.data")
     data.getMapId = lambda *_a, **_k: {"tile_fetcher": type("T", (), {"url_format": ""})()}
     ee.data = data
+
+    serializer = _stub("ee.serializer")
+    serializer.encode = lambda *_a, **_k: {}
+    ee.serializer = serializer
