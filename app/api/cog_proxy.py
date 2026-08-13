@@ -17,14 +17,29 @@ import httpx
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import StreamingResponse, Response
 
+from app.core.config import settings
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Domínios permitidos para proxy — evita open relay
-ALLOWED_HOSTS = frozenset([
-    "data.inpe.br",
-])
+# Domínios permitidos para proxy — evita open relay. Configurável por
+# COG_ALLOWED_HOSTS (lista ou string separada por vírgulas); o BDC é o padrão.
+DEFAULT_ALLOWED_HOSTS = ("data.inpe.br",)
+
+
+def allowed_hosts() -> frozenset:
+    """Hosts liberados no proxy, lidos da configuração a cada chamada."""
+    configured = None
+    if hasattr(settings, "get"):
+        configured = settings.get("COG_ALLOWED_HOSTS", None)
+    if configured is None:
+        configured = getattr(settings, "COG_ALLOWED_HOSTS", None)
+    if not configured:
+        return frozenset(DEFAULT_ALLOWED_HOSTS)
+    if isinstance(configured, str):
+        configured = [part.strip() for part in configured.split(",")]
+    return frozenset(host for host in configured if host)
 
 # Headers que devem ser repassados do servidor de origem
 PASSTHROUGH_HEADERS = frozenset({
@@ -88,7 +103,7 @@ def _validate_url(url: str) -> str:
             detail="URLs com credenciais embutidas não são permitidas",
         )
 
-    if parsed.hostname not in ALLOWED_HOSTS:
+    if parsed.hostname not in allowed_hosts():
         raise HTTPException(
             status_code=403,
             detail=f"Host não permitido: {parsed.hostname}",

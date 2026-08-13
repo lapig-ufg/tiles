@@ -33,6 +33,9 @@ MONGODB_URL='mongodb://localhost:27017'
 MONGODB_DB='tvi'
 USE_MONGODB_VIS_PARAMS=true  # Set to true after running migration script
 
+# Hosts liberados no proxy de COG (open relay é bloqueado por padrão)
+COG_ALLOWED_HOSTS = ['data.inpe.br']
+
 # TVI moderno (tvi-api) — tokens GEE efêmeros por campanha
 # (POST /internal/gee/token; vazio desabilita o caminho por credencial)
 TVI_API_URL = ''
