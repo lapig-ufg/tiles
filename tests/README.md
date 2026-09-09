@@ -38,7 +38,10 @@ python -m venv .venv
 
 ## Pollution de `sys.modules`
 
-Fixtures de integração fazem `sys.modules.pop("app.*", None)` no setup
-para forçar re-import. Se você adicionar um teste novo que importa `app.*`,
-use a mesma técnica para evitar ver o módulo de outro teste com stubs
-diferentes — ver `test_tile_handlers_propagate_status.py` como modelo.
+Fixtures que instalam stubs em `app.*` chamam `reset_app_imports()` no setup
+para forçar re-import (ver `test_tile_handlers_propagate_status.py` como
+modelo). A fixture `autouse` `_isolamento_de_modulos_app` do `conftest.py`
+fotografa as entradas `app.*` de `sys.modules` antes de cada teste e as
+restaura depois, de modo que stubs e reimportações de um teste não vazem
+para os seguintes (um `patch("app.x.y")` posterior encontraria o stub, e uma
+importação tardia ligaria a função a uma classe de exceção reimportada).

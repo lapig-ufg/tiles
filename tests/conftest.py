@@ -11,6 +11,8 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -37,6 +39,32 @@ def reset_app_imports() -> None:
         if any(m == p or m.startswith(p + ".") for p in PROTECTED_MODULES):
             continue
         sys.modules.pop(m, None)
+
+
+def snapshot_app_imports() -> dict:
+    """Entradas `app.*` de sys.modules antes de uma fixture instalar stubs."""
+    return {m: mod for m, mod in sys.modules.items() if m == "app" or m.startswith("app.")}
+
+
+def restore_app_imports(snapshot: dict) -> None:
+    """Remove os stubs `app.*` deixados por uma fixture e devolve os módulos
+    salvos por `snapshot_app_imports()`. Sem isso, `patch("app.x.y")` em testes
+    posteriores encontra o stub em vez do módulo real."""
+    reset_app_imports()
+    sys.modules.update(snapshot)
+
+
+@pytest.fixture(autouse=True)
+def _isolamento_de_modulos_app():
+    """Cada teste começa e termina com as mesmas entradas `app.*` em sys.modules.
+
+    Fixtures que chamam `reset_app_imports()` e instalam stubs não os removem;
+    sem este isolamento, um `patch("app.x.y")` ou uma importação tardia em
+    teste posterior encontra o stub (ou uma classe reimportada) em vez do
+    módulo original."""
+    snapshot = snapshot_app_imports()
+    yield
+    restore_app_imports(snapshot)
 
 
 def _stub(name: str, attrs: dict | None = None) -> types.ModuleType:

@@ -30,6 +30,8 @@ def app_with_cb(monkeypatch):
     cache_mod.aset_meta = _noop
     cache_mod.adelete_meta = _noop
     cache_mod.atile_lock = _fake_lock
+    cache_mod.PNG_TTL = 30 * 24 * 3600
+    cache_mod.PNG_TTL_HISTORICAL = 365 * 24 * 3600
     sys.modules["app.cache.cache"] = cache_mod
 
     rate_limiter_mod = type(sys)("app.middleware.rate_limiter")
