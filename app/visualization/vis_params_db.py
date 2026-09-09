@@ -115,7 +115,7 @@ class VisParamsManager:
         # Find the matching satellite config
         for sat_config in vis_doc.satellite_configs:
             if sat_config.collection_id == collection_name:
-                landsat_params = sat_config.vis_params.model_dump()
+                landsat_params = sat_config.vis_params.model_dump(exclude_none=True)
                 
                 # Convert all numeric parameters to strings as expected by Google Earth Engine
                 for key in ["min", "max", "gamma"]:
@@ -153,7 +153,7 @@ async def get_visparams_dict() -> Dict[str, Dict[str, Any]]:
     for name, doc in all_params.items():
         if doc.vis_params:
             # Sentinel-2 style
-            vis_params = doc.vis_params.model_dump()
+            vis_params = doc.vis_params.model_dump(exclude_none=True)
             
             # Convert all numeric parameters to strings as expected by Google Earth Engine
             for key in ["min", "max", "gamma"]:
@@ -175,7 +175,7 @@ async def get_visparams_dict() -> Dict[str, Dict[str, Any]]:
             # Landsat style
             visparam = {}
             for sat_config in doc.satellite_configs:
-                landsat_vis_params = sat_config.vis_params.model_dump()
+                landsat_vis_params = sat_config.vis_params.model_dump(exclude_none=True)
                 
                 # Convert all numeric parameters to strings as expected by Google Earth Engine
                 for key in ["min", "max", "gamma"]:
