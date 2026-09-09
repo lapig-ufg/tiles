@@ -10,6 +10,39 @@ from app.core.mongodb import get_database
 logger = logging.getLogger(__name__)
 
 
+def _first_number(value) -> Optional[float]:
+    """Accepts the stored forms of min/max: list, comma-separated string or number."""
+    if isinstance(value, list):
+        value = value[0] if value else None
+    if isinstance(value, str):
+        value = value.split(",")[0].strip()
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
+def build_legend(vis_params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Legend metadata for single-band index visualizations, None otherwise."""
+    if not vis_params or not vis_params.get("index"):
+        return None
+    index = vis_params["index"]
+    return {
+        "label": index.get("name") or "NDVI",
+        "min": _first_number(vis_params.get("min")),
+        "max": _first_number(vis_params.get("max")),
+        "palette": list(vis_params.get("palette") or []),
+    }
+
+
+def _legend_for_document(vp: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if vp.get("vis_params"):
+        return build_legend(vp["vis_params"])
+    configs = vp.get("satellite_configs") or []
+    if configs:
+        return build_legend(configs[0].get("vis_params"))
+    return None
+
+
 class CapabilitiesProvider:
     """Provider for dynamic capabilities based on MongoDB vis_params"""
 
@@ -161,6 +194,9 @@ class CapabilitiesProvider:
                         "description": vp.get("description", ""),
                         "tags": vp.get("tags", [])
                     }
+                    legend = _legend_for_document(vp)
+                    if legend:
+                        param_info["legend"] = legend
 
                     if vp.get("category") in ["sentinel", "sentinel2"]:
                         sentinel_params.append(param_info)
@@ -232,18 +268,25 @@ class CapabilitiesProvider:
 
     def _get_hardcoded_capabilities(self) -> Dict[str, Any]:
         """Fallback to hardcoded capabilities"""
+        from app.visualization.visParam import VISPARAMS
+
         current_year = datetime.now().year
+        s2_ndvi_legend = build_legend(VISPARAMS["tvi-ndvi"]["visparam"])
+        landsat_ndvi_legend = build_legend(VISPARAMS["landsat-tvi-ndvi"]["visparam"]["LANDSAT/LC08/C02/T1_L2"])
         return {
             "collections": [
                 {
                     "name": "s2_harmonized",
                     "display_name": "Sentinel-2 Harmonized",
                     "satellite": "sentinel",
-                    "visparam": ["tvi-green", "tvi-red", "tvi-rgb"],
+                    "visparam": ["tvi-green", "tvi-red", "tvi-rgb", "tvi-ndvi"],
                     "visparam_details": [
                         {"name": "tvi-green", "display_name": "TVI Green", "description": "SWIR1/REDEDGE4/RED"},
                         {"name": "tvi-red", "display_name": "TVI Red", "description": "REDEDGE4/SWIR1/RED"},
-                        {"name": "tvi-rgb", "display_name": "RGB", "description": "Standard RGB"}
+                        {"name": "tvi-rgb", "display_name": "RGB", "description": "Standard RGB"},
+                        {"name": "tvi-ndvi", "display_name": "NDVI",
+                         "description": "Normalized difference vegetation index (B8, B4)",
+                         "legend": s2_ndvi_legend}
                     ],
                     "period": ["WET", "DRY", "MONTH"],
                     "year": list(range(2017, current_year + 1)),
@@ -254,13 +297,16 @@ class CapabilitiesProvider:
                     "name": "landsat",
                     "display_name": "Landsat Collection",
                     "satellite": "landsat",
-                    "visparam": ["landsat-tvi-true", "landsat-tvi-agri", "landsat-tvi-false"],
+                    "visparam": ["landsat-tvi-true", "landsat-tvi-agri", "landsat-tvi-false", "landsat-tvi-ndvi"],
                     "visparam_details": [
                         {"name": "landsat-tvi-true", "display_name": "True Color", "description": "Natural color RGB"},
                         {"name": "landsat-tvi-agri", "display_name": "Agriculture",
                          "description": "False color for vegetation"},
                         {"name": "landsat-tvi-false", "display_name": "False Color",
-                         "description": "Standard false color"}
+                         "description": "Standard false color"},
+                        {"name": "landsat-tvi-ndvi", "display_name": "NDVI",
+                         "description": "Normalized difference vegetation index (NIR, RED)",
+                         "legend": landsat_ndvi_legend}
                     ],
                     "months": ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"],
                     "year": list(range(1985, current_year + 1)),
