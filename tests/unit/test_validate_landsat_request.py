@@ -17,7 +17,7 @@ from app.visualization.validation import (
 )
 
 
-KNOWN_VISPARAMS = {"landsat-tvi-true", "landsat-tvi-false", "landsat-tvi-agri"}
+KNOWN_VISPARAMS = {"landsat-tvi-true", "landsat-tvi-false", "landsat-tvi-agri", "landsat-tvi-ndvi"}
 
 
 def test_known_visparams_derived_from_visParam_hardcoded():

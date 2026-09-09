@@ -1,3 +1,20 @@
+# Rampa de marrom (solo exposto) a verde (vegetação densa) para índices de vegetação.
+NDVI_PALETTE = [
+    "#a52a2a", "#c4813e", "#e6c26b", "#fff2a8", "#d9ef8b",
+    "#a6d96a", "#66bd63", "#1a9850", "#006837",
+]
+
+
+def _ndvi_landsat(nir: str, red: str) -> dict:
+    return {
+        "bands": [nir, red],
+        "min": [-0.2],
+        "max": [0.9],
+        "palette": NDVI_PALETTE,
+        "index": {"type": "normalized_difference", "bands": [nir, red], "name": "NDVI"},
+    }
+
+
 VISPARAMS = {
     "tvi-green": {
         "select": (["B4", "B8A", "B11"], ["RED", "REDEDGE4", "SWIR1"]),
@@ -26,6 +43,17 @@ VISPARAMS = {
             'gamma': '1.35'
         }
     },
+    "tvi-ndvi": {
+        "display_name": "NDVI",
+        "select": (["B8", "B4"], ["NIR", "RED"]),
+        "visparam": {
+            "bands": ["NIR", "RED"],
+            "min": "-0.2",
+            "max": "0.9",
+            "palette": NDVI_PALETTE,
+            "index": {"type": "normalized_difference", "bands": ["NIR", "RED"], "name": "NDVI"},
+        },
+    },
      'landsat-tvi-true': {
         "visparam": {
             'LANDSAT/LT05/C02/T1_L2': {'bands': ['SR_B3', 'SR_B2', 'SR_B1'], 'min': [0.03, 0.03, 0.0], 'max': [0.25, 0.25, 0.25], 'gamma': [1.2]},
@@ -49,7 +77,16 @@ VISPARAMS = {
             'LANDSAT/LC08/C02/T1_L2': {'bands': ['SR_B5', 'SR_B6', 'SR_B4'], 'min': [0.05, 0.05, 0.03],'max': [0.6, 0.55, 0.3], 'gamma': [1.2]},
             'LANDSAT/LC09/C02/T1_L2': {'bands': ['SR_B5', 'SR_B6', 'SR_B4'], 'min': [0.05, 0.05, 0.03],'max': [0.6, 0.55, 0.3], 'gamma': [1.2]}
         }
-    }
+    },
+    'landsat-tvi-ndvi': {
+        "display_name": "NDVI",
+        "visparam": {
+            'LANDSAT/LT05/C02/T1_L2': _ndvi_landsat('SR_B4', 'SR_B3'),
+            'LANDSAT/LE07/C02/T1_L2': _ndvi_landsat('SR_B4', 'SR_B3'),
+            'LANDSAT/LC08/C02/T1_L2': _ndvi_landsat('SR_B5', 'SR_B4'),
+            'LANDSAT/LC09/C02/T1_L2': _ndvi_landsat('SR_B5', 'SR_B4'),
+        }
+    },
 }
 
 
