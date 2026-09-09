@@ -2,9 +2,9 @@
 MongoDB models for visualization parameters
 """
 from datetime import datetime
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any, Union, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class BandConfig(BaseModel):
@@ -13,13 +13,23 @@ class BandConfig(BaseModel):
     mapped_bands: Optional[List[str]] = Field(None, description="Mapped band names (e.g., RED, SWIR1)")
 
 
+class IndexConfig(BaseModel):
+    """Single band derived from two input bands and rendered with a palette"""
+    type: Literal["normalized_difference"] = Field(..., description="Index formula")
+    bands: List[str] = Field(..., min_length=2, max_length=2,
+                             description="Input bands in formula order (e.g., [NIR, RED])")
+    name: str = Field("NDVI", description="Name of the derived band")
+
+
 class VisParam(BaseModel):
     """Visualization parameters for a single configuration"""
-    bands: List[str] = Field(..., description="Band names to use for visualization")
+    bands: List[str] = Field(..., description="Band names that must exist in the image")
     min: Union[str, List[float]] = Field(..., description="Minimum values for each band")
     max: Union[str, List[float]] = Field(..., description="Maximum values for each band")
-    gamma: Union[str, float, List[float]] = Field(..., description="Gamma correction value(s)")
-    
+    gamma: Optional[Union[str, float, List[float]]] = Field(None, description="Gamma correction value(s)")
+    palette: Optional[List[str]] = Field(None, description="CSS colors for single-band index rendering")
+    index: Optional[IndexConfig] = Field(None, description="Derived index rendered instead of the raw bands")
+
     @field_validator('min', 'max', mode='before')
     @classmethod
     def parse_string_values(cls, v):
@@ -27,7 +37,7 @@ class VisParam(BaseModel):
         if isinstance(v, str):
             return [float(x.strip()) for x in v.split(',')]
         return v
-    
+
     @field_validator('gamma', mode='before')
     @classmethod
     def parse_gamma(cls, v):
@@ -35,6 +45,21 @@ class VisParam(BaseModel):
         if isinstance(v, str):
             return float(v)
         return v
+
+    @model_validator(mode='after')
+    def validate_index(self):
+        if self.index is None:
+            if self.palette is not None:
+                raise ValueError("palette requires index")
+            return self
+        missing = [b for b in self.index.bands if b not in self.bands]
+        if missing:
+            raise ValueError(f"index bands {missing} must be listed in bands")
+        for key in ("min", "max"):
+            values = getattr(self, key)
+            if isinstance(values, list) and len(values) != 1:
+                raise ValueError(f"{key} must have a single value when index is set")
+        return self
 
 
 class SatelliteVisParam(BaseModel):
