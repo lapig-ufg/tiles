@@ -20,55 +20,31 @@ from app.models.vis_params import (
 from app.visualization.visParam import VISPARAMS
 
 
-async def migrate_vis_params():
-    """Migrate VISPARAMS to MongoDB with improved structure"""
-    
-    # Connect to MongoDB
-    client = AsyncIOMotorClient(settings.get("MONGODB_URL", "mongodb://localhost:27017"))
-    db = client[settings.get("MONGODB_DB", "tvi")]
-    collection = db.vis_params
-    
-    print("Starting migration of visualization parameters to MongoDB...")
-    
-    # Clear existing data (optional - comment out to preserve)
-    # await collection.delete_many({})
-    
+def build_documents(visparams: dict) -> list:
+    """Build vis_params documents from the hardcoded VISPARAMS structure."""
     documents = []
-    
-    # Process each visualization type
-    for vis_name, config in VISPARAMS.items():
-        print(f"Processing {vis_name}...")
-        
-        # Determine category and create document
+
+    for vis_name, config in visparams.items():
+        display_name = config.get("display_name") or vis_name.replace('-', ' ').title()
+
         if vis_name.startswith('landsat'):
-            # Landsat configurations with multiple satellites
-            category = 'landsat'
-            display_name = vis_name.replace('-', ' ').title()
-            
-            # Extract satellite configs
             satellite_configs = []
             for collection_id, params in config['visparam'].items():
                 satellite_configs.append(SatelliteVisParam(
                     collection_id=collection_id,
                     vis_params=VisParam(**params)
                 ))
-            
+
             doc = VisParamDocument(
                 _id=vis_name,
                 name=vis_name,
                 display_name=display_name,
                 description=f"Landsat visualization parameters for {display_name}",
-                category=category,
+                category='landsat',
                 satellite_configs=satellite_configs,
                 tags=['landsat', 'multispectral']
             )
-            
         else:
-            # Sentinel-2 style configurations
-            category = 'sentinel2'
-            display_name = vis_name.replace('-', ' ').title()
-            
-            # Process band config if present
             band_config = None
             if 'select' in config:
                 select_data = config['select']
@@ -82,25 +58,53 @@ async def migrate_vis_params():
                         original_bands=select_data,
                         mapped_bands=None
                     )
-            
-            # Create document
+
             doc = VisParamDocument(
                 _id=vis_name,
                 name=vis_name,
                 display_name=display_name,
                 description=f"Sentinel-2 visualization parameters for {display_name}",
-                category=category,
+                category='sentinel2',
                 band_config=band_config,
                 vis_params=VisParam(**config['visparam']),
                 tags=['sentinel2', 'multispectral']
             )
-        
+
         documents.append(doc.model_dump(by_alias=True))
+
+    return documents
+
+
+async def upsert_missing(collection, documents) -> tuple:
+    """Insert only the documents whose _id is absent; never overwrite existing ones."""
+    inserted = 0
+    existing = 0
+    for doc in documents:
+        result = await collection.update_one(
+            {"_id": doc["_id"]},
+            {"$setOnInsert": doc},
+            upsert=True
+        )
+        if result.upserted_id is not None:
+            inserted += 1
+        else:
+            existing += 1
+    return inserted, existing
+
+
+async def migrate_vis_params():
+    """Migrate VISPARAMS to MongoDB with improved structure"""
     
-    # Insert all documents
-    if documents:
-        result = await collection.insert_many(documents, ordered=False)
-        print(f"Inserted {len(result.inserted_ids)} visualization parameter documents")
+    # Connect to MongoDB
+    client = AsyncIOMotorClient(settings.get("MONGODB_URL", "mongodb://localhost:27017"))
+    db = client[settings.get("MONGODB_DB", "tvi")]
+    collection = db.vis_params
+    
+    print("Starting migration of visualization parameters to MongoDB...")
+    
+    documents = build_documents(VISPARAMS)
+    inserted, existing = await upsert_missing(collection, documents)
+    print(f"Visualization parameters: {inserted} inserted, {existing} already present")
     
     # Also migrate Landsat collection mappings
     landsat_mappings = LandsatCollectionMapping(
