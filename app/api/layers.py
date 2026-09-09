@@ -36,6 +36,7 @@ from app.core.gee_pool import gee_retry
 from app.utils.ee_tile_fetch import fetch_tile_with_rotation
 from app.utils.http import EarthEngineRateLimitedError
 from app.visualization.validation import validate_landsat_request
+from app.visualization.indices import resolve_visualization
 from app.visualization.vis_params_db import get_landsat_vis_params_async
 from app.visualization.vis_params_loader import get_visparams, get_landsat_vis_params, get_landsat_collection
 
@@ -164,7 +165,8 @@ def _create_s2_layer_sync(geom: ee.Geometry, dates: Dict[str, str], vis: dict) -
           .sort("CLOUDY_PIXEL_PERCENTAGE", False)
           .select(*vis["select"]))
     best = s2.mosaic()
-    map_id = ee.data.getMapId({"image": best, **vis["visparam"]})
+    image, vis_ee = resolve_visualization(best, vis["visparam"])
+    map_id = ee.data.getMapId({"image": image, **vis_ee})
     return map_id["tile_fetcher"].url_format
 
 
@@ -311,7 +313,8 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
         )
 
     try:
-        map_id = ee.data.getMapId({"image": landsat, **vis})
+        image, vis_ee = resolve_visualization(landsat, vis)
+        map_id = ee.data.getMapId({"image": image, **vis_ee})
         return map_id["tile_fetcher"].url_format
     except ee.EEException as e:
         return _retry_with_mosaic_if_band_missing(
@@ -447,7 +450,8 @@ def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], 
         )
 
     try:
-        map_id = ee.data.getMapId({"image": landsat, **vis})
+        image, vis_ee = resolve_visualization(landsat, vis)
+        map_id = ee.data.getMapId({"image": image, **vis_ee})
         return map_id["tile_fetcher"].url_format
     except ee.EEException as e:
         return _retry_with_mosaic_if_band_missing(
