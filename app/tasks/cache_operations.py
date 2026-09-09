@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.core.gee_pool import gee_retry
 from app.core.tvi_token import TviTokenDenied, get_campaign_token
 from app.utils.ee_maps import create_map_with_credential
+from app.visualization.indices import resolve_visualization
 from app.core.mongodb import (
     get_points_collection, get_campaigns_collection,
     connect_to_mongo
@@ -700,12 +701,14 @@ def _warm_create_landsat_url(geom, dates, visparam_name, composite_mode, tvi_cam
 
     if tvi_campaign_id:
         credential = get_campaign_token(tvi_campaign_id)
-        return create_map_with_credential(ee.Image(image), vis, credential)
+        cred_image, vis_ee = resolve_visualization(ee.Image(image), vis)
+        return create_map_with_credential(cred_image, vis_ee, credential)
 
     for key in ("min", "max", "gamma"):
         if isinstance(vis.get(key), list):
             vis[key] = ",".join(map(str, vis[key]))
-    map_id = ee.data.getMapId({"image": image, **vis})
+    image, vis_ee = resolve_visualization(image, vis)
+    map_id = ee.data.getMapId({"image": image, **vis_ee})
     return map_id["tile_fetcher"].url_format
 
 
@@ -723,12 +726,13 @@ def _warm_create_s2_url(geom, dates, visparam_name, tvi_campaign_id=None):
           .sort("CLOUDY_PIXEL_PERCENTAGE", False)
           .select(*vis.get("select", ["B4", "B3", "B2"])))
     best = s2.mosaic()
+    image, vis_ee = resolve_visualization(best, vis.get("visparam", {}))
 
     if tvi_campaign_id:
         credential = get_campaign_token(tvi_campaign_id)
-        return create_map_with_credential(best, vis.get("visparam", {}), credential)
+        return create_map_with_credential(image, vis_ee, credential)
 
-    map_id = ee.data.getMapId({"image": best, **vis.get("visparam", {})})
+    map_id = ee.data.getMapId({"image": image, **vis_ee})
     return map_id["tile_fetcher"].url_format
 
 
