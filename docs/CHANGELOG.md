@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- NDVI visualization for Sentinel-2 (`tvi-ndvi`) and Landsat (`landsat-tvi-ndvi`)
+- Declarative single-band indexes in vis_params (`index`, `palette`) applied by `resolve_visualization`
+- `legend` metadata in capabilities `visparam_details` for index visualizations
+- Idempotent vis_params seeding (`upsert_missing`) with explicit `display_name`
 - Authentication protection for Task Management routes (`/api/tasks/*`)
 - Authentication protection for Administration routes (`/api/admin/*`)
 - Lightweight health check endpoint `/health/light` for Traefik

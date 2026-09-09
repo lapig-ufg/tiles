@@ -32,13 +32,25 @@ Returns complete capabilities including:
       "name": "s2_harmonized",
       "display_name": "Sentinel-2 Harmonized",
       "satellite": "sentinel",
-      "visparam": ["tvi-green", "tvi-red", "tvi-rgb"],
+      "visparam": ["tvi-green", "tvi-red", "tvi-rgb", "tvi-ndvi"],
       "visparam_details": [
         {
           "name": "tvi-green",
           "display_name": "TVI Green",
           "description": "SWIR1/REDEDGE4/RED",
           "tags": ["vegetation", "analysis"]
+        },
+        {
+          "name": "tvi-ndvi",
+          "display_name": "NDVI",
+          "description": "Normalized difference vegetation index (B8, B4)",
+          "tags": ["sentinel2", "index", "ndvi"],
+          "legend": {
+            "label": "NDVI",
+            "min": -0.2,
+            "max": 0.9,
+            "palette": ["#a52a2a", "#c4813e", "#e6c26b", "#fff2a8", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837"]
+          }
         }
       ],
       "period": ["WET", "DRY", "MONTH"],
@@ -76,6 +88,8 @@ Returns complete capabilities including:
   }
 }
 ```
+
+`legend` is present only for single-band index visualizations (documents with `vis_params.index`). Clients use it to draw a color bar: `palette` from `min` (left) to `max` (right), labeled with `label`.
 
 ### 2. Legacy Capabilities (Backward Compatibility)
 ```

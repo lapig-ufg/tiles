@@ -52,7 +52,7 @@ GET /api/layers/s2_harmonized/{x}/{y}/{z}
   - `"MONTH"`: Mês específico (requer parâmetro `month`)
 - `year`: Ano (2017 até atual)
 - `month`: Mês (1-12, usado apenas quando `period="MONTH"`)
-- `visparam`: Nome da visualização (ex: `"tvi-red"`, `"ndvi"`, `"rgb"`)
+- `visparam`: Nome da visualização (ex: `"tvi-red"`, `"tvi-rgb"`, `"tvi-ndvi"`)
 
 **Exemplo:**
 ```bash
@@ -146,69 +146,63 @@ O sistema valida automaticamente:
 
 ```javascript
 {
-  "_id": ObjectId("..."),
-  "name": "tvi-red",
-  "display_name": "TVI Red",
-  "description": "Triangular Vegetation Index with Red band",
-  "category": "sentinel",  // ou "landsat"
+  "_id": "tvi-ndvi",
+  "name": "tvi-ndvi",
+  "display_name": "NDVI",
+  "description": "Índice de vegetação por diferença normalizada (B8, B4)",
+  "category": "sentinel2",  // ou "landsat"
   "active": true,
-  "tags": ["vegetation", "index", "tvi"],
-  
-  // Configuração de bandas
+  "tags": ["sentinel2", "index", "ndvi"],
+
+  // Sentinel-2: bandas originais e nomes mapeados usados em vis_params.bands
   "band_config": {
-    "expression": "(120 * (nir - green) - 200 * (red - green)) / 2",
-    "bands_used": ["B8", "B3", "B4"],
-    "index_range": [-1, 1]
+    "original_bands": ["B8", "B4"],
+    "mapped_bands": ["NIR", "RED"]
   },
-  
-  // Parâmetros de visualização para Google Earth Engine
+
+  // Parâmetros de visualização para o Google Earth Engine
   "vis_params": {
-    "min": 0,
-    "max": 100,
-    "palette": ["#d7191c", "#fdae61", "#ffffbf", "#a6d96a", "#1a9641"]
-  },
-  
-  // Configurações específicas por satélite (para Landsat)
-  "satellite_configs": {
-    "TM": {
-      "bands": ["SR_B4", "SR_B3", "SR_B2"],
-      "scale_factor": 0.0000275,
-      "offset": -0.2
-    },
-    "OLI": {
-      "bands": ["SR_B5", "SR_B3", "SR_B2"],
-      "scale_factor": 0.0000275,
-      "offset": -0.2
+    "bands": ["NIR", "RED"],      // bandas que precisam existir na imagem
+    "min": [-0.2],
+    "max": [0.9],
+    "palette": ["#a52a2a", "#c4813e", "#e6c26b", "#fff2a8", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837"],
+    "index": {                    // opcional: banda derivada renderizada com a paleta
+      "type": "normalized_difference",
+      "bands": ["NIR", "RED"],
+      "name": "NDVI"
     }
   },
-  
-  "created_at": ISODate("2024-01-01T00:00:00Z"),
-  "updated_at": ISODate("2024-07-20T00:00:00Z")
+
+  // Landsat: um bloco vis_params por coleção (substitui band_config e vis_params)
+  "satellite_configs": [
+    {
+      "collection_id": "LANDSAT/LC08/C02/T1_L2",
+      "vis_params": {
+        "bands": ["SR_B5", "SR_B4"],
+        "min": [-0.2],
+        "max": [0.9],
+        "palette": ["#a52a2a", "#c4813e", "#e6c26b", "#fff2a8", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837"],
+        "index": {"type": "normalized_difference", "bands": ["SR_B5", "SR_B4"], "name": "NDVI"}
+      }
+    }
+  ],
+
+  "created_at": ISODate("2026-09-09T00:00:00Z"),
+  "updated_at": ISODate("2026-09-09T00:00:00Z")
 }
 ```
 
+Composições de bandas (por exemplo `tvi-red`) usam apenas `bands`, `min`, `max` e `gamma`. Visualizações de índice acrescentam `index` e `palette`; `gamma` é ignorado nelas. O nome do visparam faz parte da chave de cache dos tiles, portanto um novo documento nunca colide com tiles já gerados.
+
 ### Adicionando Nova Visualização
 
-```javascript
-// MongoDB Shell ou Compass
-db.vis_params.insertOne({
-  name: "custom-index",
-  display_name: "Custom Vegetation Index",
-  description: "Índice customizado para análise",
-  category: "sentinel",
-  active: true,
-  tags: ["custom", "vegetation"],
-  band_config: {
-    expression: "(nir - red) / (nir + red)",
-    bands_used: ["B8", "B4"]
-  },
-  vis_params: {
-    min: -1,
-    max: 1,
-    palette: ["blue", "white", "green"]
-  }
-});
+Pela API administrativa (`POST /api/vis-params/`, ver `VIS_PARAMS_API.md`) ou pelo script de semente, que insere apenas os documentos ausentes:
+
+```bash
+.venv/bin/python scripts/migrate_vis_params.py
 ```
+
+As capabilities são recalculadas em até cinco minutos (cache) ou imediatamente após `GET /api/capabilities/admin/refresh`.
 
 ### Desativando Visualização
 

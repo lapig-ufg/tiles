@@ -71,6 +71,31 @@ Cria um novo parâmetro de visualização.
 }
 ```
 
+**Body (índice de banda única, por exemplo NDVI):**
+```json
+{
+  "name": "tvi-ndvi",
+  "display_name": "NDVI",
+  "description": "Índice de vegetação por diferença normalizada (B8, B4)",
+  "category": "sentinel2",
+  "band_config": {
+    "original_bands": ["B8", "B4"],
+    "mapped_bands": ["NIR", "RED"]
+  },
+  "vis_params": {
+    "bands": ["NIR", "RED"],
+    "min": [-0.2],
+    "max": [0.9],
+    "palette": ["#a52a2a", "#c4813e", "#e6c26b", "#fff2a8", "#d9ef8b", "#a6d96a", "#66bd63", "#1a9850", "#006837"],
+    "index": {"type": "normalized_difference", "bands": ["NIR", "RED"], "name": "NDVI"}
+  },
+  "tags": ["sentinel2", "index", "ndvi"],
+  "active": true
+}
+```
+
+Com `index`, `bands` lista as bandas que precisam existir na imagem; a banda derivada (`index.name`) é calculada no servidor e renderizada com `palette`. `gamma` é ignorado nesse caso. Para Landsat, cada item de `satellite_configs` recebe o mesmo formato com as bandas da coleção (`SR_B4`/`SR_B3` em TM e ETM+, `SR_B5`/`SR_B4` em OLI).
+
 **Body (Landsat):**
 ```json
 {
@@ -367,10 +392,21 @@ curl -X GET "http://localhost:8080/api/vis-params/sentinel-collections/bands/COP
 ### VisParam
 ```typescript
 {
-  bands: string[]       // Lista de bandas
-  min: number[]        // Valores mínimos para cada banda
-  max: number[]        // Valores máximos para cada banda
-  gamma: number        // Correção gamma
+  bands: string[]       // Bandas que precisam existir na imagem
+  min: number[]        // Valores mínimos para cada banda (um valor quando há index)
+  max: number[]        // Valores máximos para cada banda (um valor quando há index)
+  gamma?: number       // Correção gamma (ignorada quando há index)
+  palette?: string[]   // Cores CSS; exige index
+  index?: IndexConfig  // Banda derivada renderizada no lugar das bandas
+}
+```
+
+### IndexConfig
+```typescript
+{
+  type: "normalized_difference"  // (bands[0] - bands[1]) / (bands[0] + bands[1])
+  bands: string[]                // Exatamente duas bandas, contidas em VisParam.bands
+  name: string                   // Nome da banda derivada (padrão "NDVI")
 }
 ```
 
