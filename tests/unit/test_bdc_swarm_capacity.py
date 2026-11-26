@@ -25,3 +25,12 @@ def test_bdc_workers_isolate_queues_with_bounded_prefetch_and_shared_coordinatio
         assert service['environment']['S3_ENDPOINT'] == 'http://s3-tiles:8333'
         assert 'BDC_TOKEN' not in service['environment']
     assert config['secrets']['bdc_inpe_token']['external'] is True
+
+
+def test_bdc_origin_budget_is_consistent_and_limited_to_bdc_services():
+    config = yaml.safe_load((Path(__file__).resolve().parents[2] / 'config/swarm/prod.compose.yml').read_text())
+    expected = {'tile', 'celery_worker_bdc', 'celery_worker_bdc_offline'}
+    configured = {name for name, service in config['services'].items()
+                  if 'BDC_ORIGIN_SLOTS' in service.get('environment', {})}
+    assert configured == expected
+    assert {config['services'][name]['environment']['BDC_ORIGIN_SLOTS'] for name in expected} == {'4'}

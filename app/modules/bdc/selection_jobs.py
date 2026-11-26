@@ -1,3 +1,4 @@
+import os
 import re
 import time
 import uuid
@@ -14,7 +15,10 @@ from .transport import ServicePaused, digest
 
 ALGORITHM_VERSION = 'bdc-local-quality-v1'
 LEASE_SECONDS = 660
-ORIGIN_SLOTS = 2
+ORIGIN_SLOTS = os.environ.get('BDC_ORIGIN_SLOTS', '2')
+if not re.fullmatch(r'[1-4]', ORIGIN_SLOTS):
+    raise ValueError('BDC_ORIGIN_SLOTS deve ser um inteiro entre 1 e 4')
+ORIGIN_SLOTS = int(ORIGIN_SLOTS)
 TERMINAL = {'ready', 'no_image', 'failed'}
 
 

@@ -676,3 +676,38 @@ def test_resume_command_only_releases_origin_without_requeueing_jobs(store, monk
     store.check_origin()
     assert store.get(job['_id'])['state'] == 'failed'
     assert 'liberada' in capsys.readouterr().out
+
+
+def configured_selection_module(monkeypatch, value):
+    import importlib.util
+    from pathlib import Path
+    if value is None:
+        monkeypatch.delenv('BDC_ORIGIN_SLOTS', raising=False)
+    else:
+        monkeypatch.setenv('BDC_ORIGIN_SLOTS', value)
+    path = Path(__file__).parents[1] / 'app/modules/bdc/selection_jobs.py'
+    spec = importlib.util.spec_from_file_location('app.modules.bdc._configured_selection_jobs', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize('value, expected', [(None, 2), ('1', 1), ('2', 2), ('3', 3), ('4', 4)])
+def test_origin_slot_configuration_limits_shared_admission(monkeypatch, value, expected):
+    from contextlib import ExitStack
+    module = configured_selection_module(monkeypatch, value)
+    database = mongomock.MongoClient().tiles
+    stores = [module.SelectionJobStore(database) for _ in range(expected + 1)]
+    with ExitStack() as stack:
+        for store in stores[:expected]:
+            stack.enter_context(store.origin_admission())
+        with pytest.raises(module.OriginBusy):
+            stack.enter_context(stores[-1].origin_admission())
+    with stores[-1].origin_admission():
+        assert database.bdc_origin_leases.count_documents({'token': {'$exists': True}}) == 1
+
+
+@pytest.mark.parametrize('value', ['', '0', '5', '-1', '2.5', 'abc', ' 4 ', 'true'])
+def test_invalid_origin_slot_configuration_fails_on_module_initialization(monkeypatch, value):
+    with pytest.raises(ValueError, match='BDC_ORIGIN_SLOTS'):
+        configured_selection_module(monkeypatch, value)

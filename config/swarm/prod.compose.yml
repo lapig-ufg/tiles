@@ -247,6 +247,7 @@ services:
       SKIP_GEE_INIT: "true"
       S3_ENDPOINT: http://s3-tiles:8333
       BDC_INPE_TOKEN_FILE: /run/secrets/bdc_inpe_token
+      BDC_ORIGIN_SLOTS: "4"
     secrets:
       - source: bdc_inpe_token
         target: bdc_inpe_token
@@ -284,6 +285,7 @@ services:
       SKIP_GEE_INIT: "true"
       S3_ENDPOINT: http://s3-tiles:8333
       BDC_INPE_TOKEN_FILE: /run/secrets/bdc_inpe_token
+      BDC_ORIGIN_SLOTS: "4"
     secrets:
       - source: bdc_inpe_token
         target: bdc_inpe_token
@@ -348,6 +350,7 @@ services:
       - '300'
     environment:
       <<: *common-tile-env
+      BDC_ORIGIN_SLOTS: "4"
     deploy:
       mode: replicated
       replicas: ${TILES_API_REPLICAS:-20}
