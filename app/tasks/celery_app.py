@@ -177,6 +177,7 @@ celery_app.conf.update(
         'app.tasks.cache_operations',
         'app.tasks.cleanup_tasks',
         'app.tasks.monitoring_tasks',
+        'app.tasks.offline_campaign',
     ],
 )
 

@@ -109,6 +109,7 @@ def app_with_cb(monkeypatch):
     sys.modules["app.utils.ee_tile_fetch"] = ee_tile_fetch_mod
 
     from app.api import layers
+    monkeypatch.setattr(layers, "aget_absence", _none)
     app = FastAPI()
     app.include_router(layers.router)
     return app

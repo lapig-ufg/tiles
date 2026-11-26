@@ -296,20 +296,14 @@ class HybridTileCache:
         """Preserva a validade original e recupera índices com validade comprovada."""
         if self._closed:
             return None
-        if key in self.local_cache:
-            data, expires_at = self.local_cache[key]
-            if time.time() < expires_at:
-                self.local_cache.move_to_end(key)
-                cache_reads_total.labels(result="local").inc()
-                return data
-            self._remove_local(key)
-
         meta = {}
         legacy_expiry = None
+        index_available = False
         try:
             async with asyncio.timeout(self.IO_TIMEOUT):
                 async with self._get_redis() as r:
                     meta = await r.hgetall(f"tile:{key}")
+                    index_available = True
                     if meta and b'expires_at' not in meta:
                         remaining_ms = await r.pttl(f"tile:{key}")
                         if remaining_ms > 0:
@@ -319,9 +313,19 @@ class HybridTileCache:
         indexed = bool(meta.get(b's3_key'))
         expiry = self._expires_at(meta.get(b'expires_at')) if indexed else None
         if indexed and b'expires_at' in meta and (expiry is None or expiry <= time.time()):
+            self._remove_local(key)
             cache_reads_total.labels(result="expired").inc()
             return None
-        if not indexed and self._recovery_misses.get(key, 0) > time.time():
+        if key in self.local_cache:
+            data, expires_at = self.local_cache[key]
+            digest = meta.get(b'content_sha256')
+            if (index_available and time.time() < expires_at
+                    and (not digest or digest == hashlib.sha256(data).hexdigest().encode())):
+                self.local_cache.move_to_end(key)
+                cache_reads_total.labels(result="local").inc()
+                return data
+            self._remove_local(key)
+        if index_available and not indexed and self._recovery_misses.get(key, 0) > time.time():
             cache_reads_total.labels(result="miss").inc()
             return None
         s3_key = meta[b's3_key'].decode() if indexed else self._generate_s3_key(key)
@@ -365,7 +369,8 @@ class HybridTileCache:
                         return None
             self._update_local_cache(key, data, expiry)
             if not indexed:
-                await self._write_index(key, s3_key, len(data), expiry)
+                await self._write_index(key, s3_key, len(data), expiry,
+                                        content_sha256=hashlib.sha256(data).hexdigest())
             if expiry <= time.time():
                 self._remove_local(key)
                 cache_reads_total.labels(result="expired").inc()
@@ -450,7 +455,8 @@ class HybridTileCache:
             raise asyncio.CancelledError
         return task.result()
 
-    async def _write_index(self, key: str, s3_key: str, size: int, expires_at: float) -> bool:
+    async def _write_index(self, key: str, s3_key: str, size: int, expires_at: float,
+                           *, content_sha256: str = '') -> bool:
         remaining = math.ceil(expires_at - time.time())
         if remaining <= 0:
             return False
@@ -461,7 +467,7 @@ class HybridTileCache:
                         's3_key': s3_key, 'size': str(size),
                         'created': datetime.now().isoformat(),
                         'content_type': 'image/png', 's3_synced': '1',
-                        'expires_at': str(expires_at),
+                        'expires_at': str(expires_at), 'content_sha256': content_sha256,
                     })
                     await r.expire(f"tile:{key}", remaining)
             return True
@@ -484,7 +490,8 @@ class HybridTileCache:
                                                             expires_at=expires_at)
                         if uploaded:
                             indexed = await self._write_index(key, self._generate_s3_key(key),
-                                                              len(data), expires_at)
+                                                              len(data), expires_at,
+                                                              content_sha256=hashlib.sha256(data).hexdigest())
                             outcome = "persisted" if indexed else "persisted_unindexed"
                     finally:
                         cache_uploads_active.dec()

@@ -2,6 +2,8 @@ from .api import layers, timeseries, timeseries_ndwi, tile_aggregation, cache, v
 
 
 def created_routes(app):
+    from .api.offline_cache import router as offline_router
+    app.include_router(offline_router, tags=["Campaign Offline Cache"], include_in_schema=False)
     from .modules.bdc.router import router as bdc_router
 
     app.include_router(bdc_router, prefix="/api/bdc", tags=["BDC"])

@@ -1,0 +1,290 @@
+from datetime import datetime, timedelta
+import time
+
+import mongomock
+import pytest
+
+
+@pytest.fixture
+def store():
+    from app.cache.offline_campaign import OfflineCampaignStore
+    db = mongomock.MongoClient().tvi
+    db.campaign.insert_one({'_id': 'test', 'imageType': 'landsat', 'useDynamicMaps': True,
+                           'initialYear': 2020, 'finalYear': 2020, 'zoomLevel': 18,
+                           'visParamsEnable': ['landsat-tvi-false']})
+    db.points.insert_one({'_id': 'p', 'campaign': 'test', 'lat': -16, 'lon': -49, 'cached': True})
+    return OfflineCampaignStore(db)
+
+
+def prepare(store):
+    job = store.start('test')
+    token = store.claim('test')
+    store.prepare(job, token)
+    return store.jobs.find_one({'_id': 'test'}), token
+
+
+def test_start_is_idempotent_and_does_not_trust_legacy_cached(store):
+    first = store.start('test')
+    assert store.start('test')['run_id'] == first['run_id']
+    assert first['status'] == 'preparing'
+    assert store.status('test')['counts']['completed'] == 0
+
+
+def test_only_one_worker_claims_campaign_and_expired_lease_recovers(store):
+    store.start('test')
+    first = store.claim('test')
+    assert first
+    assert store.claim('test') is None
+    store.jobs.update_one({'_id': 'test'}, {'$set': {'lease_until': datetime.utcnow() - timedelta(seconds=1)}})
+    second = store.claim('test')
+    assert second and second != first
+    assert not store.release('test', first)
+    assert store.jobs.find_one({'_id': 'test'})['lease_token'] == second
+
+
+def test_manifest_is_durable_and_preparation_replay_does_not_duplicate(store):
+    job, token = prepare(store)
+    count = store.items.count_documents({'run_id': job['run_id']})
+    assert count > 2
+    store.prepare(job, token)
+    assert store.items.count_documents({'run_id': job['run_id']}) == count
+    assert store.status('test')['counts']['completed'] == 0
+    assert store.status('test')['status'] == 'running'
+
+
+def test_error_exhaustion_is_not_absence_of_data_or_completion(store):
+    from app.cache.offline_campaign import failure_state
+    assert failure_state('invalid_tile', 5)['state'] == 'blocked'
+    assert failure_state('gee_credential_denied', 1)['state'] == 'blocked'
+    retry = failure_state('quota', 1, retry_after=300)
+    assert retry['state'] == 'retry_wait'
+    assert retry['delay'] >= 300
+
+
+def test_completion_requires_all_item_results(store):
+    job, token = prepare(store)
+    assert store.finish(job, token)['status'] == 'running'
+    store.items.update_many({'run_id': job['run_id']}, {'$set': {'state': 'completed', 'expires_at': time.time() + 3600}})
+    result = store.finish(job, token)
+    assert result['status'] == 'completed'
+    result = store.status('test')
+    assert result['counts']['pending'] == 0
+    assert result['counts']['completed'] == result['total']
+
+
+def test_retry_failed_preserves_valid_items(store):
+    job, token = prepare(store)
+    first = store.items.find_one({'run_id': job['run_id']})
+    store.items.update_many({'run_id': job['run_id']}, {'$set': {'state': 'blocked', 'attempts': 5}})
+    store.items.update_one({'_id': first['_id']}, {'$set': {'state': 'completed', 'expires_at': time.time() + 3600}})
+    store.finish(job, token)
+    store.release('test', token)
+    retried = store.start('test', mode='retry_failed')
+    assert retried['run_id'] == job['run_id']
+    assert store.items.find_one({'_id': first['_id']})['state'] == 'completed'
+    assert store.items.count_documents({'state': 'pending'}) > 0
+
+
+def test_stale_worker_cannot_publish_success_after_new_generation(store):
+    job, token = prepare(store)
+    item = store.next_item(job, token)
+    store.jobs.update_one({'_id': 'test'}, {'$set': {'lease_token': 'new-owner'}})
+    assert not store.complete_item(job, token, item, {'status': 'cached'})
+    assert store.items.find_one({'_id': item['_id']})['state'] != 'completed'
+
+
+def test_configuration_change_invalidates_completed_status(store):
+    job, token = prepare(store)
+    store.items.update_many({'run_id': job['run_id']}, {'$set': {'state': 'completed', 'expires_at': time.time() + 3600}})
+    store.finish(job, token)
+    store.db.campaign.update_one({'_id': 'test'}, {'$set': {'finalYear': 2021}})
+    assert store.status('test')['configuration_changed'] is True
+    assert store.status('test')['status'] != 'completed'
+
+
+def test_manifest_reports_unique_tiles_for_overlapping_points(store):
+    store.db.points.insert_one({'_id': 'q', 'campaign': 'test', 'lat': -16, 'lon': -49})
+    job = store.start('test')
+    token = store.claim('test')
+    store.prepare(job, token)
+    store.prepare(store.jobs.find_one({'_id': 'test'}), token)
+    summary = store.status('test')
+    assert summary['unique_tiles'] * 2 == summary['total']
+
+
+def test_justified_absence_is_terminal_but_generic_missing_is_not(store):
+    job, token = prepare(store)
+    item = store.next_item(job, token)
+    store.complete_item(job, token, item, {'status': 'no_data'})
+    assert store.items.find_one({'_id': item['_id']})['state'] == 'retry_wait'
+    item = store.next_item(job, token)
+    evidence = {'kind': 'empty_collection', 'count': 0, 'collection': 'LANDSAT/LC08/C02/T1_L2',
+                'period': item['params']['period'], 'year': item['params']['year'],
+                'checked_at': datetime.utcnow().replace(microsecond=0)}
+    store.complete_item(job, token, item, {'status': 'no_data', 'evidence': evidence, 'expires_at': time.time() + 3600})
+    assert store.items.find_one({'_id': item['_id']})['state'] == 'no_data'
+    assert store.items.find_one({'_id': item['_id']})['evidence'] == evidence
+
+
+def test_retry_intent_survives_failure_before_resetting_items(store, monkeypatch):
+    job, token = prepare(store)
+    store.items.update_many({'run_id': job['run_id']}, {'$set': {'state': 'blocked', 'attempts': 5}})
+    store.finish(job, token)
+    store.release('test', token)
+    update_many = store.items.update_many
+
+    def interrupted(query, update, **kwargs):
+        if query.get('state') == {'$in': ['blocked', 'retry_wait']}:
+            raise ConnectionError('isolated interruption')
+        return update_many(query, update, **kwargs)
+
+    monkeypatch.setattr(store.items, 'update_many', interrupted)
+    with pytest.raises(ConnectionError):
+        store.start('test', mode='retry_failed')
+    monkeypatch.setattr(store.items, 'update_many', update_many)
+    store.jobs.update_one({'_id': 'test'}, {'$set': {'lease_until': datetime.utcnow() - timedelta(seconds=1)}})
+    recovered_token = store.claim('test')
+    recovered_job = store.jobs.find_one({'_id': 'test'})
+    assert recovered_token
+    assert store.next_item(recovered_job, recovered_token) is not None
+    assert store.items.count_documents({'state': 'blocked'}) == 0
+
+
+def test_incomplete_manifest_cannot_be_retried_as_completed_coverage(store):
+    job = store.start('test')
+    store.jobs.update_one({'_id': 'test'}, {'$set': {'status': 'blocked'}})
+    with pytest.raises(ValueError, match='cobertura'):
+        store.start('test', mode='retry_failed')
+    assert store.jobs.find_one({'_id': 'test'})['run_id'] == job['run_id']
+
+
+def test_retry_rejects_changed_point_count(store):
+    job, token = prepare(store)
+    store.items.update_many({'run_id': job['run_id']}, {'$set': {'state': 'blocked', 'attempts': 5}})
+    store.finish(job, token)
+    store.release('test', token)
+    store.db.points.insert_one({'_id': 'q', 'campaign': 'test', 'lat': -15, 'lon': -48})
+    with pytest.raises(ValueError, match='configuração'):
+        store.start('test', mode='retry_failed')
+
+
+@pytest.mark.parametrize('expiry', [None, 0, float('nan'), float('inf')])
+def test_success_without_valid_expiry_is_not_completed(store, expiry):
+    job, token = prepare(store)
+    item = store.next_item(job, token)
+    store.complete_item(job, token, item, {'status': 'cached', 'expires_at': expiry})
+    assert store.items.find_one({'_id': item['_id']})['state'] == 'retry_wait'
+
+
+def test_completion_preserves_verified_expiry(store):
+    job, token = prepare(store)
+    item = store.next_item(job, token)
+    expiry = time.time() + 3600
+    store.complete_item(job, token, item, {'status': 'cached', 'expires_at': expiry})
+    saved = store.items.find_one({'_id': item['_id']})
+    assert saved['expires_at'] == expiry
+    assert saved['state'] == 'completed'
+
+
+def test_finish_requeues_expired_images(store):
+    job, token = prepare(store)
+    store.items.update_many({'run_id': job['run_id']},
+                            {'$set': {'state': 'completed', 'expires_at': time.time() - 1}})
+    assert store.finish(job, token)['status'] == 'running'
+    assert store.next_item(job, token) is not None
+
+
+def test_read_status_does_not_report_expired_campaign_as_completed(store):
+    job, token = prepare(store)
+    store.items.update_many({'run_id': job['run_id']},
+                            {'$set': {'state': 'completed', 'expires_at': time.time() + 3600}})
+    assert store.finish(job, token)['status'] == 'completed'
+    store.release('test', token)
+    first = store.items.find_one({'run_id': job['run_id']})
+    store.items.update_one({'_id': first['_id']}, {'$set': {'expires_at': time.time() - 1}})
+    summary = store.status('test')
+    assert summary['status'] == 'blocked'
+    assert summary['percent'] < 100
+    assert summary['errors'][0]['reason'] == 'cache_expired'
+    assert store.items.find_one({'_id': first['_id']})['state'] == 'completed'
+    store.start('test', mode='retry_failed')
+    assert store.items.find_one({'_id': first['_id']})['state'] == 'pending'
+
+
+@pytest.mark.parametrize('replacement', [False, True])
+def test_point_changes_with_same_count_invalidate_coverage(store, replacement):
+    job, token = prepare(store)
+    store.items.update_many({'run_id': job['run_id']}, {'$set': {'state': 'blocked'}})
+    store.finish(job, token)
+    store.release('test', token)
+    if replacement:
+        store.db.points.delete_one({'_id': 'p'})
+        store.db.points.insert_one({'_id': 'q', 'campaign': 'test', 'lat': -16, 'lon': -49})
+    else:
+        store.db.points.update_one({'_id': 'p'}, {'$set': {'lat': -3, 'lon': -60}})
+    assert store.status('test')['status'] == 'stale'
+    with pytest.raises(ValueError, match='configuração'):
+        store.start('test', mode='retry_failed')
+
+
+def test_preparation_is_bounded_and_resumes_inside_point(store):
+    from app.cache.campaign_manifest import manifest_for_point
+    job = store.start('test')
+    token = store.claim('test')
+    expected = list(manifest_for_point(store.db.points.find_one({'_id': 'p'}), job['config']))
+    store.prepare(job, token, limit=7)
+    assert store.items.count_documents({'run_id': job['run_id']}) == 7
+    store.release('test', token)
+    token = store.claim('test')
+    for _ in range(len(expected)):
+        current = store.jobs.find_one({'_id': 'test'})
+        if current['status'] != 'preparing':
+            break
+        store.prepare(current, token, limit=7)
+    assert store.jobs.find_one({'_id': 'test'})['status'] == 'running'
+    assert store.items.count_documents({'run_id': job['run_id']}) == len(expected)
+    assert store.jobs.find_one({'_id': 'test'})['prepared_points'] == 1
+
+
+def test_preparation_detects_coordinate_change_between_windows(store):
+    job = store.start('test')
+    token = store.claim('test')
+    store.prepare(job, token, limit=7)
+    store.db.points.update_one({'_id': 'p'}, {'$set': {'lat': -3}})
+    store.prepare(store.jobs.find_one({'_id': 'test'}), token, limit=7)
+    assert store.jobs.find_one({'_id': 'test'})['status'] == 'stale'
+
+
+def test_worker_finish_does_not_aggregate_all_items(store, monkeypatch):
+    job, token = prepare(store)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('O worker não deve agregar o manifesto em cada janela')
+    monkeypatch.setattr(store.items, 'aggregate', forbidden)
+    assert store.finish(job, token)['status'] == 'running'
+
+
+def test_cached_progress_reuses_summary_until_refresh_interval(store, monkeypatch):
+    prepare(store)
+    initial = store.status('test', cached=True)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Consultas repetidas devem reutilizar o resumo recente')
+    monkeypatch.setattr(store.items, 'aggregate', forbidden)
+    assert store.status('test', cached=True)['counts'] == initial['counts']
+
+
+def test_cached_progress_never_outlives_image_expiry(store):
+    job, token = prepare(store)
+    expiry = time.time() + 10
+    store.items.update_many({'run_id': job['run_id']}, {'$set': {'state': 'completed', 'expires_at': expiry}})
+    store.finish(job, token)
+    store.status('test', cached=True)
+    assert store.jobs.find_one({'_id': 'test'})['progress_summary']['valid_until'] <= expiry
+
+
+def test_expired_absence_is_rechecked_before_completion(store):
+    job, token = prepare(store)
+    store.items.update_many({'run_id': job['run_id']},
+                            {'$set': {'state': 'no_data', 'expires_at': time.time() - 1}})
+    assert store.status('test')['counts']['no_data'] == 0
+    assert store.finish(job, token)['status'] == 'running'
+    assert store.next_item(job, token) is not None

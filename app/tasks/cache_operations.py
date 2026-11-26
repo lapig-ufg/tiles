@@ -6,6 +6,7 @@ import asyncio
 import calendar
 import math
 import random
+import time
 import uuid
 from collections import defaultdict
 from datetime import datetime
@@ -18,7 +19,7 @@ from loguru import logger
 
 from app.cache.cache_hybrid import tile_cache
 from app.cache.keys import build_tile_cache_keys
-from app.cache.sync_cache import InvalidTileError, SyncTileCache
+from app.cache.sync_cache import InvalidTileError, SyncTileCache, validate_offline_image
 from app.cache.sync_lock import sync_tile_lock
 from app.core.gee_admission import call_gee, google_request, project_from_url
 from app.utils.http import EarthEngineRateLimitedError
@@ -480,13 +481,15 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                     period: str, year: int, month: int,
                     visparam: str, composite_mode: str = "BEST_IMAGE",
                     tvi_campaign_id: Optional[str] = None,
-                    continue_on_error: bool = False) -> Dict[str, Any]:
+                    continue_on_error: bool = False,
+                    validate_image: bool = False, force: bool = False) -> Dict[str, Any]:
     """Persiste tiles equivalentes aos da API sob as mesmas concessões distribuídas."""
     import urllib.request
     from urllib.error import HTTPError
 
     import orjson
     from app.services.tile import tile2goehashBBOX
+    from app.cache.offline_absence import clear_absence, get_absence
 
     file_cache = None
     try:
@@ -503,11 +506,39 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
         url_path = namespace + keys.path
         url_candidates = tuple(namespace + path for path in (keys.path, *keys.legacy_paths))
         with SyncTileCache() as cache:
-            if any(cache.has_png(key) for key in candidates):
+            check_image = cache.has_valid_image if validate_image else cache.has_png
+            if validate_image:
+                candidates = (file_cache,)
+            if not validate_image and not force and any(check_image(key) for key in candidates):
                 return {'status': 'already_cached', 'tile': file_cache}
             with cache.tile_lock(file_cache) as png_lease:
-                if any(cache.has_png(key) for key in candidates):
+                if force:
+                    clear_absence(cache.redis, file_cache, lease=png_lease)
+                if validate_image and not force:
+                    expires_at = cache.confirm_valid_image(file_cache, png_lease)
+                    if expires_at:
+                        clear_absence(cache.redis, file_cache, lease=png_lease)
+                        return {'status': 'already_cached', 'tile': file_cache, 'expires_at': expires_at}
+                if not validate_image and not force and any(check_image(key) for key in candidates):
                     return {'status': 'already_cached', 'tile': file_cache}
+                if validate_image and not force:
+                    for legacy_key in keys.legacy_pngs:
+                        previous_image = cache.read_valid_image(legacy_key)
+                        if previous_image is None:
+                            continue
+                        data, expires_at = previous_image
+                        remaining = expires_at - time.time()
+                        if remaining <= 0:
+                            continue
+                        cache.set_png(file_cache, data, remaining, lease=png_lease)
+                        expires_at = cache.confirm_valid_image(file_cache, png_lease)
+                        if not expires_at:
+                            raise InvalidTileError('A imagem persistida não passou na validação')
+                        clear_absence(cache.redis, file_cache, lease=png_lease)
+                        return {'status': 'already_cached', 'tile': file_cache, 'expires_at': expires_at}
+                    absence = get_absence(cache.redis, file_cache)
+                    if absence:
+                        return dict(absence, status='no_data', tile=file_cache)
                 layer_url = _cached_warm_url(cache.redis, url_candidates)
                 if layer_url is None:
                     with cache.tile_lock('url:' + url_path) as url_lease:
@@ -517,15 +548,24 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                             url_lease.ensure_owned()
                             dates = _build_period_dates(period, year, month)
                             geom = ee.Geometry.BBox(bbox['w'], bbox['s'], bbox['e'], bbox['n'])
-                            if layer == 'landsat':
-                                layer_url = _warm_create_landsat_url(
-                                    geom, dates, visparam, composite_mode,
-                                    tvi_campaign_id=tvi_campaign_id,
-                                )
-                            else:
-                                layer_url = _warm_create_s2_url(
-                                    geom, dates, visparam, tvi_campaign_id=tvi_campaign_id,
-                                )
+                            try:
+                                if layer == 'landsat':
+                                    layer_url = _warm_create_landsat_url(
+                                        geom, dates, visparam, composite_mode,
+                                        tvi_campaign_id=tvi_campaign_id,
+                                    )
+                                else:
+                                    layer_url = _warm_create_s2_url(
+                                        geom, dates, visparam, tvi_campaign_id=tvi_campaign_id,
+                                    )
+                            except ee.EEException:
+                                if validate_image:
+                                    absence = _prove_warm_absence(cache, png_lease, dict(
+                                        x=x, y=y, z=z, layer=layer, period=period, year=year,
+                                        month=month, visparam=visparam, composite_mode=composite_mode))
+                                    if absence:
+                                        return absence
+                                raise
                             png_lease.ensure_owned()
                             url_lease.ensure_owned()
                             cache.redis.set(
@@ -559,8 +599,25 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                             ) from exc
                         raise
                 ttl = (365 if year < datetime.now().year else 30) * 86400
+                if validate_image:
+                    try:
+                        validate_offline_image(png_bytes)
+                    except InvalidTileError:
+                        absence = _prove_warm_absence(cache, png_lease, dict(
+                            x=x, y=y, z=z, layer=layer, period=period, year=year,
+                            month=month, visparam=visparam, composite_mode=composite_mode))
+                        if not absence:
+                            raise
+                        return absence
                 cache.set_png(file_cache, png_bytes, ttl, lease=png_lease)
-                return {'status': 'cached', 'tile': file_cache, 'size': len(png_bytes)}
+                clear_absence(cache.redis, file_cache, lease=png_lease)
+                result = {'status': 'cached', 'tile': file_cache, 'size': len(png_bytes)}
+                if validate_image:
+                    expires_at = cache.confirm_valid_image(file_cache, png_lease)
+                    if not expires_at:
+                        raise InvalidTileError('A imagem persistida não passou na validação')
+                    result['expires_at'] = expires_at
+                return result
     except TviTokenDenied as denied:
         return {'status': 'failed', 'reason': 'gee_credential_denied',
                 'tile': file_cache, 'detail': denied.detail}
@@ -573,6 +630,17 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                     'tile': file_cache, 'error_type': type(exc).__name__,
                     'attempts': self.request.retries + 1}
         raise self.retry(exc=exc, countdown=max(5, math.ceil(getattr(exc, 'retry_after', 5))))
+
+
+def _prove_warm_absence(cache, lease, params):
+    from app.tasks.offline_campaign import source_absence_evidence
+    from app.cache.offline_absence import set_absence
+
+    evidence = source_absence_evidence(params)
+    if not evidence:
+        return None
+    marker = set_absence(cache.redis, lease.key, evidence, lease=lease)
+    return dict(marker, status='no_data', tile=lease.key)
 
 
 def _cached_warm_url(redis_client, candidates):

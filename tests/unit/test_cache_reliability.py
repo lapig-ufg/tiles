@@ -654,3 +654,40 @@ async def test_falha_no_fechamento_s3_ainda_fecha_pool_redis(cache_env):
     cache._redis_pool = Pool()
     await cache.close()
     assert closed == [True]
+
+
+@pytest.mark.asyncio
+async def test_local_copy_observes_replacement_by_another_instance(cache_env, monkeypatch):
+    cache, store, storage, now = cache_env
+    second = HybridTileCache(redis_url='redis://fake:6379')
+    monkeypatch.setattr(second, '_get_redis', cache._get_redis)
+    second._s3_client = storage
+    try:
+        await cache.set_png('shared', b'old', ttl=60)
+        assert await cache.get_png('shared') == b'old'
+        await second.set_png('shared', b'repaired', ttl=60)
+        assert await cache.get_png('shared') == b'repaired'
+        reads = storage.get_count
+        assert await cache.get_png('shared') == b'repaired'
+        assert storage.get_count == reads
+    finally:
+        await cache.close()
+        await second.close()
+
+
+@pytest.mark.asyncio
+async def test_local_copy_is_rechecked_in_storage_when_index_is_unavailable(cache_env, monkeypatch):
+    cache, store, storage, now = cache_env
+    await cache.set_png('shared', b'old', ttl=60)
+    storage.objects[cache._generate_s3_key('shared')]['Body'] = b'repaired'
+
+    @asynccontextmanager
+    async def unavailable():
+        raise ConnectionError('isolated index failure')
+        yield
+
+    monkeypatch.setattr(cache, '_get_redis', unavailable)
+    try:
+        assert await cache.get_png('shared') == b'repaired'
+    finally:
+        await cache.close()

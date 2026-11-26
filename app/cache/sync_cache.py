@@ -19,6 +19,29 @@ class InvalidTileError(ValueError):
     pass
 
 
+def validate_offline_image(data):
+    if not isinstance(data, bytes) or not data:
+        raise InvalidTileError('Imagem vazia')
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            if image.format not in {'PNG', 'JPEG'} or image.size != (256, 256):
+                raise InvalidTileError('Formato ou dimensões de tile inválidos')
+            content_type = Image.MIME[image.format]
+            image.verify()
+        with Image.open(io.BytesIO(data)) as image:
+            image.load()
+            rgba = image.convert('RGBA')
+            if rgba.getchannel('A').getbbox() is None:
+                raise InvalidTileError('Imagem totalmente transparente')
+            visible = Image.new('RGBA', rgba.size, 'white')
+            visible.alpha_composite(rgba)
+            if visible.convert('RGB').getextrema() == ((255, 255),) * 3:
+                raise InvalidTileError('Imagem totalmente branca')
+        return content_type
+    except (OSError, SyntaxError, ValueError, UnidentifiedImageError) as exc:
+        raise InvalidTileError('Imagem inválida para inspeção offline') from exc
+
+
 def _expiry(value):
     try:
         value = float(value)
@@ -122,17 +145,68 @@ class SyncTileCache:
             Metadata={'expires_at': str(expires_at)},
         )
         lease.ensure_owned()
+        self._index_png(key, data, content_type, expires_at, lease)
+
+    def _index_png(self, key, data, content_type, expires_at, lease):
+        if lease.key != key:
+            raise ValueError('Concessão pertence a outra chave de cache')
+        lease.ensure_owned()
         remaining = math.ceil(expires_at - time.time())
         if remaining <= 0:
             raise TimeoutError('Tile expirou durante a persistência')
         with self.redis.pipeline(transaction=True) as pipeline:
             pipeline.hset('tile:' + key, mapping={
-                's3_key': object_key, 'size': str(len(data)),
+                's3_key': _s3_key(key), 'size': str(len(data)),
                 'created': datetime.now().isoformat(), 'content_type': content_type,
                 's3_synced': '1', 'expires_at': str(expires_at),
+                'content_sha256': hashlib.sha256(data).hexdigest(),
             })
             pipeline.expire('tile:' + key, remaining)
             pipeline.execute()
+
+    def read_valid_image(self, key):
+        if not self.has_png(key):
+            return None
+        try:
+            obj = self.s3.get_object(Bucket=self.bucket, Key=_s3_key(key))
+        except ClientError as exc:
+            if exc.response.get('Error', {}).get('Code') in {'NoSuchKey', 'NotFound', '404'}:
+                return None
+            raise
+        body = obj['Body']
+        try:
+            data = body.read(self.max_tile_bytes + 1)
+        finally:
+            body.close()
+        if len(data) > self.max_tile_bytes:
+            return None
+        try:
+            validate_offline_image(data)
+            expiry = _expiry(obj.get('Metadata', {}).get('expires_at'))
+            index = self.redis.hgetall('tile:' + key)
+            index_expiry = _expiry(index.get(b'expires_at'))
+            if 'expires_at' not in obj.get('Metadata', {}) and index.get(b's3_synced') == b'1':
+                remaining = self.redis.pttl('tile:' + key)
+                if remaining > 0:
+                    expiry = time.time() + remaining / 1000
+            if expiry and index_expiry:
+                expiry = min(expiry, index_expiry)
+            if expiry is None or expiry <= time.time():
+                return None
+            return data, expiry
+        except InvalidTileError:
+            return None
+
+    def has_valid_image(self, key):
+        return self.read_valid_image(key) is not None
+
+    def confirm_valid_image(self, key, lease):
+        image = self.read_valid_image(key)
+        if image is None:
+            return False
+        data, expires_at = image
+        self._index_png(key, data, validate_offline_image(data), expires_at, lease)
+        return expires_at
 
 
 def persist_png_sync(key, data, ttl):

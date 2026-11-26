@@ -15,11 +15,13 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from enum import Enum
+from functools import lru_cache
 from typing import Dict, Any, Literal
 
 import ee
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from PIL import Image
 
 from app.cache.cache import (
     aget_png as get_png, aset_png as set_png,  # bytes (tile)
@@ -27,7 +29,10 @@ from app.cache.cache import (
     atile_lock as tile_lock,
     PNG_TTL, PNG_TTL_HISTORICAL,
 )
+from app.cache.errors import TileLockUnavailable
 from app.cache.keys import build_tile_cache_keys
+from app.cache.offline_absence import aget_absence
+from app.cache.sync_cache import InvalidTileError, validate_offline_image
 from app.core.circuit_breaker import get_ee_circuit_breaker
 from app.core.config import logger, settings
 from app.core.gee_admission import GoogleAdmissionError, call_gee
@@ -377,6 +382,19 @@ def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], 
 # Fluxo genérico de tile                                                      #
 # --------------------------------------------------------------------------- #
 
+@lru_cache(maxsize=1)
+def _absence_png():
+    output = io.BytesIO()
+    Image.new("RGBA", (256, 256), (0, 0, 0, 0)).save(output, format="PNG")
+    return output.getvalue()
+
+
+def _absence_response():
+    return Response(_absence_png(), media_type="image/png", headers={
+        "X-Tile-Status": "no_data", "Cache-Control": "no-store",
+    })
+
+
 async def _serve_tile(layer: str,
                       x: int, y: int, z: int,
                       period: str | Period,
@@ -399,27 +417,56 @@ async def _serve_tile(layer: str,
     )
     path_cache, file_cache = cache_keys.path, cache_keys.png
 
-    async def cached_png():
+    async def cached_png(*, validate=False):
         for key in (file_cache, *cache_keys.legacy_pngs):
             data = await get_png(key)
             if data:
+                if validate:
+                    try:
+                        validate_offline_image(data)
+                    except InvalidTileError:
+                        continue
                 return data
         return None
 
+    async def cached_absence():
+        try:
+            return await aget_absence(file_cache)
+        except TileLockUnavailable as exc:
+            return exc
+
+    async def cached_tile():
+        png_bytes, absence = await asyncio.gather(cached_png(), cached_absence())
+        if png_bytes and absence:
+            try:
+                validate_offline_image(png_bytes)
+            except InvalidTileError:
+                png_bytes = await cached_png(validate=True)
+        if isinstance(absence, TileLockUnavailable):
+            if not png_bytes:
+                raise absence
+            absence = None
+        return png_bytes, absence
+
     # 1 ▸ PNG já cacheado?
-    png_bytes = await cached_png()
+    png_bytes, absence = await cached_tile()
     if png_bytes:
         observe_cache_hit(layer=layer, type_="png_hit")
         return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
+
+    if absence:
+        return _absence_response()
 
     observe_cache_hit(layer=layer, type_="png_miss")
 
     # 2 ▸ Lock distribuído: evita que dois workers gerem o mesmo tile
     async with tile_lock(file_cache) as should_generate:
-        png_bytes = await cached_png()
+        png_bytes, absence = await cached_tile()
         if png_bytes:
             observe_cache_hit(layer=layer, type_="png_hit")
             return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
+        if absence:
+            return _absence_response()
         if not should_generate:
             return tile_error_response(status_code=503, reason="cache_busy", retry_after=1)
 

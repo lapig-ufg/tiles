@@ -57,6 +57,9 @@ def warming(monkeypatch):
     import urllib.request
     from app.core import gee_admission
     from app.tasks import cache_operations
+    import importlib
+    offline_campaign = importlib.import_module('app.tasks.offline_campaign')
+    monkeypatch.setattr(offline_campaign, 'source_absence_evidence', lambda params: None)
 
     def resolve_configuration(name, year):
         assert name == 'landsat-tvi-false'
@@ -139,6 +142,19 @@ def test_warming_uses_same_seasonal_key_and_reuses_confirmed_png(warming):
     assert len(warming.storage.uploads) == 1
     assert all(client.was_closed for client in warming.clients)
     assert warming.storage.closed == 2
+
+
+def test_strict_warming_returns_persisted_expiry_on_download_and_reuse(warming):
+    def read_object(*, Bucket, Key):
+        item = warming.storage.objects[Key]
+        return {**item, 'Body': io.BytesIO(item['Body'])}
+    warming.storage.get_object = read_object
+    first = warm(warming, validate_image=True)
+    second = warm(warming, validate_image=True)
+    expiry = float(warming.storage.uploads[0]['Metadata']['expires_at'])
+    assert first['expires_at'] == expiry
+    assert second['expires_at'] == expiry
+    assert len(warming.downloads) == 1
 
 
 def test_upload_failure_never_publishes_confirmed_index(warming):
@@ -408,6 +424,10 @@ def test_real_celery_worker_continues_windows_after_individual_failure(warming, 
     tile_task = app.task(bind=True, name=name + '.tile', max_retries=0)(
         operations.cache_warm_tile.run.__func__,
     )
+    callback_task = app.task(bind=True, name=name + '.finished', max_retries=2)(
+        operations.cache_warm_batch_finished.run.__func__,
+    )
+    monkeypatch.setattr(operations, 'cache_warm_batch_finished', callback_task)
     monkeypatch.setattr(operations, 'cache_warm_tile', tile_task)
     monkeypatch.setattr(operations, 'celery_app', app)
     original = warming.storage.put_object
@@ -488,3 +508,140 @@ def test_truncated_jpeg_is_not_persisted(warming):
     warming.png = data.getvalue()[:-100]
     assert warm(warming)['status'] == 'failed'
     assert warming.storage.uploads == []
+
+
+def test_offline_warming_checks_existing_body_and_regenerates_white_tile(warming):
+    def get_object(*, Bucket, Key):
+        stored = warming.storage.objects[Key]
+        return {**stored, 'Body': io.BytesIO(stored['Body'])}
+    warming.storage.get_object = get_object
+    data = io.BytesIO()
+    Image.new('RGB', (256, 256), 'white').save(data, format='PNG')
+    s3_key = 'tiles/' + hashlib.md5(KEY.encode()).hexdigest()[:2] + '/' + KEY
+    warming.storage.objects[s3_key] = {
+        'Body': data.getvalue(), 'Metadata': {'expires_at': str(time.time() + 120)},
+    }
+    result = warm(warming, validate_image=True)
+    assert result['status'] == 'cached'
+    assert len(warming.downloads) == 1
+
+
+def test_offline_warming_rejects_blank_source_without_confirming_success(warming):
+    data = io.BytesIO()
+    Image.new('RGB', (256, 256), 'white').save(data, format='PNG')
+    warming.png = data.getvalue()
+    result = warm(warming, validate_image=True)
+    assert result['status'] == 'failed'
+    assert result['reason'] == 'invalid_tile'
+    assert warming.storage.uploads == []
+
+
+def test_explicit_regeneration_bypasses_valid_cache(warming):
+    warm(warming)
+    result = warm(warming, force=True)
+    assert result['status'] == 'cached'
+    assert len(warming.downloads) == 2
+
+
+def test_offline_promotes_valid_legacy_image_over_invalid_canonical_without_google(warming):
+    from app.cache.sync_cache import _s3_key
+    legacy_key = 'landsat_WET_2020_1_landsat-tvi-false_BEST_IMAGE/7ec/10/455_578.png'
+    data = io.BytesIO()
+    Image.new('RGB', (256, 256), 'white').save(data, format='PNG')
+    expiry = time.time() + 120
+    warming.storage.objects[_s3_key(KEY)] = {
+        'Body': data.getvalue(), 'Metadata': {'expires_at': str(expiry)},
+    }
+    warming.storage.objects[_s3_key(legacy_key)] = {
+        'Body': warming.png, 'Metadata': {'expires_at': str(expiry)},
+    }
+
+    def read_object(*, Bucket, Key):
+        item = warming.storage.objects[Key]
+        return {**item, 'Body': io.BytesIO(item['Body'])}
+
+    warming.storage.get_object = read_object
+    result = warm(warming, validate_image=True)
+    assert result['status'] == 'already_cached'
+    assert warming.downloads == []
+    assert warming.storage.objects[_s3_key(KEY)]['Body'] == warming.png
+    assert float(warming.storage.objects[_s3_key(KEY)]['Metadata']['expires_at']) <= expiry + 0.01
+
+
+def test_offline_verification_publishes_digest_for_existing_image(warming):
+    from app.cache.sync_cache import _s3_key
+    expiry = time.time() + 120
+    warming.storage.objects[_s3_key(KEY)] = {
+        'Body': warming.png, 'Metadata': {'expires_at': str(expiry)},
+    }
+
+    def read_object(*, Bucket, Key):
+        item = warming.storage.objects[Key]
+        return {**item, 'Body': io.BytesIO(item['Body'])}
+
+    warming.storage.get_object = read_object
+    assert warm(warming, validate_image=True)['status'] == 'already_cached'
+    assert warming.redis.hget('tile:' + KEY, 'content_sha256') == hashlib.sha256(warming.png).hexdigest().encode()
+    assert 0 < warming.redis.ttl('tile:' + KEY) <= 120
+    assert warming.downloads == []
+
+
+def test_proven_absence_is_persisted_and_reused_without_google(warming, monkeypatch):
+    from datetime import datetime, timezone
+    import importlib
+    offline_campaign = importlib.import_module('app.tasks.offline_campaign')
+    checks = []
+    def prove(params):
+        checks.append(params)
+        return {'kind': 'empty_collection', 'count': 0, 'collection': 'LANDSAT/LC08/C02/T1_L2',
+                'period': params['period'], 'year': params['year'], 'checked_at': datetime.now(timezone.utc)}
+    monkeypatch.setattr(offline_campaign, 'source_absence_evidence', prove)
+    data = io.BytesIO()
+    Image.new('RGBA', (256, 256), (0, 0, 0, 0)).save(data, format='PNG')
+    warming.png = data.getvalue()
+    first = warm(warming, validate_image=True)
+    second = warm(warming, validate_image=True)
+    assert first['status'] == second['status'] == 'no_data'
+    assert first['expires_at'] == second['expires_at']
+    assert warming.redis.get('absence:' + KEY)
+    assert len(checks) == len(warming.downloads) == 1
+    assert warming.storage.uploads == []
+
+
+def test_force_generation_clears_proven_absence(warming):
+    from datetime import datetime, timezone
+    from app.cache.offline_absence import set_absence
+    from app.cache.sync_cache import SyncTileCache
+    with SyncTileCache() as cache:
+        with cache.tile_lock(KEY) as lease:
+            set_absence(cache.redis, KEY, {'kind': 'empty_collection', 'count': 0,
+                        'collection': 'LANDSAT/LC08/C02/T1_L2', 'period': 'WET', 'year': 2020,
+                        'checked_at': datetime.now(timezone.utc)}, lease=lease)
+    def read_object(*, Bucket, Key):
+        item = warming.storage.objects[Key]
+        return {**item, 'Body': io.BytesIO(item['Body'])}
+    warming.storage.get_object = read_object
+    assert warm(warming, validate_image=True, force=True)['status'] == 'cached'
+    assert warming.redis.get('absence:' + KEY) is None
+
+
+@pytest.mark.parametrize('empty', [False, True])
+def test_empty_sentinel_can_be_proved_before_download(warming, monkeypatch, empty):
+    import ee
+    from datetime import timezone
+    offline = importlib.import_module('app.tasks.offline_campaign')
+    def builder(*args, **kwargs):
+        raise ee.EEException('Image has no bands')
+    def prove(params):
+        if not empty:
+            return None
+        return {'kind': 'empty_collection', 'count': 0, 'collection': 'COPERNICUS/S2_HARMONIZED',
+                'period': params['period'], 'year': params['year'], 'checked_at': datetime.now(timezone.utc)}
+    monkeypatch.setattr(warming.operations, '_warm_create_s2_url', builder)
+    monkeypatch.setattr(offline, 'source_absence_evidence', prove)
+    if empty:
+        assert warm(warming, layer='s2_harmonized', validate_image=True)['status'] == 'no_data'
+    else:
+        with pytest.raises(ee.EEException):
+            warm(warming, layer='s2_harmonized', validate_image=True)
+    assert warming.downloads == []

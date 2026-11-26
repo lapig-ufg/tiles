@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def app_with_layers():
+def app_with_layers(monkeypatch):
     # Forçar re-import limpando bindings anteriores — outros testes podem ter
     # instalado stubs diferentes e layers.py pode ter capturado refs antigas.
     from tests.conftest import reset_app_imports
@@ -126,6 +126,7 @@ def app_with_layers():
     sys.modules["app.utils.ee_tile_fetch"] = ee_tile_fetch_mod
 
     from app.api import layers
+    monkeypatch.setattr(layers, "aget_absence", _none)
 
     app = FastAPI()
     app.include_router(layers.router)
