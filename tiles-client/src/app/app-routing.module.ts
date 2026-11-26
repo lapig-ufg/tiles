@@ -12,10 +12,7 @@ const routes: Routes = [
         children: [
             { path: '', data: { breadcrumb: 'Grid Maps' }, loadChildren: () => import('./grid-map/map-grid.module').then(m => m.MapGridModule) },
             { path: 'imagery', data: { breadcrumb: 'Catálogo de Imagens' }, loadChildren: () => import('./image-catalog/image-catalog.module').then(m => m.ImageCatalogModule) },
-            { path: 'embedding', data: { breadcrumb: 'Embedding Maps' }, loadChildren: () => import('./embedding-maps/embedding-maps.module').then(m => m.EmbeddingMapsModule) },
-            { path: 'stac/earth-search', data: { breadcrumb: 'STAC Earth Search' }, loadChildren: () => import('./stac-earth-search/stac-earth-search.module').then(m => m.StacEarthSearchModule) },
-            { path: 'stac/copernicus', data: { breadcrumb: 'STAC Copernicus' }, loadChildren: () => import('./stac-copernicus/stac-copernicus.module').then(m => m.StacCopernicusModule) },
-            { path: 'stac/bdc', data: { breadcrumb: 'STAC Brazil Data Cube' }, loadChildren: () => import('./stac-bdc/stac-bdc.module').then(m => m.StacBdcModule) },
+            { path: 'bdc-lab', data: { breadcrumb: 'Laboratório BDC' }, loadChildren: () => import('./bdc-lab/bdc-lab.module').then(m => m.BdcLabModule) },
         ]
     },
     { path: 'auth', data: { breadcrumb: 'Auth' }, loadChildren: () => import('./demo/components/auth/auth.module').then(m => m.AuthModule) },

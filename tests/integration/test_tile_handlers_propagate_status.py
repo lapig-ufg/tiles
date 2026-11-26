@@ -327,7 +327,6 @@ def admission_consumers(app_with_layers, monkeypatch):
 
     rate_limiter = sys.modules['app.middleware.rate_limiter']
     monkeypatch.setattr(rate_limiter, 'limit_imagery', lambda: lambda fn: fn, raising=False)
-    monkeypatch.setattr(rate_limiter, 'limit_embedding', lambda: lambda fn: fn, raising=False)
     loader = sys.modules['app.visualization.vis_params_loader']
     monkeypatch.setattr(loader, 'generate_landsat_list', lambda *args: [], raising=False)
     monkeypatch.setattr(loader, 'get_visparams', AsyncMock(return_value={
@@ -343,25 +342,16 @@ def admission_consumers(app_with_layers, monkeypatch):
     monkeypatch.setattr(ee, 'Dictionary', lambda *args: chain, raising=False)
 
     imagery = importlib.import_module('app.api.imagery')
-    embedding = importlib.import_module('app.modules.embedding_maps.router')
-    job = {
-        '_id': 'job-1', 'status': 'COMPLETED',
-        'config': {'year': 2023, 'roi': {'roi_type': 'bbox', 'bbox': [-50, -10, -49, -9]}},
-    }
-    monkeypatch.setattr(embedding.repository, 'get_job', AsyncMock(return_value=job))
-    for consumer in (imagery, embedding):
-        monkeypatch.setattr(consumer, 'set_meta', AsyncMock())
-        monkeypatch.setattr(consumer, 'set_png', AsyncMock())
+    monkeypatch.setattr(imagery, 'set_meta', AsyncMock())
+    monkeypatch.setattr(imagery, 'set_png', AsyncMock())
 
     app = FastAPI()
     app.include_router(imagery.router, prefix='/imagery')
-    app.include_router(embedding.router, prefix='/embedding')
-    yield app, imagery, embedding, chain
+    yield app, imagery, chain
     imagery.ee_executor.shutdown(wait=True)
-    embedding.ee_executor.shutdown(wait=True)
 
 
-@pytest.mark.parametrize('consumer_name', ['imagery', 'embedding'])
+@pytest.mark.parametrize('consumer_name', ['imagery'])
 @pytest.mark.parametrize('phase', ['map', 'download'])
 def test_admission_denial_returns_uncacheable_tile_503(
     admission_consumers, monkeypatch, consumer_name, phase,
@@ -370,8 +360,8 @@ def test_admission_denial_returns_uncacheable_tile_503(
     from unittest.mock import AsyncMock
     from app.core.gee_admission import GoogleAdmissionError
 
-    app, imagery, embedding, _ = admission_consumers
-    consumer = imagery if consumer_name == 'imagery' else embedding
+    app, imagery, _ = admission_consumers
+    consumer = imagery
     error = GoogleAdmissionError(2.25)
     if phase == 'map':
         def deny_map(*args, **kwargs):
@@ -384,9 +374,7 @@ def test_admission_denial_returns_uncacheable_tile_503(
         }))
         monkeypatch.setattr(consumer, 'fetch_tile_with_rotation', AsyncMock(side_effect=error))
 
-    path = ('/imagery/s2_harmonized/100/100/10?imageId=COPERNICUS/S2/test'
-            if consumer_name == 'imagery'
-            else '/embedding/tiles/job-1/10/100/100.png?product=magnitude')
+    path = '/imagery/s2_harmonized/100/100/10?imageId=COPERNICUS/S2/test'
     response = TestClient(app).get(path)
 
     assert response.status_code == 503
@@ -398,23 +386,15 @@ def test_admission_denial_returns_uncacheable_tile_503(
     consumer.set_png.assert_not_awaited()
 
 
-@pytest.mark.parametrize('endpoint', ['catalog', 'stats'])
-def test_admission_denial_returns_uncacheable_json_503(admission_consumers, monkeypatch, endpoint):
+def test_admission_denial_returns_uncacheable_json_503(admission_consumers, monkeypatch):
     from unittest.mock import AsyncMock
     from app.core.gee_admission import GoogleAdmissionError
 
-    app, imagery, embedding, chain = admission_consumers
+    app, imagery, _ = admission_consumers
     error = GoogleAdmissionError(2.25)
-    if endpoint == 'catalog':
-        monkeypatch.setattr(imagery, 'compute_value', AsyncMock(side_effect=error))
-        path = '/imagery/s2_harmonized/catalog?lat=-10&lon=-50&start=2023-01-01&end=2023-02-01'
-        consumer = imagery
-    else:
-        def deny_compute(*args, **kwargs):
-            raise error
-        monkeypatch.setattr(chain, 'getInfo', deny_compute)
-        path = '/embedding/jobs/job-1/stats?product=magnitude'
-        consumer = embedding
+    monkeypatch.setattr(imagery, 'compute_value', AsyncMock(side_effect=error))
+    path = '/imagery/s2_harmonized/catalog?lat=-10&lon=-50&start=2023-01-01&end=2023-02-01'
+    consumer = imagery
 
     response = TestClient(app).get(path)
 

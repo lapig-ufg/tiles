@@ -1,6 +1,7 @@
-import { Component, ElementRef, ViewChild } from '@angular/core';
+import { Component, ElementRef, ViewChild, Optional } from '@angular/core';
 import { LayoutService } from 'src/app/layout/service/app.layout.service';
 import { PointService } from '../grid-map/services/point.service';
+import { Router } from '@angular/router';
 import { Observable } from 'rxjs';
 
 interface ParsedCoord {
@@ -21,7 +22,11 @@ export class AppTopbarComponent {
 
     @ViewChild('menubutton') menuButton!: ElementRef;
 
-    constructor(public layoutService: LayoutService, public pointService: PointService) {}
+    constructor(public layoutService: LayoutService, public pointService: PointService, @Optional() private router: Router | null = null) {}
+
+    get isBdcModule(): boolean {
+        return /^\/bdc-lab(?:[/?#]|$)/.test(this.router?.url || "");
+    }
 
     get isValidCoord(): boolean {
         return this.coordInput.trim().length > 0 && this.tryParseCoordinates(this.coordInput.trim()) !== null;

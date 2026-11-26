@@ -1,8 +1,10 @@
-from .api import layers, timeseries, timeseries_ndwi, tile_aggregation, cache, vis_params, capabilities, tasks, admin, imagery, cog_proxy, gee_admin
-from .modules.embedding_maps.router import router as embedding_maps_router
+from .api import layers, timeseries, timeseries_ndwi, tile_aggregation, cache, vis_params, capabilities, tasks, admin, imagery, gee_admin
 
 
 def created_routes(app):
+    from .modules.bdc.router import router as bdc_router
+
+    app.include_router(bdc_router, prefix="/api/bdc", tags=["BDC"])
 
     app.include_router(layers.router, prefix="/api/layers", tags=["Layers"])
     app.include_router(imagery.router, prefix="/api/imagery", tags=["Imagery"])
@@ -32,11 +34,5 @@ def created_routes(app):
 
     # Pool de Service Accounts do GEE - OCULTA DA DOCUMENTAÇÃO
     app.include_router(gee_admin.router, tags=["GEE Pool Admin"], include_in_schema=False)
-
-    # Proxy para COGs sem CORS (BDC/data.inpe.br)
-    app.include_router(cog_proxy.router, prefix="/api", tags=["COG Proxy"])
-
-    # Embedding Maps - análise de embeddings de satélite
-    app.include_router(embedding_maps_router, prefix="/api/embedding-maps", tags=["Embedding Maps"])
 
     return app

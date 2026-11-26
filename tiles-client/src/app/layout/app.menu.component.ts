@@ -33,35 +33,15 @@ export class AppMenuComponent implements OnInit {
                 ]
             },
             {
-                label: 'STAC',
+                label: 'Brazil Data Cube',
                 icon: 'pi pi-globe',
                 items: [
                     {
-                        label: 'Earth Search',
-                        icon: 'pi pi-fw pi-search',
-                        routerLink: ['/stac/earth-search']
+                        label: 'Laboratório BDC',
+                        icon: 'pi pi-fw pi-compass',
+                        routerLink: ['/bdc-lab']
                     },
-                    {
-                        label: 'Copernicus',
-                        icon: 'pi pi-fw pi-cloud',
-                        routerLink: ['/stac/copernicus']
-                    },
-                    {
-                        label: 'Brazil Data Cube',
-                        icon: 'pi pi-fw pi-database',
-                        routerLink: ['/stac/bdc']
-                    },
-                ]
-            },
-            {
-                label: 'ANALYSIS',
-                icon: 'pi pi-chart-bar',
-                items: [
-                    {
-                        label: 'Embedding Maps',
-                        icon: 'pi pi-fw pi-th-large',
-                        routerLink: ['/embedding']
-                    }
+                    { label: 'Evidências BDC', icon: 'pi pi-fw pi-images', routerLink: ['/bdc-lab/evidencias'] },
                 ]
             },
             // {

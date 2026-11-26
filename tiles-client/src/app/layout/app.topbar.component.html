@@ -7,7 +7,8 @@
     </div>
 
     <div class="topbar-end">
-        <ul class="topbar-menu">
+        <span *ngIf="isBdcModule">Brazil Data Cube</span>
+        <ul class="topbar-menu" *ngIf="!isBdcModule">
             <app-geojson-upload class="mr-2"></app-geojson-upload>
            <ng-container *ngIf="pointInfo$ | async as pointInfo; else searchForm">
               <!-- Your content when pointInfo is not null -->
