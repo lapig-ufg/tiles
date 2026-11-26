@@ -1,0 +1,161 @@
+{
+  "tvi-green-bdc-c-proposta": {
+    "name": "tvi-green-bdc-c-proposta",
+    "bands": [
+      "B11",
+      "B8A",
+      "B04"
+    ],
+    "min": [
+      589.914085266345,
+      489.05402837534854,
+      170.2716238351715
+    ],
+    "max": [
+      4742.1764085355335,
+      5634.755592129896,
+      3092.55693774821
+    ],
+    "gamma": 1.1,
+    "offset_policy": "baseline >= 04.00: -1000; hipótese explícita",
+    "fits": [
+      {
+        "a": 0.8910805030947297,
+        "b": 74.3390601181981,
+        "n": 139529,
+        "rmse": 105.99561790868677,
+        "min": 589.914085266345,
+        "max": 4742.1764085355335,
+        "band": "B11",
+        "quantization_interval_max": 15.94190582221745
+      },
+      {
+        "a": 0.9133837129432469,
+        "b": 253.30601573267208,
+        "n": 139529,
+        "rmse": 135.50646907218626,
+        "min": 489.05402837534854,
+        "max": 5634.755592129896,
+        "band": "B8A",
+        "quantization_interval_max": 20.250529017410372
+      },
+      {
+        "a": 0.8212750440805928,
+        "b": 260.1601646290954,
+        "n": 139529,
+        "rmse": 76.24349394429133,
+        "min": 170.2716238351715,
+        "max": 3092.55693774821,
+        "band": "B04",
+        "quantization_interval_max": 10.336584866870453
+      }
+    ],
+    "method": "TOA estimada de PNG não saturado; não equivale a radiometria TOA original; SCL 4/5/6; treino em blocos alternados de 32 pixels"
+  },
+  "tvi-rgb-bdc-c-proposta": {
+    "name": "tvi-rgb-bdc-c-proposta",
+    "bands": [
+      "B04",
+      "B03",
+      "B02"
+    ],
+    "min": [
+      -15.978913879426024,
+      -123.08180307606243,
+      67.05234548131675
+    ],
+    "max": [
+      3222.840790739597,
+      2740.4799496806368,
+      2331.512517990221
+    ],
+    "gamma": 1.35,
+    "offset_policy": "baseline >= 04.00: -1000; hipótese explícita",
+    "fits": [
+      {
+        "a": 0.8645124629835977,
+        "b": 213.8139701937054,
+        "n": 186097,
+        "rmse": 46.186274394141115,
+        "min": -15.978913879426024,
+        "max": 3222.840790739597,
+        "band": "B04",
+        "quantization_interval_max": 14.72114171178282
+      },
+      {
+        "a": 0.7682739853198903,
+        "b": 394.5605473696044,
+        "n": 186097,
+        "rmse": 31.07779513914223,
+        "min": -123.08180307606243,
+        "max": 2740.4799496806368,
+        "band": "B03",
+        "quantization_interval_max": 11.598914048169263
+      },
+      {
+        "a": 0.7065701660044138,
+        "b": 652.6228131222807,
+        "n": 186097,
+        "rmse": 31.224474840634443,
+        "min": 67.05234548131675,
+        "max": 2331.512517990221,
+        "band": "B02",
+        "quantization_interval_max": 8.435573853214464
+      }
+    ],
+    "method": "TOA estimada de PNG não saturado; não equivale a radiometria TOA original; SCL 4/5/6; treino em blocos alternados de 32 pixels"
+  },
+  "tvi-red-bdc-c-proposta": {
+    "name": "tvi-red-bdc-c-proposta",
+    "bands": [
+      "B8A",
+      "B11",
+      "B04"
+    ],
+    "min": [
+      489.05402837534854,
+      589.914085266345,
+      170.2716238351715
+    ],
+    "max": [
+      5634.755592129896,
+      4742.1764085355335,
+      3092.55693774821
+    ],
+    "gamma": 1.1,
+    "offset_policy": "baseline >= 04.00: -1000; hipótese explícita",
+    "fits": [
+      {
+        "a": 0.9133837129432469,
+        "b": 253.30601573267208,
+        "n": 139529,
+        "rmse": 135.50646907218626,
+        "min": 489.05402837534854,
+        "max": 5634.755592129896,
+        "band": "B8A",
+        "quantization_interval_max": 20.250529017410372
+      },
+      {
+        "a": 0.8910805030947297,
+        "b": 74.3390601181981,
+        "n": 139529,
+        "rmse": 105.99561790868677,
+        "min": 589.914085266345,
+        "max": 4742.1764085355335,
+        "band": "B11",
+        "quantization_interval_max": 15.94190582221745
+      },
+      {
+        "a": 0.8212750440805928,
+        "b": 260.1601646290954,
+        "n": 139529,
+        "rmse": 76.24349394429133,
+        "min": 170.2716238351715,
+        "max": 3092.55693774821,
+        "band": "B04",
+        "quantization_interval_max": 10.336584866870453
+      }
+    ],
+    "method": "TOA estimada de PNG não saturado; não equivale a radiometria TOA original; SCL 4/5/6; treino em blocos alternados de 32 pixels"
+  }
+}

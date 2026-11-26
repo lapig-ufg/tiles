@@ -13,3 +13,6 @@ cache/
 k3s/
 tests/
 docs/
+
+poc/
+output/
