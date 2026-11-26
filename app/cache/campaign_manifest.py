@@ -20,7 +20,7 @@ def campaign_config(campaign, width=512, height=512):
         raise ValueError('Período ou zoom inválido')
     if not 256 <= width <= 2048 or not 256 <= height <= 2048:
         raise ValueError('Dimensões da cobertura devem estar entre 256 e 2048 pixels')
-    visualizations = campaign.get('visParamsEnable')
+    visualizations = campaign.get('visParams', campaign.get('visParamsEnable'))
     if not isinstance(visualizations, list) or not visualizations or len(visualizations) > 32:
         raise ValueError('Selecione os parâmetros de visualização da campanha')
     if any(not isinstance(v, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', v) for v in visualizations):

@@ -11,7 +11,7 @@ def store():
     db = mongomock.MongoClient().tvi
     db.campaign.insert_one({'_id': 'test', 'imageType': 'landsat', 'useDynamicMaps': True,
                            'initialYear': 2020, 'finalYear': 2020, 'zoomLevel': 18,
-                           'visParamsEnable': ['landsat-tvi-false']})
+                           'visParams': ['landsat-tvi-false']})
     db.points.insert_one({'_id': 'p', 'campaign': 'test', 'lat': -16, 'lon': -49, 'cached': True})
     return OfflineCampaignStore(db)
 

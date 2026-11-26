@@ -46,3 +46,26 @@ def test_configuration_rejects_unsupported_or_invalid_campaigns(changes):
 def test_sentinel_uses_exact_api_layer():
     from app.cache.campaign_manifest import campaign_config
     assert campaign_config(campaign(imageType='sentinel-2'))['layer'] == 's2_harmonized'
+
+
+def test_manifest_uses_visualizations_persisted_by_tvi_campaign_form():
+    from app.cache.campaign_manifest import campaign_config, manifest_for_point
+    stored = campaign()
+    stored.pop('visParamsEnable')
+    stored['visParams'] = ['landsat-tvi-false']
+    stored['defaultVisParam'] = 'landsat-tvi-false'
+    config = campaign_config(stored)
+    items = list(manifest_for_point({'_id': 'p1', 'lat': 0, 'lon': 0}, config))
+    assert {item['params']['visparam'] for item in items} == {'landsat-tvi-false'}
+
+
+def test_tvi_visualizations_take_precedence_over_legacy_field():
+    from app.cache.campaign_manifest import campaign_config
+    assert campaign_config(campaign(visParams=['landsat-tvi-true']))['visualizations'] == ['landsat-tvi-true']
+
+
+@pytest.mark.parametrize('value', [[], None, 'landsat-tvi-false', ['../bad']])
+def test_invalid_tvi_visualizations_do_not_fall_back_to_legacy_field(value):
+    from app.cache.campaign_manifest import campaign_config
+    with pytest.raises(ValueError):
+        campaign_config(campaign(visParams=value))
