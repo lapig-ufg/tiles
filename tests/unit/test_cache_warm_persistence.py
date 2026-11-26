@@ -697,21 +697,28 @@ def test_offline_429_with_coordinator_failure_is_not_free_deferral(warming, monk
 
 
 @pytest.mark.parametrize('color', ['white', 'black'])
-def test_invalid_tile_is_preserved_when_absence_query_is_not_admitted(warming, monkeypatch, color):
+@pytest.mark.parametrize('failure', ['admission', 'timeout'])
+def test_invalid_tile_is_preserved_when_absence_query_fails(warming, monkeypatch, color, failure):
     from app.core.gee_admission import GoogleAdmissionError
     from app.tasks import offline_campaign
     data = io.BytesIO()
     Image.new('RGB', (256, 256), color).save(data, format='PNG')
     warming.png = data.getvalue()
     def not_admitted(params):
+        if failure == 'timeout':
+            raise TimeoutError('source timeout')
         raise GoogleAdmissionError(30, 'concurrency')
     monkeypatch.setattr(offline_campaign, 'source_absence_evidence', not_admitted)
     result = warm(warming, validate_image=True)
     assert result['status'] == 'failed'
     assert result['reason'] == 'invalid_tile'
     assert result['failure_phase'] == 'image_validation'
-    assert result['admission_phase'] == 'absence_check'
-    assert result['admission_reason'] == 'concurrency'
+    if failure == 'admission':
+        assert result['admission_phase'] == 'absence_check'
+        assert result['admission_reason'] == 'concurrency'
+    else:
+        assert result['secondary_phase'] == 'absence_check'
+        assert result['secondary_error'] == 'TimeoutError'
     assert result['diagnostics']['validation_code'] == color + '_image'
     assert result['diagnostics']['content_sha256'] == hashlib.sha256(warming.png).hexdigest()
     assert warming.storage.uploads == []

@@ -16,8 +16,9 @@ LEASE_SECONDS = 1200
 MAX_ATTEMPTS = 5
 
 
-def failure_state(reason, attempts, retry_after=0):
-    if reason == 'gee_credential_denied' or attempts >= MAX_ATTEMPTS:
+def failure_state(reason, attempts, retry_after=0, *, validation_code=None):
+    if (reason == 'gee_credential_denied' or attempts >= MAX_ATTEMPTS
+            or reason == 'invalid_tile' and validation_code == 'black_image'):
         return {'state': 'blocked', 'delay': 0}
     try:
         retry_after = float(retry_after)
@@ -263,7 +264,8 @@ class OfflineCampaignStore:
                                   if key in {'validation_code', 'byte_length', 'content_sha256',
                                              'image_format', 'width', 'height'}}}
         if not successful:
-            failure = failure_state(reason, 1 if deferred else item['attempts'], result.get('retry_after', 0))
+            failure = failure_state(reason, 1 if deferred else item['attempts'], result.get('retry_after', 0),
+                                    validation_code=change['diagnostics'].get('validation_code'))
             change.update(state=failure['state'], reason=reason, completed_at=None,
                           next_retry=(datetime.now(timezone.utc) + timedelta(seconds=failure['delay'])
                                       if failure['state'] == 'retry_wait' else None))

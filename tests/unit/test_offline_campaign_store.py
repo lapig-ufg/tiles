@@ -61,6 +61,43 @@ def test_error_exhaustion_is_not_absence_of_data_or_completion(store):
     assert retry['delay'] >= 300
 
 
+def test_black_image_is_blocked_without_changing_other_failure_policies():
+    from app.cache.offline_campaign import failure_state
+    assert failure_state('invalid_tile', 1, validation_code='black_image') == {'state': 'blocked', 'delay': 0}
+    for code in (None, 'white_image', 'transparent_image', 'corrupt_image', 'persistence_unconfirmed'):
+        assert failure_state('invalid_tile', 1, validation_code=code)['state'] == 'retry_wait'
+    for reason in ('TimeoutError', 'ConnectionError', 'EarthEngineRateLimitedError', 'GoogleAdmissionError'):
+        assert failure_state(reason, 1, 300, validation_code='black_image') == {'state': 'retry_wait', 'delay': 300}
+    assert failure_state('invalid_tile', 1, 300) == {'state': 'retry_wait', 'delay': 300}
+
+
+@pytest.mark.parametrize('secondary', [
+    {},
+    {'secondary_error': 'TimeoutError', 'secondary_phase': 'absence_check'},
+    {'admission_reason': 'rate', 'admission_phase': 'absence_check', 'retry_after': 300},
+])
+def test_black_image_blocks_first_attempt_and_preserves_secondary_failure(store, secondary):
+    job, token = prepare(store)
+    item = store.next_item(job, token)
+    store.complete_item(job, token, item, {
+        'status': 'failed', 'reason': 'invalid_tile', 'failure_phase': 'image_validation',
+        'http_status': 200, 'diagnostics': {'validation_code': 'black_image'}, **secondary,
+    })
+    saved = store.items.find_one({'_id': item['_id']})
+    assert saved['state'] == 'blocked'
+    assert saved['attempts'] == 1
+    assert saved['next_retry'] is None
+    assert saved['reason'] == 'invalid_tile'
+    assert saved['failure_phase'] == 'image_validation'
+    assert saved['diagnostics']['validation_code'] == 'black_image'
+    assert saved.get('secondary_error') == secondary.get('secondary_error')
+    assert saved.get('admission_reason') == secondary.get('admission_reason')
+    assert not saved.get('evidence')
+    assert store.status('test')['counts']['no_data'] == 0
+    store.items.delete_many({'_id': {'$ne': item['_id']}})
+    assert store.next_item(job, token) is None
+
+
 def test_completion_requires_all_item_results(store):
     job, token = prepare(store)
     assert store.finish(job, token)['status'] == 'running'
@@ -112,7 +149,8 @@ def test_manifest_reports_unique_tiles_for_overlapping_points(store):
     assert summary['unique_tiles'] * 2 == summary['total']
 
 
-def test_justified_absence_is_terminal_but_generic_missing_is_not(store):
+@pytest.mark.parametrize('diagnostics', [{}, {'validation_code': 'black_image'}])
+def test_justified_absence_is_terminal_but_generic_missing_is_not(store, diagnostics):
     job, token = prepare(store)
     item = store.next_item(job, token)
     store.complete_item(job, token, item, {'status': 'no_data'})
@@ -121,7 +159,8 @@ def test_justified_absence_is_terminal_but_generic_missing_is_not(store):
     evidence = {'kind': 'empty_collection', 'count': 0, 'collection': 'LANDSAT/LC08/C02/T1_L2',
                 'period': item['params']['period'], 'year': item['params']['year'],
                 'checked_at': datetime.utcnow().replace(microsecond=0)}
-    store.complete_item(job, token, item, {'status': 'no_data', 'evidence': evidence, 'expires_at': time.time() + 3600})
+    store.complete_item(job, token, item, {'status': 'no_data', 'evidence': evidence,
+                                         'diagnostics': diagnostics, 'expires_at': time.time() + 3600})
     assert store.items.find_one({'_id': item['_id']})['state'] == 'no_data'
     assert store.items.find_one({'_id': item['_id']})['evidence'] == evidence
 
