@@ -34,19 +34,21 @@ def family(collection):
     return "Outros produtos"
 
 
-def profiles(collection, item):
+def profiles(collection, item=None):
     source = collection["id"]
-    assets = item["assets"]
+    assets = item.get("assets", {}) if item is not None else collection.get('item_assets', {})
     result = []
     if source in {"landsat-2", "LANDSAT-16D-1", "S2_L2A-1", "S2-16D-2"}:
         landsat = source.startswith(("landsat", "LANDSAT"))
         for name, (bands, minimum, maximum, gamma) in VIS.items():
             if name.startswith("landsat-") != landsat or name not in LABELS:
                 continue
-            if not all(b in assets for b in bands):
+            if item is not None and not all(b in assets for b in bands):
                 continue
             offset = 0
-            if source == "S2_L2A-1":
+            if source == "S2_L2A-1" and item is None:
+                offset = None
+            elif source == "S2_L2A-1":
                 match = re.search(r"_N(\d{4})_", item["id"])
                 if not match:
                     continue
@@ -153,4 +155,5 @@ def collection_summary(collection):
         formats=sorted({a.get("type", "Não declarado") for a in assets.values()}),
         has_cog=any("tiff" in a.get("type", "") for a in assets.values()),
         public=collection.get("bdc:public", None),
+        profiles=profiles(collection),
     )

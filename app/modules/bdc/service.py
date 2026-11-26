@@ -2,7 +2,7 @@ import io
 import json
 import re
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import date
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
@@ -50,12 +50,24 @@ class BdcService:
         self.root = Path(root)
 
     @contextmanager
-    def remote(self):
-        transport = Transport(self.root / "http", metadata_ttl=3600)
-        try:
+    def remote(self, *, retry_token=None):
+        from .selection_jobs import selection_store
+        with ExitStack() as resources:
+            store = None
+            def coordinator():
+                nonlocal store
+                if store is None:
+                    store = resources.enter_context(selection_store())
+                return store
+            @contextmanager
+            def origin_admission():
+                with coordinator().origin_admission() as check:
+                    yield check
+            transport = Transport(self.root / "http", metadata_ttl=3600, origin_admission=origin_admission,
+                                  origin_resumed=lambda timestamp: coordinator().origin_resumed_since(timestamp),
+                                  retry_token=retry_token)
+            resources.callback(transport.session.close)
             yield transport
-        finally:
-            transport.session.close()
 
     def collections(self):
         with self.remote() as remote:
@@ -124,6 +136,18 @@ class BdcService:
 
         with self.remote() as remote:
             return compare(remote, collection, lon, lat, radius, start, end, criterion)
+
+    def select_images(self, params, check, *, retry_token=None):
+        from .local_quality import compare_partitioned
+        with self.remote(retry_token=retry_token) as remote:
+            result = compare_partitioned(remote, params['collection'], params['lon'], params['lat'],
+                                         params['radius_m'], params['start'], params['end'],
+                                         params['criterion'], check=check)
+        for row in result['rows']:
+            item = row.pop('item')
+            row['datetime'] = item.get('properties', {}).get('datetime')
+            row['profiles'] = [profile['id'] for profile in profiles({'id': params['collection']}, item)]
+        return result
 
     def item(self, collection_id, item_id):
         identifier(collection_id)

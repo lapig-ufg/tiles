@@ -73,6 +73,7 @@ celery_app.conf.task_queues = (
     
     # Maintenance queue for cleanup and monitoring
     Queue('maintenance', default_exchange, routing_key='maintenance'),
+    Queue('bdc', default_exchange, routing_key='bdc'),
 )
 
 # Optimized Celery configuration
@@ -111,6 +112,7 @@ celery_app.conf.update(
     # Task routing
     task_routes={
         # Tile generation tasks
+        'app.tasks.bdc_selection.run_bdc_selection': {'queue': 'bdc'},
         'app.tasks.tile_tasks.tile_generate': {'queue': 'standard'},
         'app.tasks.tile_tasks.tile_generate_batch': {'queue': 'standard'},
         'app.tasks.tile_tasks.tile_generate_mosaic': {'queue': 'high_priority'},
@@ -178,6 +180,7 @@ celery_app.conf.update(
         'app.tasks.cleanup_tasks',
         'app.tasks.monitoring_tasks',
         'app.tasks.offline_campaign',
+        'app.tasks.bdc_selection',
     ],
 )
 

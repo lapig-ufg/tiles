@@ -1,6 +1,6 @@
 import math
 import time
-from datetime import date
+from datetime import date, timedelta
 from urllib.parse import urlencode
 
 import numpy as np
@@ -16,6 +16,18 @@ from .transport import RangeBridge
 from .visualization import GDAL_OPTIONS
 
 COLLECTIONS = {'landsat-2': 'qa_pixel', 'S2_L2A-1': 'SCL'}
+
+
+class CandidateLimitExceeded(ValueError):
+    pass
+
+
+class IncompleteCatalogError(ValueError):
+    pass
+
+
+class SelectionDeadlineExceeded(TimeoutError):
+    pass
 
 
 def point_buffer(lon, lat, radius):
@@ -86,42 +98,81 @@ def read_quality(remote, item, geometry, collection):
             return result
 
 
-def search_candidates(remote, collection, geometry, start, end, max_candidates=60):
+def search_candidates(remote, collection, geometry, start, end, max_candidates=60, check=None):
     start_date, end_date = date.fromisoformat(start), date.fromisoformat(end)
     if start_date > end_date or (end_date - start_date).days > 366:
         raise ValueError('Escolha um intervalo de até 366 dias')
     found = {}
     for page in range(1, 102):
+        if check:
+            check()
         query = urlencode(dict(collections=collection, bbox=','.join(map(str, geometry.bounds)),
                                datetime=f'{start}T00:00:00Z/{end}T23:59:59.999999Z', limit=100, page=page))
         response = remote.json(STAC + '/search?' + query)
-        items = response.get('features', [])
+        if check:
+            check()
+        items = response.get('features')
+        if not isinstance(items, list) or any(not isinstance(item, dict) or not item.get('id') for item in items):
+            raise IncompleteCatalogError('Resposta de catálogo inválida; seleção recusada')
         fresh = [item for item in items if item['id'] not in found]
         if items and not fresh:
-            raise ValueError('Paginação sem avanço; seleção incompleta recusada')
+            raise IncompleteCatalogError('Paginação sem avanço; seleção incompleta recusada')
         found.update((item['id'], item) for item in fresh)
-        if len(found) > max_candidates:
-            raise ValueError(f'Mais de {max_candidates} cenas no período. Reduza o intervalo para comparar todas as aquisições.')
+        matched = response.get('numberMatched', response.get('context', {}).get('matched'))
+        if len(found) > max_candidates or type(matched) is int and matched > max_candidates:
+            raise CandidateLimitExceeded(f'Mais de {max_candidates} cenas no período. Reduza o intervalo para comparar todas as aquisições.')
         if not any(link.get('rel') == 'next' for link in response.get('links', [])) and len(items) < 100:
+            if type(matched) is int and matched > len(found):
+                raise IncompleteCatalogError('Catálogo truncado; seleção recusada')
             return list(found.values())
-    raise ValueError('Catálogo incompleto; seleção recusada')
+    raise IncompleteCatalogError('Catálogo incompleto; seleção recusada')
 
 
-def compare(remote, collection, lon, lat, radius, start, end, criterion='cloud', max_seconds=180):
+def partition_candidates(remote, collection, geometry, start, end, check):
+    pending = [(date.fromisoformat(start), date.fromisoformat(end))]
+    found = {}
+    while pending:
+        check()
+        first, last = pending.pop()
+        try:
+            items = search_candidates(remote, collection, geometry, first.isoformat(), last.isoformat(), check=check)
+        except CandidateLimitExceeded:
+            if first == last:
+                raise
+            middle = first + (last - first) // 2
+            pending.extend([(middle + timedelta(days=1), last), (first, middle)])
+            continue
+        for item in items:
+            found.setdefault(item['id'], item)
+    return list(found.values())
+
+
+def compare(remote, collection, lon, lat, radius, start, end, criterion='cloud', max_seconds=180,
+            *, partitioned=False, check=None):
     if collection not in COLLECTIONS:
         raise ValueError('Seleção local disponível para Landsat e Sentinel-2 L2A')
     if criterion not in {'cloud', 'unusable'}:
         raise ValueError('Critério inválido')
     started = time.monotonic()
+    def checkpoint():
+        if time.monotonic() - started >= max_seconds:
+            raise SelectionDeadlineExceeded('Prazo de análise excedido; seleção parcial recusada')
+        if check:
+            check()
     geometry = point_buffer(lon, lat, radius)
-    candidates = search_candidates(remote, collection, geometry, start, end)
+    first, last = date.fromisoformat(start), date.fromisoformat(end)
+    if first > last or (last - first).days > 366:
+        raise ValueError('Escolha um intervalo de até 366 dias')
+    candidates = (partition_candidates(remote, collection, geometry, start, end, checkpoint) if partitioned
+                  else search_candidates(remote, collection, geometry, start, end, check=checkpoint))
     rows = []
     for item in sorted(candidates, key=lambda item: item['id']):
-        if time.monotonic() - started > max_seconds:
-            raise ValueError('Tempo de análise excedido. Reduza o período; nenhuma seleção parcial foi aceita.')
+        checkpoint()
         props = item.get('properties', {})
         rows.append(dict(id=item['id'], item=item, scene_cloud_pct=props.get('eo:cloud_cover'),
                          **read_quality(remote, item, geometry, collection)))
+        checkpoint()
+    checkpoint()
     ranked = rank_rows(rows, criterion)
     global_rows = sorted((r for r in rows if r.get('eligible') and isinstance(r['scene_cloud_pct'], (int, float)) and math.isfinite(r['scene_cloud_pct']) and 0 <= r['scene_cloud_pct'] <= 100),
                          key=lambda r: (r['scene_cloud_pct'], r['id']))
@@ -133,3 +184,8 @@ def compare(remote, collection, lon, lat, radius, start, end, criterion='cloud',
                 rows=ranked + [r for r in rows if not r['eligible']],
                 seconds=round(time.monotonic() - started, 3),
                 policy='Pixels nativos; buffer integral válido; desempate por área inadequada e identificador; sem filtro global de nuvens.')
+
+
+def compare_partitioned(remote, collection, lon, lat, radius, start, end, criterion='cloud', max_seconds=480, check=None):
+    return compare(remote, collection, lon, lat, radius, start, end, criterion, max_seconds,
+                   partitioned=True, check=check)

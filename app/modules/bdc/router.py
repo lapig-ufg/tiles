@@ -178,8 +178,10 @@ def create_router(service=None):
         return run(execute)
 
     from .evidence import create_evidence_router
+    from .selection_jobs import create_selection_router
 
     app.include_router(create_evidence_router(), prefix="/evidence")
+    app.include_router(create_selection_router())
     return app
 
 
