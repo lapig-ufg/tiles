@@ -64,7 +64,7 @@ def read_tile(collection, item, profile, z, x, y):
         return None
 
 
-def warm_tile(service, collection, item, profile, z, x, y, force=False, ttl=DEFAULT_TTL):
+def warm_tile(service, collection, item, profile, z, x, y, force=False, ttl=DEFAULT_TTL, admission_count=2):
     key = tile_key(collection, item, profile, z, x, y)
     if not math.isfinite(ttl) or ttl <= 0:
         raise ValueError('TTL deve ser positivo e finito')
@@ -75,7 +75,7 @@ def warm_tile(service, collection, item, profile, z, x, y, force=False, ttl=DEFA
                 expires_at = cache.confirm_valid_image(key, lease)
                 if expires_at:
                     return dict(status='already_cached', expires_at=expires_at, key=key, diagnostics={})
-            with admission(service.root):
+            with admission(service.root, count=admission_count):
                 data, stats = service.render(collection, item, z, x, y, profile, 'png',
                                              _offline_lookup=False, _refresh=force)
             try:

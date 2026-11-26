@@ -11,6 +11,7 @@ def test_bdc_workers_isolate_queues_with_bounded_prefetch_and_shared_coordinatio
         ('celery_worker_bdc_offline', 'bdc_offline', 1, 1),
     ):
         service = services[name]
+        assert service['stop_grace_period'] == '600s'
         assert service['deploy']['replicas'] == replicas
         assert '--concurrency=' + str(concurrency) in service['command']
         assert '--queues=' + queue in service['command']
@@ -34,3 +35,15 @@ def test_bdc_origin_budget_is_consistent_and_limited_to_bdc_services():
                   if 'BDC_ORIGIN_SLOTS' in service.get('environment', {})}
     assert configured == expected
     assert {config['services'][name]['environment']['BDC_ORIGIN_SLOTS'] for name in expected} == {'4'}
+
+
+def test_offline_parallelism_is_isolated_and_has_bounded_worker_memory():
+    config = yaml.safe_load((Path(__file__).resolve().parents[2] / 'config/swarm/prod.compose.yml').read_text())
+    services = config['services']
+    configured = {name for name, service in services.items()
+                  if 'BDC_OFFLINE_PARALLELISM' in service.get('environment', {})}
+    assert configured == {'celery_worker_bdc_offline'}
+    worker = services['celery_worker_bdc_offline']
+    assert worker['environment']['BDC_OFFLINE_PARALLELISM'] == '4'
+    assert worker['deploy']['resources']['limits']['memory'] == '2g'
+    assert '--concurrency=1' in worker['command']

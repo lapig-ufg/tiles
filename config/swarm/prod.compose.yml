@@ -228,6 +228,7 @@ services:
 
   celery_worker_bdc:
     <<: *common-config
+    stop_grace_period: 600s
     command:
       - celery
       - -A
@@ -266,6 +267,7 @@ services:
 
   celery_worker_bdc_offline:
     <<: *common-config
+    stop_grace_period: 600s
     command:
       - celery
       - -A
@@ -286,6 +288,7 @@ services:
       S3_ENDPOINT: http://s3-tiles:8333
       BDC_INPE_TOKEN_FILE: /run/secrets/bdc_inpe_token
       BDC_ORIGIN_SLOTS: "4"
+      BDC_OFFLINE_PARALLELISM: "4"
     secrets:
       - source: bdc_inpe_token
         target: bdc_inpe_token

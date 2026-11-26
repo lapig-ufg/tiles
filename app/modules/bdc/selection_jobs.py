@@ -173,12 +173,13 @@ class SelectionJobStore:
             raise ServicePaused('Origem BDC pausada')
 
     @contextmanager
-    def origin_admission(self):
+    def origin_admission(self, *, background=False):
         self.check_origin()
         now = datetime.now(timezone.utc)
         token = uuid.uuid4().hex
         claimed = None
-        for slot in range(ORIGIN_SLOTS):
+        slots = max(1, ORIGIN_SLOTS - 1) if background else ORIGIN_SLOTS
+        for slot in range(slots):
             slot_id = f'origin:{slot}'
             try:
                 self.origin.insert_one({'_id': slot_id, 'lease_until': now})

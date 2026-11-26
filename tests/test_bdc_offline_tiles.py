@@ -40,7 +40,8 @@ class Storage:
 @pytest.fixture
 def state(tmp_path, monkeypatch):
     from app.cache.sync_cache import SyncTileCache
-    from app.modules.bdc import offline_tiles
+    import importlib
+    offline_tiles = importlib.import_module('app.modules.bdc.offline_tiles')
     from app.modules.bdc.service import BdcService
     storage = Storage(tmp_path)
     client = fakeredis.FakeRedis()
@@ -191,3 +192,18 @@ def test_renderer_change_replaces_local_pixels_before_durable_upload(state, monk
     assert actual == encode_image(state.pixels, 'png')
     assert state.calls.count('remote') == 2
     assert state.storage.uploads == 2
+
+
+def test_offline_admission_accepts_four_distinct_tiles_without_local_deferral(state, monkeypatch):
+    from app.modules.bdc.service import encode_image
+    gate = threading.Barrier(4)
+    def render(*args, **kwargs):
+        gate.wait(timeout=3)
+        return encode_image(state.pixels, 'png'), {}
+    monkeypatch.setattr(state.service, 'render', render)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(state.offline_tiles.warm_tile, state.service, 'landsat-2', 'scene',
+                                   'rgb', 6, x, 0, admission_count=4) for x in range(4)]
+        results = [future.result(timeout=5) for future in futures]
+    assert all(result['status'] == 'cached' for result in results)
+    assert len({result['key'] for result in results}) == 4

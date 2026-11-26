@@ -98,7 +98,7 @@ class Transport:
             raise ValueError("Intervalo Range inválido")
         key = digest([method, url, byte_range])
         prefix = self.root / key
-        with file_lock(self.root / "transport.lock"):
+        with file_lock(prefix.with_suffix(".lock")):
             meta_path = prefix.with_suffix(".json")
             body_path = prefix.with_suffix(".body")
             paused = self.root / (urlsplit(url).hostname + ".paused")
@@ -133,14 +133,15 @@ class Transport:
                             f"Resposta persistida HTTP {meta['status']}: {url}"
                         )
                     return meta, body_path.read_bytes()
-            if paused.exists() and self.origin_resumed:
-                previous = json.loads(paused.read_text())
-                if previous.get('status') in (429, 503) and self.origin_resumed(previous.get('fetched_at', 0)):
-                    failed_key = digest([previous['method'], previous['url'], previous.get('range')])
-                    (self.root / (failed_key + '.attempted')).unlink(missing_ok=True)
-                    paused.unlink()
-            if paused.exists():
-                raise ServicePaused(f"Serviço pausado: {paused.read_text()}")
+            with file_lock(paused.with_suffix(".pause.lock")):
+                if paused.exists() and self.origin_resumed:
+                    previous = json.loads(paused.read_text())
+                    if previous.get('status') in (429, 503) and self.origin_resumed(previous.get('fetched_at', 0)):
+                        failed_key = digest([previous['method'], previous['url'], previous.get('range')])
+                        (self.root / (failed_key + '.attempted')).unlink(missing_ok=True)
+                        paused.unlink()
+                if paused.exists():
+                    raise ServicePaused(f"Serviço pausado: {paused.read_text()}")
             attempt_path = prefix.with_suffix(".attempted")
             refresh_allowed = refresh and (not refresh_path.exists() or refresh_path.read_text() != refresh_generation)
             if attempt_path.exists() and not retry_allowed and not refresh_allowed:
@@ -183,7 +184,8 @@ class Transport:
                         "fetched_at": time.time(),
                     }
                     if response.status_code in (429, 503):
-                        atomic_write(paused, json.dumps(meta).encode())
+                        with file_lock(paused.with_suffix(".pause.lock")):
+                            atomic_write(paused, json.dumps(meta).encode())
                         raise ServicePaused(f"HTTP {response.status_code}: {url}")
                     if 300 <= response.status_code < 400:
                         raise RuntimeError("Redirecionamento remoto recusado")

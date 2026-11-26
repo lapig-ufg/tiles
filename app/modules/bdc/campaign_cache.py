@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
+from .background import BDC_OFFLINE_PARALLELISM
 from .campaign_selection import resolve_selection
 from .offline_tiles import warm_tile
 from .selection_jobs import OriginBusy
@@ -29,9 +30,10 @@ def generate_tile(db, campaign, point, params, *, force=False, retry=False, retr
                                  'reference_completed_at': selected.get('updatedAt') or selected['createdAt']}}
         if selected['state'] != 'ready':
             return {'status': 'failed', 'reason': 'bdc_selection_failed'}
-        service = BdcService(Path(os.environ.get('BDC_CACHE_DIR', 'cache/bdc')))
+        service = BdcService(Path(os.environ.get('BDC_CACHE_DIR', 'cache/bdc')), background=True)
         return warm_tile(service, selected['params']['collection'], selected['result']['best_local_id'],
-                         params['visparam'], params['z'], params['x'], params['y'], force=force)
+                         params['visparam'], params['z'], params['x'], params['y'], force=force,
+                         admission_count=BDC_OFFLINE_PARALLELISM)
     except (OriginBusy, HTTPException) as exc:
         if isinstance(exc, HTTPException) and exc.status_code != 503:
             raise

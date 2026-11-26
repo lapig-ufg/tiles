@@ -1,4 +1,5 @@
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -7,6 +8,8 @@ from pymongo import MongoClient
 from app.cache.offline_campaign import ACTIVE, OfflineCampaignStore
 from app.core.config import settings
 from app.tasks.celery_app import celery_app
+
+from app.modules.bdc.background import BDC_OFFLINE_PARALLELISM
 
 
 @contextmanager
@@ -41,46 +44,96 @@ def source_absence_evidence(params):
     return None
 
 
-def process_window(store, job, token, generate, limit=8, bdc_generate=None):
+def bdc_item_point(store, job, token, item):
+    from app.cache.campaign_manifest import fingerprint
+
+    if not store.owned(job, token):
+        return None
+    current = store.jobs.find_one({'_id': job['_id'], 'run_id': job['run_id']}, {'status': 1})
+    if not current or current['status'] != 'running':
+        return None
+    point = store.db.points.find_one({'_id': item.get('point_ref'), 'campaign': job['_id']})
+    if (store.configuration_changed(job, check_points=False) or point is None
+            or point.get('pointMutationLock')
+            or fingerprint([type(point['_id']).__name__, str(point['_id']), point.get('lat'), point.get('lon')]) != item.get('point_fingerprint')):
+        store.mark_stale(job, token)
+        return None
+    return point
+
+
+def process_bdc_window(store, job, token, generate, limit):
     started = time.monotonic()
-    is_bdc = job['config'].get('source') == 'bdc'
-    if is_bdc and bdc_generate is None:
-        from app.modules.bdc.campaign_cache import generate_tile
-        bdc_generate = generate_tile
-    for _ in range(limit):
+    submitted, stopped = 0, False
+    pending = {}
+    with ThreadPoolExecutor(max_workers=BDC_OFFLINE_PARALLELISM) as executor:
+        while pending or (not stopped and submitted < limit):
+            while not stopped and submitted < limit and len(pending) < BDC_OFFLINE_PARALLELISM:
+                if time.monotonic() - started >= 180:
+                    stopped = True
+                    break
+                item = store.next_item(job, token)
+                if not item:
+                    stopped = True
+                    break
+                point = bdc_item_point(store, job, token, item)
+                if point is None:
+                    stopped = True
+                    break
+                campaign = store.db.campaign.find_one({'_id': job['_id']})
+                shared = store.items.find_one({'run_id': job['run_id'], 'key': item['key'], 'state': 'completed'}, {'_id': 1})
+                future = executor.submit(generate, store.db, campaign, point, item['params'],
+                                         force=job['mode'] == 'regenerate' and not shared,
+                                         retry=job['mode'] in {'retry_failed', 'regenerate'},
+                                         retry_request=job.get('retry_request', job['run_id']))
+                pending[future] = item
+                submitted += 1
+            if not pending:
+                break
+            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                item = pending.pop(future)
+                if future.cancelled():
+                    continue
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    result = {'status': 'failed', 'reason': type(exc).__name__,
+                              'retry_after': getattr(exc, 'retry_after', 0)}
+                if bdc_item_point(store, job, token, item) is None:
+                    stopped = True
+                    for queued in pending:
+                        queued.cancel()
+                    continue
+                if not store.complete_item(job, token, item, result):
+                    stopped = True
+                    for queued in pending:
+                        queued.cancel()
+    return store.finish(job, token)
+
+
+def process_window(store, job, token, generate, limit=None, bdc_generate=None):
+    if job['config'].get('source') == 'bdc':
+        if bdc_generate is None:
+            from app.modules.bdc.campaign_cache import generate_tile
+            bdc_generate = generate_tile
+        return process_bdc_window(store, job, token, bdc_generate, 32 if limit is None else limit)
+
+    started = time.monotonic()
+    for _ in range(8 if limit is None else limit):
         if time.monotonic() - started >= 180:
             break
         item = store.next_item(job, token)
         if not item:
-            break
-        if is_bdc and store.configuration_changed(job, check_points=False):
-            store.mark_stale(job, token)
             break
         point = store.db.points.find_one({'_id': item.get('point_ref'), 'campaign': job['_id']})
         from app.cache.campaign_manifest import fingerprint
         if point is None or fingerprint([type(point['_id']).__name__, str(point['_id']), point.get('lat'), point.get('lon')]) != item.get('point_fingerprint'):
             store.mark_stale(job, token)
             break
-        if is_bdc and point.get('pointMutationLock'):
-            store.mark_stale(job, token)
-            break
         try:
             shared = store.items.find_one({'run_id': job['run_id'], 'key': item['key'], 'state': 'completed'}, {'_id': 1})
-            if is_bdc:
-                campaign = store.db.campaign.find_one({'_id': job['_id']})
-                result = bdc_generate(store.db, campaign, point, item['params'],
-                                      force=job['mode'] == 'regenerate' and not shared,
-                                      retry=job['mode'] in {'retry_failed', 'regenerate'},
-                                      retry_request=job.get('retry_request', job['run_id']))
-                current = store.db.points.find_one({'_id': point['_id'], 'campaign': job['_id']})
-                if (current is None or current.get('pointMutationLock')
-                        or current.get('lat') != point['lat'] or current.get('lon') != point['lon']
-                        or store.configuration_changed(job, check_points=False)):
-                    store.mark_stale(job, token)
-                    break
-            else:
-                result = generate(**item['params'], validate_image=True,
-                                  force=job['mode'] == 'regenerate' and not shared)
+            result = generate(**item['params'], validate_image=True,
+                              force=job['mode'] == 'regenerate' and not shared)
         except Exception as exc:
             result = {'status': 'failed', 'reason': type(exc).__name__,
                       'retry_after': getattr(exc, 'retry_after', 0)}
@@ -121,8 +174,11 @@ def run_offline_campaign(campaign_id):
             store.release(campaign_id, token)
         status = store.jobs.find_one({'_id': campaign_id})
         if status['status'] in ACTIVE:
-            preparing_bdc = job['status'] == 'preparing' and job.get('config', {}).get('source') == 'bdc'
-            enqueue_offline_campaign(status, countdown=0 if preparing_bdc else 5)
+            is_bdc = status.get('config', {}).get('source') == 'bdc'
+            ready = is_bdc and (job['status'] == 'preparing' or store.items.find_one(
+                {'run_id': status['run_id'], 'state': {'$in': ['pending', 'retry_wait']},
+                 'next_retry': {'$lte': datetime.now(timezone.utc)}}, {'_id': 1}) is not None)
+            enqueue_offline_campaign(status, countdown=0 if ready else 5)
         return {'status': status['status'], 'total': status.get('total', 0)}
 
 

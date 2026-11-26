@@ -105,7 +105,8 @@ def test_bdc_generator_warms_exact_selected_scene_and_regeneration_preserves_ide
     result = campaign_cache.generate_tile('db', 'campaign', 'point', params, force=True, retry=True)
     assert result['status'] == 'cached'
     assert warmer.call_args.args[1:] == ('landsat-2', 'local-scene', 'landsat-tvi-true', 18, 1, 2)
-    assert warmer.call_args.kwargs == {'force': True}
+    assert warmer.call_args.kwargs == {'force': True, 'admission_count': 4}
+    assert warmer.call_args.args[0].background is True
     resolver.assert_called_once_with('db', 'campaign', 'point', 2020, 'WET', retry=True, retry_request=None)
 
 
@@ -245,3 +246,155 @@ def test_busy_campaign_does_not_prepare_or_dispatch_duplicate(store, monkeypatch
     assert store.items.count_documents({}) == 0
     assert store.jobs.find_one({'_id': 'test'})['lease_token'] == token
     dispatch.assert_not_called()
+
+
+def test_bdc_window_generates_tiles_concurrently_without_duplicate_claims(store, monkeypatch):
+    from threading import Barrier, Lock
+    from app.tasks import offline_campaign
+    job, token = prepared_bdc(store)
+    monkeypatch.setattr(offline_campaign, 'BDC_OFFLINE_PARALLELISM', 2, raising=False)
+    gate = Barrier(2)
+    seen = []
+    lock = Lock()
+
+    def render(db, campaign, point, params, **kwargs):
+        with lock:
+            seen.append((params['year'], params['period'], params['visparam'], params['z'], params['x'], params['y']))
+        gate.wait(timeout=3)
+        return {'status': 'cached', 'expires_at': time.time() + 100}
+
+    offline_campaign.process_window(store, job, token, Mock(), limit=4, bdc_generate=render)
+    assert len(seen) == len(set(seen)) == 4
+    assert store.items.count_documents({'state': 'completed'}) == 4
+
+
+def test_bdc_parallel_failure_does_not_discard_other_tile_results(store, monkeypatch):
+    from threading import Barrier, Lock
+    from app.tasks import offline_campaign
+    job, token = prepared_bdc(store)
+    monkeypatch.setattr(offline_campaign, 'BDC_OFFLINE_PARALLELISM', 2, raising=False)
+    gate, lock, calls = Barrier(2), Lock(), []
+
+    def render(*args, **kwargs):
+        with lock:
+            calls.append(1)
+            fail = len(calls) == 1
+        gate.wait(timeout=3)
+        if fail:
+            raise ValueError('Falha de renderização')
+        return {'status': 'cached', 'expires_at': time.time() + 100}
+
+    offline_campaign.process_window(store, job, token, Mock(), limit=2, bdc_generate=render)
+    assert store.items.count_documents({'state': 'completed'}) == 1
+    assert store.items.count_documents({'state': 'retry_wait', 'reason': 'ValueError'}) == 1
+
+
+def test_bdc_parallel_window_stops_after_point_mutation(store, monkeypatch):
+    from threading import Barrier
+    from app.tasks import offline_campaign
+    job, token = prepared_bdc(store)
+    monkeypatch.setattr(offline_campaign, 'BDC_OFFLINE_PARALLELISM', 2, raising=False)
+    gate, calls = Barrier(2), []
+
+    def render(*args, **kwargs):
+        calls.append(1)
+        gate.wait(timeout=3)
+        store.db.points.update_one({'_id': 'p'}, {'$set': {'pointMutationLock': 'mutation'}})
+        return {'status': 'cached', 'expires_at': time.time() + 100}
+
+    offline_campaign.process_window(store, job, token, Mock(), limit=8, bdc_generate=render)
+    assert len(calls) == 2
+    assert store.jobs.find_one({'_id': 'test'})['status'] == 'stale'
+    assert store.items.count_documents({'state': 'completed'}) == 0
+
+
+def test_bdc_parallel_window_waits_for_active_workers_after_lease_loss(store, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import timedelta
+    from threading import Barrier, Event, Lock
+    from app.tasks import offline_campaign
+    job, token = prepared_bdc(store)
+    monkeypatch.setattr(offline_campaign, 'BDC_OFFLINE_PARALLELISM', 2, raising=False)
+    gate, release, expired, lock, calls = Barrier(2), Event(), Event(), Lock(), []
+
+    def render(*args, **kwargs):
+        with lock:
+            calls.append(1)
+            first = len(calls) == 1
+        gate.wait(timeout=3)
+        if first:
+            store.jobs.update_one({'_id': 'test'}, {'$set': {'lease_until': datetime.now(timezone.utc) - timedelta(seconds=1)}})
+            expired.set()
+        else:
+            assert release.wait(3)
+        return {'status': 'cached', 'expires_at': time.time() + 100}
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        pending = executor.submit(offline_campaign.process_window, store, job, token, Mock(), 8, render)
+        try:
+            assert expired.wait(3)
+            assert not pending.done()
+        finally:
+            release.set()
+        pending.result(timeout=3)
+    assert len(calls) == 2
+    assert store.items.count_documents({'state': 'completed'}) == 0
+
+
+def test_offline_parallelism_configuration_is_bounded(monkeypatch):
+    import runpy
+    from pathlib import Path
+    import pytest
+    path = Path(__file__).parents[2] / 'app/modules/bdc/background.py'
+    monkeypatch.delenv('BDC_OFFLINE_PARALLELISM', raising=False)
+    assert runpy.run_path(str(path))['BDC_OFFLINE_PARALLELISM'] == 4
+    for value in ('1', '4', '8'):
+        monkeypatch.setenv('BDC_OFFLINE_PARALLELISM', value)
+        assert runpy.run_path(str(path))['BDC_OFFLINE_PARALLELISM'] == int(value)
+    for value in ('', '0', '9', '-1', '2.5', 'true'):
+        monkeypatch.setenv('BDC_OFFLINE_PARALLELISM', value)
+        with pytest.raises(ValueError, match='BDC_OFFLINE_PARALLELISM'):
+            runpy.run_path(str(path))
+
+
+def test_bdc_render_followup_is_immediate_only_when_items_are_eligible(store, monkeypatch):
+    from contextlib import contextmanager
+    from datetime import timedelta
+    from app.tasks import offline_campaign
+    job, token = prepared_bdc(store)
+    store.release('test', token)
+
+    @contextmanager
+    def factory():
+        yield store
+
+    def complete_batch(current_store, current_job, current_token, generate):
+        for _ in range(8):
+            item = current_store.next_item(current_job, current_token)
+            if item is None:
+                break
+            current_store.complete_item(current_job, current_token, item,
+                                        {'status': 'cached', 'expires_at': time.time() + 100})
+        return current_store.finish(current_job, current_token)
+
+    dispatch = Mock()
+    monkeypatch.setattr(offline_campaign, 'campaign_store', factory)
+    monkeypatch.setattr(offline_campaign, 'enqueue_offline_campaign', dispatch)
+    monkeypatch.setattr(offline_campaign, 'process_window', complete_batch)
+    offline_campaign.run_offline_campaign.run('test')
+    assert store.items.count_documents({'state': 'completed'}) == 8
+    assert dispatch.call_args.kwargs['countdown'] == 0
+    store.items.update_many({'state': 'pending'}, {'$set': {'state': 'retry_wait',
+                            'next_retry': datetime.now(timezone.utc) + timedelta(seconds=30)}})
+    dispatch.reset_mock()
+    offline_campaign.run_offline_campaign.run('test')
+    assert dispatch.call_args.kwargs['countdown'] == 5
+
+
+def test_default_bdc_window_is_bounded_to_32_tiles(store):
+    from app.tasks import offline_campaign
+    job, token = prepared_bdc(store)
+    renderer = Mock(return_value={'status': 'cached', 'expires_at': time.time() + 100})
+    offline_campaign.process_window(store, job, token, Mock(), bdc_generate=renderer)
+    assert renderer.call_count == 32
+    assert store.items.count_documents({'state': 'completed'}) == 32

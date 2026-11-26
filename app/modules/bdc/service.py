@@ -46,8 +46,9 @@ def encode_image(rgba, format_, quality=90, background="white"):
 
 
 class BdcService:
-    def __init__(self, root):
+    def __init__(self, root, *, background=False):
         self.root = Path(root)
+        self.background = background
 
     @contextmanager
     def remote(self, *, retry_token=None):
@@ -61,7 +62,7 @@ class BdcService:
                 return store
             @contextmanager
             def origin_admission():
-                with coordinator().origin_admission() as check:
+                with coordinator().origin_admission(background=self.background) as check:
                     yield check
             transport = Transport(self.root / "http", metadata_ttl=3600, origin_admission=origin_admission,
                                   origin_resumed=lambda timestamp: coordinator().origin_resumed_since(timestamp),
