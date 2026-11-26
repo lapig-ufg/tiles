@@ -48,7 +48,7 @@ async def test_set_png_background_nao_bloqueia_em_upload_lento(cache, monkeypatc
     upload_started = asyncio.Event()
     upload_release = asyncio.Event()
 
-    async def slow_upload(s3_key, data):
+    async def slow_upload(s3_key, data, *, expires_at):
         upload_started.set()
         await upload_release.wait()
         return True
@@ -72,7 +72,7 @@ async def test_set_png_background_nao_bloqueia_em_upload_lento(cache, monkeypatc
 @pytest.mark.asyncio
 async def test_meta_nao_gravada_quando_upload_falha(cache, monkeypatch):
     """Upload falho não pode deixar meta apontando para objeto inexistente."""
-    async def failing_upload(s3_key, data):
+    async def failing_upload(s3_key, data, *, expires_at):
         return False
 
     monkeypatch.setattr(cache, "_upload_to_s3", failing_upload)
@@ -86,7 +86,7 @@ async def test_meta_nao_gravada_quando_upload_falha(cache, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_meta_gravada_com_s3_synced_1_quando_upload_ok(cache, monkeypatch):
-    async def ok_upload(s3_key, data):
+    async def ok_upload(s3_key, data, *, expires_at):
         return True
 
     monkeypatch.setattr(cache, "_upload_to_s3", ok_upload)
@@ -103,7 +103,7 @@ async def test_meta_gravada_com_s3_synced_1_quando_upload_ok(cache, monkeypatch)
 @pytest.mark.asyncio
 async def test_backpressure_descarta_upload_com_fila_cheia(cache, monkeypatch):
     """Fila de background cheia descarta a persistência em vez de acumular."""
-    async def never_called(s3_key, data):
+    async def never_called(s3_key, data, *, expires_at):
         raise AssertionError("upload não deveria ser agendado")
 
     monkeypatch.setattr(cache, "_upload_to_s3", never_called)

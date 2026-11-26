@@ -1,33 +1,21 @@
-"""
-Utilitário HTTP compartilhado para download de imagens do Earth Engine.
-Extraído de layers.py para reuso entre módulos (tiles, imagery).
-"""
+"""Download HTTP com tentativas limitadas e admissão compartilhada."""
 from __future__ import annotations
 
 import asyncio
-import random
+import math
 
 import aiohttp
 from fastapi import HTTPException
 
 from app.core.config import logger, settings
+from app.core.gee_admission import async_google_request, project_from_url
 
 
 class EarthEngineRateLimitedError(Exception):
-    """Sinaliza 429 persistente do endpoint de tiles do Earth Engine.
-
-    O caller usa essa exceção para acionar rotação de SA + invalidação de
-    URL cacheada + regeneração. Diferencia 429 (recuperável) de falhas HTTP
-    genéricas (irrecuperáveis no mesmo request).
-
-    `sa_name` carrega o nome da SA penalizada quando disponível; útil para
-    logs estruturados no caller. Pode ser None se não houver gee_manager
-    ativo (ex: testes, modo dev).
-    """
-
-    def __init__(self, message: str, sa_name: str | None = None):
+    def __init__(self, message: str, sa_name: str | None = None, retry_after: float = 5):
         super().__init__(message)
         self.sa_name = sa_name
+        self.retry_after = retry_after
 
 
 async def http_get_bytes(
@@ -36,68 +24,39 @@ async def http_get_bytes(
     max_retries: int = 3,
     base_delay: float = 1.0,
     timeout: float | None = None,
+    project: str | None = None,
+    background: bool = False,
 ) -> bytes:
-    """Faz download de bytes via HTTP GET com retry e backoff exponencial.
-
-    Trata 429 (rate limit) com backoff exponencial + jitter. Retorna os
-    bytes da resposta em caso de 200.
-
-    Parâmetros:
-    - `max_retries`: 3 (PR #5) — retry excessivo amplifica carga no EE.
-    - `timeout`: total em segundos por tentativa. Default lê
-      `settings.HTTP_GET_BYTES_TIMEOUT` (20 s) — antes era hard-coded 10 s,
-      insuficiente sob carga.
-
-    Em 429 persistente, lança `EarthEngineRateLimitedError` carregando o
-    nome da SA atual (quando há gee_manager ativo). O caller é responsável
-    por rotacionar a SA + invalidar o cache de URL + regenerar via getMapId.
-    """
     if timeout is None:
-        timeout = settings.get("HTTP_GET_BYTES_TIMEOUT", 20.0)
+        timeout = float(settings.get('HTTP_GET_BYTES_TIMEOUT', 20.0))
+    if not isinstance(max_retries, int) or max_retries < 1:
+        raise ValueError('max_retries deve ser um inteiro positivo')
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError('timeout deve ser positivo e finito')
+    if not math.isfinite(base_delay) or base_delay < 0:
+        raise ValueError('base_delay deve ser não negativo e finito')
     client_timeout = aiohttp.ClientTimeout(total=timeout)
+    budget = project or project_from_url(url)
 
     for attempt in range(max_retries):
         try:
-            async with aiohttp.ClientSession(timeout=client_timeout) as sess, sess.get(url) as resp:
-                if resp.status == 200:
-                    return await resp.read()
-                elif resp.status == 429:
-                    # Registrar métrica fire-and-forget. A rotação da SA fica
-                    # com o caller, que tem o contexto da URL e do cache key.
-                    sa_name: str | None = None
-                    try:
-                        from app.core.gee_auth import get_gee_manager
-                        mgr = get_gee_manager()
-                        if mgr:
-                            mgr.report_http_429()
-                            sa_name = mgr.current_sa_name
-                    except Exception:
-                        pass
-
-                    if attempt < max_retries - 1:
-                        delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                        logger.warning(
-                            f"Rate limited (429). Retrying in {delay:.1f}s… "
-                            f"(attempt {attempt + 1}/{max_retries})"
-                        )
-                        await asyncio.sleep(delay)
-                        continue
-                    else:
-                        logger.error("Max retries reached for rate limiting")
-                        raise EarthEngineRateLimitedError(
-                            "Earth Engine rate-limited after retries",
-                            sa_name=sa_name,
-                        )
-                else:
-                    raise HTTPException(resp.status, f"Erro ao buscar recurso: {resp.reason}")
-        except aiohttp.ClientError as e:
-            if attempt < max_retries - 1:
-                delay = base_delay * (2 ** attempt)
-                logger.warning(f"Connection error: {e}. Retrying in {delay:.1f}s…")
-                await asyncio.sleep(delay)
-                continue
-            else:
-                raise HTTPException(
-                    status_code=503,
-                    detail="Unable to connect to Earth Engine service",
+            async with async_google_request(project=budget, background=background) as lease:
+                async with aiohttp.ClientSession(timeout=client_timeout) as session:
+                    async with session.get(url, allow_redirects=False) as response:
+                        await lease.aresponse(response.status, response.headers.get('Retry-After'))
+                        if response.status == 200:
+                            return await response.read()
+                        if response.status != 429:
+                            raise HTTPException(response.status, 'Erro ao buscar recurso no Earth Engine')
+            if attempt == max_retries - 1:
+                raise EarthEngineRateLimitedError(
+                    'Limite de chamadas ao Earth Engine excedido', retry_after=lease.retry_after,
                 )
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            if attempt == max_retries - 1:
+                raise HTTPException(503, 'Serviço do Earth Engine indisponível') from exc
+            delay = base_delay * (2 ** attempt)
+            logger.warning('Falha de conexão ao Earth Engine; tentativa {}/{}', attempt + 1, max_retries)
+            await asyncio.sleep(delay)
+
+    raise RuntimeError('Download encerrado sem resposta')

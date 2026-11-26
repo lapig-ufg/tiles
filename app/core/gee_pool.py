@@ -27,6 +27,7 @@ import redis
 from google.oauth2 import service_account
 
 from app.core.config import settings, logger, REDIS_URL
+from app.core.gee_admission import initialize_gee_transport
 
 
 # ---------------------------------------------------------------------------
@@ -476,7 +477,7 @@ class WorkerGEEManager:
 
         with self._init_lock:
             self._current_sa = self._pool.acquire(worker_id)
-            ee.Initialize(self._current_sa.credentials)
+            initialize_gee_transport(self._current_sa.credentials)
             logger.info(
                 f"GEE inicializado para worker {worker_id} "
                 f"com SA {self._current_sa.name}"
@@ -530,7 +531,7 @@ class WorkerGEEManager:
             )
 
             # Re-inicializar o Earth Engine com nova SA
-            ee.Initialize(self._current_sa.credentials)
+            initialize_gee_transport(self._current_sa.credentials)
             logger.info(
                 f"Worker {self._worker_id} rotacionou: "
                 f"{old_sa} → {self._current_sa.name}"
@@ -579,55 +580,21 @@ class WorkerGEEManager:
 # ---------------------------------------------------------------------------
 
 def gee_retry(max_rotations: int | None = None) -> Callable:
-    """Decorator que envolve funções síncronas do Earth Engine com retry.
+    """Preserva a identidade do SDK enquanto a operação síncrona está em execução.
 
-    Em caso de ee.EEException com 429 ou quota exceeded:
-    1. Rotaciona a SA do worker atual
-    2. Re-executa a função com as novas credenciais
-    3. Repete até max_rotations (padrão: GEE_SA_MAX_RETRIES do settings)
-
-    Uso:
-        @gee_retry()
-        def _create_s2_layer_sync(geom, dates, vis):
-            ...
+    As retentativas do SDK passam pela admissão distribuída no transporte.
+    ``max_rotations`` é aceito para compatibilidade; quota não altera identidade.
     """
     def decorator(fn: Callable) -> Callable:
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             from app.core.gee_auth import get_gee_manager
 
-            retries = max_rotations
-            if retries is None:
-                retries = settings.get("GEE_SA_MAX_RETRIES", 2)
-
             manager = get_gee_manager()
-
-            for attempt in range(retries + 1):
-                try:
-                    if manager:
-                        with manager.init_lock:
-                            return fn(*args, **kwargs)
-                    else:
-                        return fn(*args, **kwargs)
-                except ee.EEException as exc:
-                    error_msg = str(exc).lower()
-                    is_quota_error = (
-                        "429" in error_msg
-                        or "quota" in error_msg
-                        or "too many requests" in error_msg
-                        or "rate limit" in error_msg
-                    )
-
-                    if is_quota_error and attempt < retries and manager:
-                        logger.warning(
-                            f"EE quota error na tentativa {attempt + 1}/{retries + 1}: "
-                            f"{exc}. Rotacionando SA..."
-                        )
-                        manager.rotate_on_429()
-                        continue
-
-                    # Não é erro de quota ou esgotou retries — propagar
-                    raise
+            if manager:
+                with manager.init_lock:
+                    return fn(*args, **kwargs)
+            return fn(*args, **kwargs)
 
         return wrapper
     return decorator

@@ -20,7 +20,7 @@ Uso:
 from __future__ import annotations
 
 import asyncio
-import random
+import math
 from typing import Any
 
 import aiohttp
@@ -28,6 +28,8 @@ import ee
 import google.auth.transport.requests
 
 from app.core.config import settings, logger
+from app.core.gee_admission import async_google_request
+from app.utils.http import EarthEngineRateLimitedError
 
 
 _BASE_URL = "https://earthengine.googleapis.com/v1"
@@ -136,91 +138,47 @@ async def compute_value(
     Raises:
         ee.EEException: Em caso de erro permanente do Earth Engine.
     """
+    if not isinstance(max_retries, int) or max_retries < 1:
+        raise ValueError('max_retries deve ser um inteiro positivo')
+    if not math.isfinite(base_delay) or base_delay < 0:
+        raise ValueError('base_delay deve ser não negativo e finito')
     creds = _resolve_credentials(credentials)
     proj = project or _resolve_project(creds)
-
-    # Serializar expressão para Cloud API
     serialized = ee.serializer.encode(expression, for_cloud_api=True)
-
     url = f"{_BASE_URL}/projects/{proj}/value:compute"
     body = {"expression": serialized}
-
     session = await _get_session()
 
     for attempt in range(max_retries):
         await _ensure_valid_token(creds)
-
         headers = {
             "Authorization": f"Bearer {creds.token}",
             "Content-Type": "application/json",
-            # Header de projeto para billing — habilita cotas de high-volume
-            # quando o projeto GCP tem billing ativo vinculado ao EE.
             "X-Goog-User-Project": proj,
         }
-
         try:
-            async with session.post(url, json=body, headers=headers) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get("result")
-
-                if resp.status == 429:
-                    # Na 2ª tentativa 429 (attempt >= 1), rotacionar a SA do
-                    # worker para a próxima tentativa — evita insistir na
-                    # mesma conta sobrecarregada. Só rotaciona quando usamos
-                    # a SA do pool (credentials não fornecida externamente).
-                    rotated = False
-                    if attempt >= 1 and credentials is None:
-                        loop = asyncio.get_event_loop()
-                        rotated = await loop.run_in_executor(None, _rotate_sa_on_429)
-                        if rotated:
-                            creds = _resolve_credentials(None)
-                            new_proj = project or _resolve_project(creds)
-                            if new_proj != proj:
-                                proj = new_proj
-                                url = f"{_BASE_URL}/projects/{proj}/value:compute"
-
-                    if not rotated:
-                        _report_429()
-
-                    if attempt < max_retries - 1:
-                        delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                        logger.warning(
-                            f"EE REST API 429 "
-                            f"(SA {'rotacionada' if rotated else 'mantida'}). "
-                            f"Tentativa {attempt + 1}/{max_retries}, "
-                            f"retry em {delay:.1f}s"
-                        )
-                        await asyncio.sleep(delay)
+            async with async_google_request(project=proj, operation='compute') as lease:
+                async with session.post(url, json=body, headers=headers, allow_redirects=False) as response:
+                    await lease.aresponse(response.status, response.headers.get('Retry-After'))
+                    if response.status == 200:
+                        return (await response.json()).get('result')
+                    if response.status == 401:
+                        creds.expiry = None
                         continue
-
-                    raise ee.EEException(
-                        f"Rate limit excedido após {max_retries} tentativas"
-                    )
-
-                if resp.status == 401:
-                    # Token expirado — forçar refresh e retentar
-                    creds.expiry = None
-                    await _ensure_valid_token(creds)
-                    continue
-
-                # Outros erros
-                error_text = await resp.text()
-                raise ee.EEException(
-                    f"EE REST API erro {resp.status}: {error_text}"
+                    if response.status != 429:
+                        raise ee.EEException(f'EE REST API erro {response.status}')
+            if attempt == max_retries - 1:
+                raise EarthEngineRateLimitedError(
+                    'Limite de computação no Earth Engine excedido',
+                    retry_after=lease.retry_after,
                 )
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            if attempt == max_retries - 1:
+                raise ee.EEException('Falha de conexão ao Earth Engine') from exc
+            logger.warning('Falha de conexão ao Earth Engine; tentativa {}/{}', attempt + 1, max_retries)
+            await asyncio.sleep(base_delay * (2 ** attempt))
 
-        except aiohttp.ClientError as exc:
-            if attempt < max_retries - 1:
-                delay = base_delay * (2 ** attempt)
-                logger.warning(
-                    f"Erro de conexão EE REST: {exc}. Retry em {delay:.1f}s"
-                )
-                await asyncio.sleep(delay)
-                continue
-            raise ee.EEException(f"Erro de conexão: {exc}")
-
-    raise ee.EEException("Máximo de tentativas excedido para computação EE")
+    raise ee.EEException('Máximo de tentativas excedido para computação EE')
 
 
 # ---------------------------------------------------------------------------
@@ -250,35 +208,3 @@ async def compute_parallel(*expressions, credentials=None, project: str | None =
         for expr in expressions
     ]
     return await asyncio.gather(*tasks)
-
-
-# ---------------------------------------------------------------------------
-# Helpers internos
-# ---------------------------------------------------------------------------
-
-def _report_429() -> None:
-    """Registra métrica de 429 no pool de SAs (fire-and-forget)."""
-    try:
-        from app.core.gee_auth import get_gee_manager
-        mgr = get_gee_manager()
-        if mgr:
-            mgr.report_http_429()
-    except Exception:
-        pass
-
-
-def _rotate_sa_on_429() -> bool:
-    """Solicita rotação de SA ao manager do worker. Retorna True se rotacionou.
-
-    Executado em run_in_executor pois rotate_on_429 é síncrono e chama
-    ee.Initialize(), bloqueante por alguns segundos.
-    """
-    try:
-        from app.core.gee_auth import get_gee_manager
-        mgr = get_gee_manager()
-        if mgr:
-            mgr.rotate_on_429()
-            return True
-    except Exception as exc:
-        logger.warning(f"Falha ao rotacionar SA no 429 do REST API: {exc}")
-    return False

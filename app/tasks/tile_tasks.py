@@ -5,19 +5,20 @@ Handles all tile-related operations including generation, mosaics, and batch pro
 import asyncio
 import hashlib
 import math
+import json
 import urllib.request
+from urllib.error import HTTPError
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Dict, Any, List
 
-import aiohttp
 import ee
-import redis as sync_redis
 from loguru import logger
 
-from app.cache.cache import set_png, aset_png
-from app.core.config import settings as _settings
 from app.core.gee_pool import gee_retry
+from app.core.gee_admission import call_gee, google_request, project_from_url
+from app.utils.http import http_get_bytes
+from app.utils.ee_http_sync import urlopen_without_redirects
 from app.tasks.celery_app import celery_app
 from app.visualization.visParam import get_landsat_collection, get_landsat_vis_params, VISPARAMS
 
@@ -27,32 +28,36 @@ MAX_CONCURRENT_TILES = 50
 GEE_TIMEOUT = 300  # 5 minutes
 PNG_TTL = 30 * 24 * 3600  # 30 dias
 
-# Pool Redis síncrono (module-level) — reutilizado por todas as tasks no worker
-_REDIS_URL = _settings.get("REDIS_URL", "redis://valkey:6379")
-_redis_pool = sync_redis.ConnectionPool.from_url(_REDIS_URL, max_connections=20)
-
-
-def _get_sync_redis():
-    """Retorna cliente Redis síncrono usando o pool compartilhado."""
-    return sync_redis.Redis(connection_pool=_redis_pool)
-
-
 def _save_tile_to_redis(cache_key: str, tile_data: bytes):
-    """Salva tile no Redis síncrono via pool compartilhado."""
-    r = _get_sync_redis()
-    try:
-        hash_prefix = hashlib.md5(cache_key.encode()).hexdigest()[:2]
-        s3_key = f"tiles/{hash_prefix}/{cache_key}"
-        r.hset(f"tile:{cache_key}", mapping={
-            "s3_key": s3_key,
-            "size": str(len(tile_data)),
-            "created": datetime.now().isoformat(),
-            "content_type": "image/png",
-            "s3_synced": "0",
-        })
-        r.expire(f"tile:{cache_key}", PNG_TTL)
-    finally:
-        r.close()
+    from app.cache.sync_cache import persist_png_sync
+
+    persist_png_sync(cache_key, tile_data, PNG_TTL)
+
+
+def _annual_tile_key(layer: str, params: Dict[str, Any], x: int, y: int, z: int,
+                     mosaic_bounds: Dict[str, float] | None = None) -> str:
+    rendering = {
+        "year": params.get("year", datetime.now().year),
+        "vis_param": params.get("vis_param", "tvi-false" if layer == "landsat" else "tvi-red"),
+        "bounds": mosaic_bounds,
+    }
+    identity = hashlib.sha256(json.dumps(rendering, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return f"legacy-annual/{layer}/{identity}/{z}/{x}_{y}.png"
+
+
+def _download_tile_sync(url: str) -> bytes:
+    with google_request(project=project_from_url(url), background=True) as lease:
+        try:
+            request = urllib.request.Request(url)
+            with urlopen_without_redirects(request, timeout=60) as response:
+                lease.response(response.status, response.headers.get("Retry-After"))
+                return response.read()
+        except HTTPError as error:
+            try:
+                lease.response(error.code, error.headers.get("Retry-After") if error.headers else None)
+            finally:
+                error.close()
+            raise
 
 
 @celery_app.task(bind=True, max_retries=3, queue='standard')
@@ -90,12 +95,9 @@ def tile_generate(self, z: int, x: int, y: int, layer: str,
         
         # Download tile (síncrono)
         tile_download_url = tile_url.format(x=x, y=y, z=z)
-        req = urllib.request.Request(tile_download_url)
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            tile_data = resp.read()
+        tile_data = _download_tile_sync(tile_download_url)
 
-        # Save to cache via pool compartilhado
-        cache_key = f"{layer}/{z}/{x}/{y}"
+        cache_key = _annual_tile_key(layer, params, x, y, z)
         _save_tile_to_redis(cache_key, tile_data)
 
         return {
@@ -108,7 +110,7 @@ def tile_generate(self, z: int, x: int, y: int, layer: str,
         
     except Exception as e:
         logger.error(f"Error generating tile {z}/{x}/{y}: {e}")
-        raise self.retry(exc=e, countdown=2 ** self.request.retries)
+        raise self.retry(exc=e, countdown=max(2 ** self.request.retries, getattr(e, "retry_after", 0)))
 
 
 @celery_app.task(bind=True, max_retries=2, queue='standard')
@@ -135,38 +137,29 @@ def tile_generate_batch(self, tiles: List[Dict[str, Any]], layer: str,
             "tiles": []
         }
         
-        # Process tiles with thread pool
         with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = []
-            
-            for tile in tiles:
-                future = executor.submit(
-                    _process_single_tile,
-                    tile['x'], tile['y'], tile['z'],
-                    layer, params
-                )
-                futures.append((tile, future))
-            
-            # Collect results
-            for tile, future in futures:
-                try:
-                    result = future.result(timeout=GEE_TIMEOUT)
+            for start in range(0, len(tiles), 5):
+                futures = [
+                    (tile, executor.submit(_process_single_tile, tile['x'], tile['y'], tile['z'], layer, params))
+                    for tile in tiles[start:start + 5]
+                ]
+                for tile, future in futures:
+                    try:
+                        result = future.result(timeout=GEE_TIMEOUT)
+                    except Exception as e:
+                        logger.error(f"Failed to process tile {tile}: {e}")
+                        result = {
+                            "status": "error", "tile": f"{tile['z']}/{tile['x']}/{tile['y']}",
+                            "error": str(e),
+                        }
                     results["tiles"].append(result)
-                    results["successful"] += 1
-                except Exception as e:
-                    logger.error(f"Failed to process tile {tile}: {e}")
-                    results["failed"] += 1
-                    results["tiles"].append({
-                        "status": "error",
-                        "tile": f"{tile['z']}/{tile['x']}/{tile['y']}",
-                        "error": str(e)
-                    })
-        
+                    results["successful" if result.get("status") == "success" else "failed"] += 1
+
         return results
         
     except Exception as e:
         logger.error(f"Error in batch tile generation: {e}")
-        raise self.retry(exc=e, countdown=60)
+        raise self.retry(exc=e, countdown=max(60, getattr(e, "retry_after", 0)))
 
 
 @celery_app.task(bind=True, max_retries=3, queue='high_priority')
@@ -204,7 +197,7 @@ def tile_generate_mosaic(self, bounds: Dict[str, float], zoom: int,
         # Process tiles from mosaic
         from app.tasks._loop import run_async
         results = run_async(
-            _process_mosaic_tiles(mosaic_url, tiles, layer)
+            _process_mosaic_tiles(mosaic_url, tiles, layer, params, bounds)
         )
         
         successful = sum(1 for r in results if r.get("status") == "success")
@@ -221,7 +214,7 @@ def tile_generate_mosaic(self, bounds: Dict[str, float], zoom: int,
         
     except Exception as e:
         logger.error(f"Error generating mosaic: {e}")
-        raise self.retry(exc=e, countdown=2 ** self.request.retries)
+        raise self.retry(exc=e, countdown=max(2 ** self.request.retries, getattr(e, "retry_after", 0)))
 
 
 # Helper functions
@@ -275,7 +268,7 @@ def _generate_landsat_tile(bounds: Dict[str, float], params: Dict[str, Any]) -> 
     vis_params = get_landsat_vis_params(
         params.get('vis_param', 'tvi-false'),
         collection_name
-    )
+    ).copy()
 
     # Converter listas para strings comma-separated (requisito do GEE getMapId)
     for key in ("min", "max", "gamma"):
@@ -291,7 +284,7 @@ def _generate_landsat_tile(bounds: Dict[str, float], params: Dict[str, Any]) -> 
     image = collection.mosaic()
     
     # Get URL
-    map_id = ee.data.getMapId({"image": image, **vis_params})
+    map_id = call_gee(ee.data.getMapId, {"image": image, **vis_params}, background=True)
     return map_id["tile_fetcher"].url_format
 
 
@@ -317,7 +310,7 @@ def _generate_sentinel2_tile(bounds: Dict[str, float], params: Dict[str, Any]) -
     image = s2.mosaic()
     
     # Get URL
-    map_id = ee.data.getMapId({"image": image, **vis["visparam"]})
+    map_id = call_gee(ee.data.getMapId, {"image": image, **vis["visparam"]}, background=True)
     return map_id["tile_fetcher"].url_format
 
 
@@ -332,59 +325,43 @@ def _create_sentinel2_mosaic(bounds: Dict[str, float], params: Dict[str, Any]) -
 
 
 async def _download_tile(url: str, x: int, y: int, z: int) -> bytes:
-    """Download tile from URL"""
     tile_url = url.format(x=x, y=y, z=z)
-    
-    async with aiohttp.ClientSession() as session:
-        async with session.get(tile_url) as resp:
-            if resp.status != 200:
-                raise Exception(f"Failed to download tile: HTTP {resp.status}")
-            return await resp.read()
+    return await http_get_bytes(tile_url, project=project_from_url(tile_url), background=True)
 
 
-async def _process_mosaic_tiles(mosaic_url: str, tiles: List[Dict[str, int]], 
-                               layer: str) -> List[Dict[str, Any]]:
-    """Process tiles from a mosaic URL"""
+async def _process_mosaic_tiles(mosaic_url: str, tiles: List[Dict[str, int]],
+                               layer: str, params: Dict[str, Any] | None = None,
+                               bounds: Dict[str, float] | None = None) -> List[Dict[str, Any]]:
     results = []
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_TILES)
-    
+
     async def process_tile(tile):
-        async with semaphore:
-            try:
-                tile_data = await _download_tile(
-                    mosaic_url, tile['x'], tile['y'], tile['z']
-                )
-                
-                # Save to cache
-                cache_key = f"{layer}/{tile['z']}/{tile['x']}/{tile['y']}"
-                await aset_png(cache_key, tile_data)
-                
-                return {
-                    "status": "success",
-                    "tile": f"{tile['z']}/{tile['x']}/{tile['y']}",
-                    "size": len(tile_data)
-                }
-            except Exception as e:
-                logger.error(f"Error processing tile {tile}: {e}")
-                return {
-                    "status": "error",
-                    "tile": f"{tile['z']}/{tile['x']}/{tile['y']}",
-                    "error": str(e)
-                }
-    
-    # Process all tiles concurrently
-    tasks = [process_tile(tile) for tile in tiles]
-    results = await asyncio.gather(*tasks)
-    
+        try:
+            tile_data = await _download_tile(mosaic_url, tile['x'], tile['y'], tile['z'])
+            cache_key = _annual_tile_key(layer, params or {}, tile['x'], tile['y'], tile['z'], bounds)
+            await asyncio.to_thread(_save_tile_to_redis, cache_key, tile_data)
+            return {
+                "status": "success",
+                "tile": f"{tile['z']}/{tile['x']}/{tile['y']}",
+                "size": len(tile_data),
+            }
+        except Exception as e:
+            logger.error(f"Error processing tile {tile}: {e}")
+            return {
+                "status": "error",
+                "tile": f"{tile['z']}/{tile['x']}/{tile['y']}",
+                "error": str(e),
+            }
+
+    for start in range(0, len(tiles), MAX_CONCURRENT_TILES):
+        results.extend(await asyncio.gather(*(
+            process_tile(tile) for tile in tiles[start:start + MAX_CONCURRENT_TILES]
+        )))
     return results
 
 
 def _process_single_tile(x: int, y: int, z: int, layer: str,
                         params: Dict[str, Any]) -> Dict[str, Any]:
-    """Process a single tile synchronously (for thread pool in Celery prefork).
-
-    Usa pool Redis síncrono compartilhado (module-level).
-    """
+    """Processa um tile anual e confirma sua persistência antes de retornar sucesso."""
     try:
         bounds = _get_tile_bounds(x, y, z)
 
@@ -397,12 +374,9 @@ def _process_single_tile(x: int, y: int, z: int, layer: str,
 
         # Download tile (síncrono)
         tile_url = tile_url_template.format(x=x, y=y, z=z)
-        req = urllib.request.Request(tile_url)
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            tile_data = resp.read()
+        tile_data = _download_tile_sync(tile_url)
 
-        # Save to cache via pool compartilhado
-        cache_key = f"{layer}/{z}/{x}/{y}"
+        cache_key = _annual_tile_key(layer, params, x, y, z)
         _save_tile_to_redis(cache_key, tile_data)
 
         return {

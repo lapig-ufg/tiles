@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import math
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -23,7 +24,8 @@ from app.cache.cache import (
     atile_lock as tile_lock,
 )
 from app.core.config import logger, settings
-from app.core.errors import generate_error_image
+from app.core.errors import generate_error_image, tile_error_response
+from app.core.gee_admission import GoogleAdmissionError
 from app.middleware.rate_limiter import limit_embedding
 from app.utils.ee_tile_fetch import fetch_tile_with_rotation
 from app.utils.http import EarthEngineRateLimitedError
@@ -319,6 +321,8 @@ async def serve_tile(
                 loop = asyncio.get_running_loop()
                 layer_url = await loop.run_in_executor(ee_executor, _build_and_get_url)
                 await set_meta(meta_key, {"url": layer_url, "date": datetime.now().isoformat()}, META_TTL)
+            except GoogleAdmissionError as exc:
+                return tile_error_response.from_exception(exc)
             except Exception:
                 logger.exception(f"Erro ao criar layer EE para job {job_id}, produto {product}")
                 error_img = generate_error_image("Erro ao gerar tile")
@@ -346,6 +350,8 @@ async def serve_tile(
                 media_type="image/png",
                 headers={"X-Cache-Status": "MISS", "X-Response-Time": f"{elapsed:.0f}ms"},
             )
+        except GoogleAdmissionError as exc:
+            return tile_error_response.from_exception(exc)
         except EarthEngineRateLimitedError:
             logger.warning(
                 f"tile_embedding_maps_429_persistent job={job_id} product={product} "
@@ -467,6 +473,14 @@ async def get_stats(job_id: str, product: str = Query("rgb_embedding")):
             total_pixels=result["total_pixels"],
             coverage=result["coverage"],
         )
+    except GoogleAdmissionError as exc:
+        raise HTTPException(
+            503, "Earth Engine temporariamente indisponível",
+            headers={
+                "Retry-After": str(math.ceil(exc.retry_after)),
+                "Cache-Control": "no-store, must-revalidate",
+            },
+        ) from exc
     except Exception:
         logger.exception(f"Erro ao calcular stats para job {job_id}")
         raise HTTPException(500, "Erro ao calcular estatisticas")

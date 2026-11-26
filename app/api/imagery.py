@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import math
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -26,6 +27,7 @@ from app.cache.cache import (
 )
 from app.core.config import logger, settings
 from app.core.errors import tile_error_response
+from app.core.gee_admission import GoogleAdmissionError
 from app.core.metrics import observe_cache_hit
 from app.middleware.rate_limiter import limit_imagery
 from app.core.gee_pool import gee_retry
@@ -370,6 +372,14 @@ async def catalog(
             raw = await _list_landsat_catalog(
                 region, start, end, sort, maxCloud, limit, offset,
             )
+    except GoogleAdmissionError as exc:
+        raise HTTPException(
+            503, "Earth Engine temporariamente indisponível",
+            headers={
+                "Retry-After": str(math.ceil(exc.retry_after)),
+                "Cache-Control": "no-store, must-revalidate",
+            },
+        ) from exc
     except Exception:
         logger.exception("Erro ao consultar catálogo EE")
         raise HTTPException(502, "Erro ao consultar Earth Engine")
@@ -504,7 +514,7 @@ async def image_tile(
             resp = tile_error_response(status_code=503, reason="ee_unavailable")
             resp.headers["X-Image-Id"] = imageId
             return resp
-        except HTTPException as exc:
+        except (GoogleAdmissionError, HTTPException) as exc:
             logger.exception(f"Erro ao baixar tile da imagem {imageId}")
             resp = tile_error_response.from_exception(exc)
             resp.headers["X-Image-Id"] = imageId

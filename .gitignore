@@ -9,6 +9,7 @@ logs/
 # Distribution / packaging
 .Python
 cache/
+!app/cache/
 build/
 develop-eggs/
 dist/

@@ -1,144 +1,65 @@
-"""Cobre o helper que orquestra rotação de SA + invalidação de cache +
-regeneração de URL em 429 do download de tile.
+import importlib
 
-Caminho feliz: passthrough simples para http_get_bytes.
-Caminho de erro: 429 → rotate + delete_meta + url_factory + retry único.
-"""
-from __future__ import annotations
-
-from unittest.mock import AsyncMock, MagicMock, patch
-
+import fakeredis
 import pytest
+from aiohttp import web
+from fastapi import HTTPException
 
-from app.utils.http import EarthEngineRateLimitedError
 
-
-@pytest.fixture
-def fake_manager():
-    mgr = MagicMock()
-    mgr.current_sa_name = "sa-old@proj"
-    mgr.rotate_on_429 = MagicMock(
-        side_effect=lambda *_a, **_k: setattr(mgr, "current_sa_name", "sa-new@proj")
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status', [200, 401, 429, 503])
+async def test_tile_preserves_url_and_limits_external_work(status, unused_tcp_port, monkeypatch):
+    admission = importlib.import_module('app.core.gee_admission')
+    coordinator = admission.RedisAdmission(
+        fakeredis.FakeRedis(decode_responses=True), admission.AdmissionLimits(wait_seconds=0),
     )
-    return mgr
+    monkeypatch.setattr(admission, 'get_admission_controller', lambda: coordinator)
+    cache = importlib.import_module('app.cache.cache')
+    metadata = {'tile/key': {'url': 'cached-url'}}
 
+    async def delete_meta(key):
+        metadata.pop(key, None)
 
-@pytest.mark.asyncio
-async def test_happy_path_no_rotation(fake_manager):
-    """200 no primeiro shot — não rotaciona, não invalida cache, não regenera."""
-    from app.utils import ee_tile_fetch
+    async def set_meta(key, value):
+        metadata[key] = value
 
-    url_factory = AsyncMock()
+    monkeypatch.setattr(cache, 'adelete_meta', delete_meta)
+    monkeypatch.setattr(cache, 'aset_meta', set_meta)
+    fetch = importlib.import_module('app.utils.ee_tile_fetch').fetch_tile_with_rotation
+    calls = []
+    generated = []
 
-    with patch.object(ee_tile_fetch, "http_get_bytes", AsyncMock(return_value=b"PNG")) as fake_get, \
-         patch.object(ee_tile_fetch, "adelete_meta", AsyncMock()) as fake_del, \
-         patch.object(ee_tile_fetch, "aset_meta", AsyncMock()) as fake_set, \
-         patch.object(ee_tile_fetch, "get_gee_manager", return_value=fake_manager):
+    async def handle(request):
+        calls.append(request.path)
+        return web.Response(status=status, body=b'PNG', headers={'Retry-After': '30'})
 
-        result = await ee_tile_fetch.fetch_tile_with_rotation(
-            cache_key="landsat_MONTH_2007_7_landsat-tvi-false/abc",
-            cached_url="https://ee.googleapis.com/.../{z}/{x}/{y}",
-            url_factory=url_factory,
-            x=1, y=2, z=10,
-            layer="landsat",
+    async def factory():
+        generated.append(True)
+        return 'regenerated-url'
+
+    app = web.Application()
+    app.router.add_get('/{z}/{x}/{y}', handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    await web.TCPSite(runner, '127.0.0.1', unused_tcp_port).start()
+    try:
+        arguments = dict(
+            cache_key='tile/key',
+            cached_url=f'http://127.0.0.1:{unused_tcp_port}/{{z}}/{{x}}/{{y}}',
+            url_factory=factory, x=1, y=2, z=3, layer='landsat',
         )
+        if status == 200:
+            assert await fetch(**arguments) == b'PNG'
+        elif status == 429:
+            with pytest.raises(admission.GoogleAdmissionError):
+                await fetch(**arguments)
+        else:
+            with pytest.raises(HTTPException) as error:
+                await fetch(**arguments)
+            assert error.value.status_code == status
+    finally:
+        await runner.cleanup()
 
-    assert result == b"PNG"
-    fake_get.assert_awaited_once()
-    url_factory.assert_not_called()
-    fake_del.assert_not_called()
-    fake_set.assert_not_called()
-    fake_manager.rotate_on_429.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_429_triggers_full_rotation_cycle(fake_manager):
-    """429 na primeira chamada → rotate + delete_meta + url_factory + retry."""
-    from app.utils import ee_tile_fetch
-
-    url_factory = AsyncMock(return_value="https://ee.googleapis.com/.../new/{z}/{x}/{y}")
-
-    # Primeira chamada lança 429; segunda devolve bytes.
-    fake_get = AsyncMock(side_effect=[
-        EarthEngineRateLimitedError("rate limited", sa_name="sa-old@proj"),
-        b"PNG-NEW",
-    ])
-
-    with patch.object(ee_tile_fetch, "http_get_bytes", fake_get), \
-         patch.object(ee_tile_fetch, "adelete_meta", AsyncMock()) as fake_del, \
-         patch.object(ee_tile_fetch, "aset_meta", AsyncMock()) as fake_set, \
-         patch.object(ee_tile_fetch, "get_gee_manager", return_value=fake_manager):
-
-        result = await ee_tile_fetch.fetch_tile_with_rotation(
-            cache_key="landsat_MONTH_2007_7_landsat-tvi-false/abc",
-            cached_url="https://ee.googleapis.com/.../old/{z}/{x}/{y}",
-            url_factory=url_factory,
-            x=1, y=2, z=10,
-            layer="landsat",
-        )
-
-    assert result == b"PNG-NEW"
-    assert fake_get.await_count == 2
-    fake_manager.rotate_on_429.assert_called_once_with(trigger="http_429")
-    fake_del.assert_awaited_once_with("landsat_MONTH_2007_7_landsat-tvi-false/abc")
-    url_factory.assert_awaited_once()
-    fake_set.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_persistent_429_raises_after_one_regeneration(fake_manager):
-    """Se o retry após regeneração também devolve 429, propaga a exceção
-    em vez de tentar uma terceira rodada — getMapId é caro e amplificar
-    custa mais que entregar 503."""
-    from app.utils import ee_tile_fetch
-
-    url_factory = AsyncMock(return_value="https://ee.googleapis.com/.../new/{z}/{x}/{y}")
-
-    fake_get = AsyncMock(side_effect=[
-        EarthEngineRateLimitedError("rate limited", sa_name="sa-old@proj"),
-        EarthEngineRateLimitedError("rate limited again", sa_name="sa-new@proj"),
-    ])
-
-    with patch.object(ee_tile_fetch, "http_get_bytes", fake_get), \
-         patch.object(ee_tile_fetch, "adelete_meta", AsyncMock()), \
-         patch.object(ee_tile_fetch, "aset_meta", AsyncMock()), \
-         patch.object(ee_tile_fetch, "get_gee_manager", return_value=fake_manager):
-
-        with pytest.raises(EarthEngineRateLimitedError):
-            await ee_tile_fetch.fetch_tile_with_rotation(
-                cache_key="landsat_MONTH_2007_7_landsat-tvi-false/abc",
-                cached_url="https://ee.googleapis.com/.../old/{z}/{x}/{y}",
-                url_factory=url_factory,
-                x=1, y=2, z=10,
-                layer="landsat",
-            )
-
-    assert fake_get.await_count == 2
-    fake_manager.rotate_on_429.assert_called_once()  # rotação única
-
-
-@pytest.mark.asyncio
-async def test_url_factory_failure_propagates(fake_manager):
-    """Se url_factory falha durante regeneração, propaga limpo — sem deixar
-    cache em estado inconsistente. delete_meta já foi chamado, mas isso é
-    aceitável (idempotente; próximo request regenera)."""
-    from app.utils import ee_tile_fetch
-
-    factory_exc = RuntimeError("getMapId failed: project quota exhausted")
-    url_factory = AsyncMock(side_effect=factory_exc)
-
-    fake_get = AsyncMock(side_effect=EarthEngineRateLimitedError("rate limited"))
-
-    with patch.object(ee_tile_fetch, "http_get_bytes", fake_get), \
-         patch.object(ee_tile_fetch, "adelete_meta", AsyncMock()), \
-         patch.object(ee_tile_fetch, "aset_meta", AsyncMock()), \
-         patch.object(ee_tile_fetch, "get_gee_manager", return_value=fake_manager):
-
-        with pytest.raises(RuntimeError, match="getMapId failed"):
-            await ee_tile_fetch.fetch_tile_with_rotation(
-                cache_key="landsat_MONTH_2007_7/abc",
-                cached_url="https://ee.googleapis.com/.../old/{z}/{x}/{y}",
-                url_factory=url_factory,
-                x=1, y=2, z=10,
-                layer="landsat",
-            )
+    assert calls == ['/3/1/2']
+    assert generated == []
+    assert metadata == {'tile/key': {'url': 'cached-url'}}

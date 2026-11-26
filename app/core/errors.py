@@ -1,12 +1,15 @@
 import io
+import math
 from functools import lru_cache
 from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
 from fastapi import HTTPException
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
+from app.cache.errors import TileLockUnavailable
 from app.core.config import logger
+from app.core.gee_admission import GoogleAdmissionError
 
 
 _NO_STORE = "no-store, must-revalidate"
@@ -77,6 +80,11 @@ class _TileErrorResponseCallable:
 
     def from_exception(self, exc: BaseException) -> Response:
         """Infere status e reason a partir do tipo da exceção."""
+        if isinstance(exc, TileLockUnavailable):
+            return self(status_code=503, reason="cache_busy", retry_after=1)
+        if isinstance(exc, GoogleAdmissionError):
+            return self(status_code=503, reason="gee_busy", retry_after=math.ceil(exc.retry_after))
+
         # ee.EEException com "no band named" → 500/ee_band_missing.
         # Import local evita custo de import global e permite stubs de teste.
         try:
@@ -97,6 +105,22 @@ class _TileErrorResponseCallable:
 
 
 tile_error_response = _TileErrorResponseCallable()
+
+
+async def capacity_exception_handler(request, exc):
+    if isinstance(exc, GoogleAdmissionError):
+        reason, retry_after = "gee_busy", math.ceil(exc.retry_after)
+    else:
+        reason, retry_after = "cache_busy", 1
+    return JSONResponse(
+        status_code=503,
+        content={"detail": reason},
+        headers={
+            "Cache-Control": _NO_STORE,
+            "Retry-After": str(retry_after),
+            "X-Error-Reason": reason,
+        },
+    )
 
 
 class AppError(Exception):

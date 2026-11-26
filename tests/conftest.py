@@ -25,6 +25,7 @@ os.environ.setdefault("SKIP_GEE_INIT", "true")
 # Fixtures de integração usam `reset_app_imports()` para limpar sys.modules
 # preservando estes.
 PROTECTED_MODULES: tuple[str, ...] = (
+    "app.cache.metrics",
     "app.core.metrics",        # Counter/Histogram não permitem duplicate registration
     "app.middleware.request_id",  # ContextVar identity precisa ser estável entre fixtures
 )

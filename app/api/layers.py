@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 import calendar
 import io
+import math
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from enum import Enum
@@ -25,12 +27,15 @@ from app.cache.cache import (
     atile_lock as tile_lock,
     PNG_TTL, PNG_TTL_HISTORICAL,
 )
+from app.cache.keys import build_tile_cache_keys
 from app.core.circuit_breaker import get_ee_circuit_breaker
 from app.core.config import logger, settings
+from app.core.gee_admission import GoogleAdmissionError, call_gee
 from app.core.errors import generate_error_image, tile_error_response
 from app.core.metrics import observe_cache_hit
 from app.middleware.rate_limiter import limit_sentinel, limit_landsat
 from app.services.tile import tile2goehashBBOX
+from app.visualization.landsat_image import build_landsat_image
 from app.utils.capabilities import get_capabilities_provider
 from app.core.gee_pool import gee_retry
 from app.utils.ee_tile_fetch import fetch_tile_with_rotation
@@ -56,6 +61,35 @@ router = APIRouter()
 
 # Thread pool para operações do Earth Engine (síncronas)
 ee_executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS_EE)
+ee_pending = threading.BoundedSemaphore(int(settings.get("MAX_PENDING_EE", 32)))
+
+
+async def _run_ee_builder(builder, *args):
+    if not ee_pending.acquire(blocking=False):
+        raise GoogleAdmissionError(retry_after=1, reason="local_capacity")
+    try:
+        submitted = ee_executor.submit(builder, *args)
+    except BaseException:
+        ee_pending.release()
+        raise
+    submitted.add_done_callback(lambda _: ee_pending.release())
+    future = asyncio.wrap_future(submitted)
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+        if submitted.cancel():
+            raise
+        # A thread continua executando; os locks externos devem durar até seu término.
+        while not future.done():
+            try:
+                await asyncio.shield(future)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not future.cancelled():
+            future.exception()
+        raise
 
 
 # --------------------------------------------------------------------------- #
@@ -166,7 +200,7 @@ def _create_s2_layer_sync(geom: ee.Geometry, dates: Dict[str, str], vis: dict) -
           .select(*vis["select"]))
     best = s2.mosaic()
     image, vis_ee = resolve_visualization(best, vis["visparam"])
-    map_id = ee.data.getMapId({"image": image, **vis_ee})
+    map_id = call_gee(ee.data.getMapId, {"image": image, **vis_ee})
     return map_id["tile_fetcher"].url_format
 
 
@@ -314,7 +348,7 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
 
     try:
         image, vis_ee = resolve_visualization(landsat, vis)
-        map_id = ee.data.getMapId({"image": image, **vis_ee})
+        map_id = call_gee(ee.data.getMapId, {"image": image, **vis_ee})
         return map_id["tile_fetcher"].url_format
     except ee.EEException as e:
         return _retry_with_mosaic_if_band_missing(
@@ -325,133 +359,13 @@ def _create_landsat_layer_sync(geom: ee.Geometry,
 
 @gee_retry()
 def _create_landsat_layer_with_params(geom: ee.Geometry, dates: Dict[str, str], vis: dict, composite_mode: str = "BEST_IMAGE") -> str:
-    """Create Landsat layer with pre-processed vis params (no async calls)"""
-    def scale(img):
-        return img.addBands(img.select("SR_B.").multiply(0.0000275).add(-0.2),
-                            None, True)
-
-    def mask_clouds(image):
-        qa = image.select('QA_PIXEL')
-        cloud_bit_mask = 1 << 3
-        cloud_shadow_bit_mask = 1 << 4
-        mask = qa.bitwiseAnd(cloud_bit_mask).eq(0).And(
-               qa.bitwiseAnd(cloud_shadow_bit_mask).eq(0))
-        return image.updateMask(mask)
-
-    # Get collection from vis params (already determined)
     year = datetime.fromisoformat(dates["dtStart"]).year
     collection = get_landsat_collection(year)
-    
-    # Log the composite mode and required bands
-    logger.debug(f"Landsat composite mode: {composite_mode}, collection: {collection}, required bands: {vis.get('bands', [])}")
-    
-    # Process based on composite mode
-    if composite_mode == "BEST_IMAGE":
-        # Best image selection mode - use native CLOUD_COVER_LAND property for performance
-        # This avoids expensive pixel-level calculations
-        landsat_collection = (ee.ImageCollection(collection)
-                            .filterDate(dates["dtStart"], dates["dtEnd"])
-                            .filterBounds(geom)
-                            .filter(ee.Filter.lt('CLOUD_COVER', 40))  # Pre-filter more aggressive
-                            .sort('CLOUD_COVER_LAND')  # Use native property, no calculation needed
-                            .sort('CLOUD_COVER', False))  # Secondary sort by CLOUD_COVER if CLOUD_COVER_LAND is -1
-        
-        # Get the best image (least clouds)
-        size = landsat_collection.size()
-        
-        def process_best_image():
-            # Required bands from vis params
-            required_bands = vis["bands"]
-            
-            # Function to check if an image has all required bands
-            def has_required_bands(image):
-                band_names = image.bandNames()
-                # Check if all required bands are present
-                has_all = ee.List(required_bands).map(
-                    lambda band: band_names.contains(band)
-                ).reduce(ee.Reducer.min())
-                return image.set('has_required_bands', has_all)
-            
-            # Filter collection to only images with required bands
-            valid_collection = landsat_collection.map(has_required_bands).filter(
-                ee.Filter.eq('has_required_bands', 1)
-            )
-            
-            valid_size = valid_collection.size()
-            
-            # Process valid image or fallback to mosaic
-            def process_valid_best():
-                best = valid_collection.first()
-                processed = scale(best)
-                return processed.select(required_bands)
-            
-            # Fallback to mosaic mode if no valid images
-            def fallback_to_mosaic():
-                # Use mosaic approach with band checking
-                # First try to get any image with the required bands
-                return landsat_collection.map(scale).map(
-                    lambda img: ee.Algorithms.If(
-                        ee.List(required_bands).map(
-                            lambda band: img.bandNames().contains(band)
-                        ).reduce(ee.Reducer.min()),
-                        img.select(required_bands),
-                        _empty_image_with_bands(vis["bands"])
-                    )
-                ).mosaic()
-            
-            return ee.Algorithms.If(
-                valid_size.gt(0),
-                process_valid_best(),
-                fallback_to_mosaic()
-            )
-        
-        landsat = ee.Algorithms.If(
-            size.gt(0),
-            process_best_image(),
-            _empty_image_with_bands(vis["bands"])
-        )
-        
-    else:
-        # Default MOSAIC mode - original behavior
-        landsat_collection = ee.ImageCollection(collection).filterDate(dates["dtStart"], dates["dtEnd"]).filterBounds(geom)
-        
-        # Check if collection has images
-        size = landsat_collection.size()
-        
-        # Only process if there are images in the collection
-        def process_with_bands():
-            # Get first image to check available bands
-            first = landsat_collection.first()
-            band_names = first.bandNames()
-            
-            # Check if requested bands exist
-            requested_bands = vis["bands"]
-            
-            # Filter to only available bands
-            available_bands = band_names.filter(ee.Filter.inList('item', requested_bands))
-            num_available = available_bands.size()
-            
-            # If no requested bands are available, use default bands based on satellite
-            processed = ee.Algorithms.If(
-                num_available.eq(0),
-                # No bands available - return empty image
-                _empty_image_with_bands(vis["bands"]),
-                # Process normally with available bands
-                landsat_collection.map(mask_clouds).map(scale).select(available_bands).mosaic()
-            )
-            
-            return processed
-        
-        # Only process if collection has images
-        landsat = ee.Algorithms.If(
-            size.gt(0),
-            process_with_bands(),
-            _empty_image_with_bands(vis["bands"])
-        )
+    landsat = build_landsat_image(geom, dates, vis, collection, composite_mode)
 
     try:
         image, vis_ee = resolve_visualization(landsat, vis)
-        map_id = ee.data.getMapId({"image": image, **vis_ee})
+        map_id = call_gee(ee.data.getMapId, {"image": image, **vis_ee})
         return map_id["tile_fetcher"].url_format
     except ee.EEException as e:
         return _retry_with_mosaic_if_band_missing(
@@ -478,15 +392,22 @@ async def _serve_tile(layer: str,
     vis     = await _vis_param(visparam)
 
     geohash, bbox = tile2goehashBBOX(x, y, z)
-    # Include composite_mode in cache path for landsat
-    if layer == "landsat" and composite_mode:
-        path_cache = f"{layer}_{period}_{year}_{month}_{visparam}_{composite_mode}/{geohash}"
-    else:
-        path_cache = f"{layer}_{period}_{year}_{month}_{visparam}/{geohash}"
-    file_cache = f"{path_cache}/{z}/{x}_{y}.png"
+    cache_keys = build_tile_cache_keys(
+        layer=layer, period=period, year=year, month=month,
+        visparam=visparam, geohash=geohash, z=z, x=x, y=y,
+        composite_mode=composite_mode,
+    )
+    path_cache, file_cache = cache_keys.path, cache_keys.png
+
+    async def cached_png():
+        for key in (file_cache, *cache_keys.legacy_pngs):
+            data = await get_png(key)
+            if data:
+                return data
+        return None
 
     # 1 ▸ PNG já cacheado?
-    png_bytes = await get_png(file_cache)
+    png_bytes = await cached_png()
     if png_bytes:
         observe_cache_hit(layer=layer, type_="png_hit")
         return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
@@ -495,114 +416,75 @@ async def _serve_tile(layer: str,
 
     # 2 ▸ Lock distribuído: evita que dois workers gerem o mesmo tile
     async with tile_lock(file_cache) as should_generate:
+        png_bytes = await cached_png()
+        if png_bytes:
+            observe_cache_hit(layer=layer, type_="png_hit")
+            return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
         if not should_generate:
-            # Outro worker gerou enquanto esperávamos — tenta o cache
-            png_bytes = await get_png(file_cache)
-            if png_bytes:
-                observe_cache_hit(layer=layer, type_="png_hit")
-                return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
-            # Se ainda não tem, gera normalmente (lock expirou ou falhou)
+            return tile_error_response(status_code=503, reason="cache_busy", retry_after=1)
 
-        # 3 ▸ URL EE: meta cache + TTL
-        #     Lock separado por path_cache evita thundering herd na geração de URL
-        meta      = await get_meta(path_cache)
-        # Circuit breaker hoistado: precisa estar disponível tanto na geração
-        # da URL (record_success/record_failure no expired branch) quanto no
-        # download (record_failure em 429 persistente após rotação do helper).
+        async def cached_url():
+            for key in (path_cache, *cache_keys.legacy_paths):
+                meta = await get_meta(key)
+                if not isinstance(meta, dict) or not isinstance(meta.get("url"), str) or not meta["url"]:
+                    continue
+                try:
+                    created = datetime.fromisoformat(meta["date"])
+                    age = (datetime.now(created.tzinfo) - created).total_seconds()
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if 0 <= age < float(settings.LIFESPAN_URL) * 3600:
+                    return meta["url"]
+            return None
+
         breaker = get_ee_circuit_breaker()
-        expired   = (
-            meta is None or
-            (datetime.now() - datetime.fromisoformat(meta["date"])).total_seconds()/3600
-            > settings.LIFESPAN_URL
-        )
-        observe_cache_hit(layer=layer, type_="meta_miss" if expired else "meta_hit")
-        if expired:
-            # Circuit breaker: fail-fast quando EE está degradado. Libera
-            # threads EE para outros endpoints e evita retry storm.
-            if await breaker.is_open():
-                retry_after = await breaker.seconds_until_retry()
-                logger.warning(
-                    f"CB OPEN — rejeitando tile {file_cache} "
-                    f"(retry_after={retry_after}s)"
-                )
-                return tile_error_response(
-                    status_code=503,
-                    reason="ee_unavailable",
-                    retry_after=retry_after,
-                )
-
+        layer_url = await cached_url()
+        observe_cache_hit(layer=layer, type_="meta_hit" if layer_url else "meta_miss")
+        if not layer_url:
             async with tile_lock(f"url:{path_cache}") as should_generate_url:
-                if should_generate_url:
-                    geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
+                layer_url = await cached_url()
+                if not layer_url:
+                    if not should_generate_url:
+                        return tile_error_response(status_code=503, reason="cache_busy", retry_after=1)
+                    if await breaker.is_open():
+                        return tile_error_response(
+                            status_code=503, reason="ee_unavailable",
+                            retry_after=await breaker.seconds_until_retry(),
+                        )
                     try:
-                        loop = asyncio.get_running_loop()
+                        geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
                         if layer == "landsat":
-                            year = datetime.fromisoformat(dates["dtStart"]).year
                             collection = get_landsat_collection(year)
                             landsat_vis = await get_landsat_vis_params_async(visparam, collection)
-
-                            layer_url = await loop.run_in_executor(
-                                ee_executor, _create_landsat_layer_with_params, geom, dates, landsat_vis, composite_mode or "BEST_IMAGE"
+                            layer_url = await _run_ee_builder(
+                                _create_landsat_layer_with_params,
+                                geom, dates, landsat_vis, composite_mode or "BEST_IMAGE",
                             )
                         else:
-                            layer_url = await loop.run_in_executor(
-                                ee_executor, builder_sync, geom, dates, vis
-                            )
+                            layer_url = await _run_ee_builder(builder_sync, geom, dates, vis)
                         await set_meta(path_cache, {"url": layer_url, "date": datetime.now().isoformat()})
                         await breaker.record_success()
-                    except Exception as e:
+                    except GoogleAdmissionError as exc:
+                        return tile_error_response.from_exception(exc)
+                    except Exception as exc:
                         logger.exception("Erro criar layer EE")
                         try:
                             await breaker.record_failure()
                         except Exception:
                             logger.exception("Falha ao registrar evento no CB")
-                        return tile_error_response.from_exception(e)
-                else:
-                    # Outro worker gerou a URL enquanto esperávamos
-                    meta = await get_meta(path_cache)
-                    if meta and "url" in meta:
-                        layer_url = meta["url"]
-                    else:
-                        # Fallback: gera a URL (caso raro de expiração durante espera)
-                        geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
-                        try:
-                            loop = asyncio.get_running_loop()
-                            if layer == "landsat":
-                                year = datetime.fromisoformat(dates["dtStart"]).year
-                                collection = get_landsat_collection(year)
-                                landsat_vis = await get_landsat_vis_params_async(visparam, collection)
-                                layer_url = await loop.run_in_executor(
-                                    ee_executor, _create_landsat_layer_with_params, geom, dates, landsat_vis, composite_mode or "BEST_IMAGE"
-                                )
-                            else:
-                                layer_url = await loop.run_in_executor(
-                                    ee_executor, builder_sync, geom, dates, vis
-                                )
-                            await set_meta(path_cache, {"url": layer_url, "date": datetime.now().isoformat()})
-                        except Exception as e:
-                            logger.exception("Erro criar layer EE (fallback)")
-                            return tile_error_response.from_exception(e)
-        else:
-            layer_url = meta["url"]
+                        return tile_error_response.from_exception(exc)
 
-        # 4 ▸ Faz download do tile remoto via helper com rotação reativa.
-        #     Em 429, o helper: rotaciona SA → invalida meta cache →
-        #     regenera URL via url_factory → tenta uma vez mais.
         async def _regenerate_url() -> str:
             geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
-            loop = asyncio.get_running_loop()
             if layer == "landsat":
                 _year = datetime.fromisoformat(dates["dtStart"]).year
                 collection = get_landsat_collection(_year)
                 landsat_vis = await get_landsat_vis_params_async(visparam, collection)
-                return await loop.run_in_executor(
-                    ee_executor,
+                return await _run_ee_builder(
                     _create_landsat_layer_with_params,
                     geom, dates, landsat_vis, composite_mode or "BEST_IMAGE",
                 )
-            return await loop.run_in_executor(
-                ee_executor, builder_sync, geom, dates, vis,
-            )
+            return await _run_ee_builder(builder_sync, geom, dates, vis)
 
         try:
             png_bytes = await fetch_tile_with_rotation(
@@ -617,19 +499,23 @@ async def _serve_tile(layer: str,
             # cacheia por 1 ano. Ano corrente pode ainda receber novas passagens
             # de satélite, então mantém TTL curto de 30 dias.
             tile_ttl = PNG_TTL_HISTORICAL if year < datetime.utcnow().year else PNG_TTL
-            await set_png(file_cache, png_bytes, ttl=tile_ttl, background=True)
-            logger.info(f"Tile cache scheduled: {file_cache} (ttl={tile_ttl}s)")
+            await set_png(file_cache, png_bytes, ttl=tile_ttl, background=False)
+            logger.info(f"Tile cache persistence finished: {file_cache} (ttl={tile_ttl}s)")
             return StreamingResponse(io.BytesIO(png_bytes), media_type="image/png")
         except EarthEngineRateLimitedError as exc:
             logger.warning(
-                f"tile_429_persistent_after_rotation layer={layer} "
-                f"cache_key={path_cache} sa_name={exc.sa_name} action=return_503"
+                f"tile_google_rate_limited layer={layer} action=return_503"
             )
             try:
                 await breaker.record_failure()
             except Exception:
                 logger.exception("Falha ao registrar evento no CB")
-            return tile_error_response(status_code=503, reason="ee_unavailable")
+            return tile_error_response(
+                status_code=503, reason="ee_unavailable",
+                retry_after=math.ceil(getattr(exc, "retry_after", 5)),
+            )
+        except GoogleAdmissionError as exc:
+            return tile_error_response.from_exception(exc)
         except HTTPException as exc:
             logger.exception("Erro ao baixar tile")
             return tile_error_response.from_exception(exc)

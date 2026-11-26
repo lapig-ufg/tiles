@@ -11,7 +11,20 @@ x-common-config: &common-config
     - tiles-valkey-network
     - mongo-network
 
+x-google-budget: &google-budget
+  GEE_ADMISSION_MAX_CONCURRENT: ${GEE_ADMISSION_MAX_CONCURRENT:-20}
+  GEE_ADMISSION_RATE_PER_SECOND: ${GEE_ADMISSION_RATE_PER_SECOND:-50}
+  GEE_ADMISSION_INTERACTIVE_RESERVE: ${GEE_ADMISSION_INTERACTIVE_RESERVE:-5}
+  GEE_ADMISSION_INTERACTIVE_RATE_RESERVE: ${GEE_ADMISSION_INTERACTIVE_RATE_RESERVE:-10}
+  GEE_ADMISSION_WAIT_SECONDS: ${GEE_ADMISSION_WAIT_SECONDS:-2}
+  GEE_ADMISSION_LEASE_SECONDS: ${GEE_ADMISSION_LEASE_SECONDS:-60}
+  GEE_ADMISSION_COOLDOWN_SECONDS: ${GEE_ADMISSION_COOLDOWN_SECONDS:-5}
+  GEE_HTTP_TIMEOUT_SECONDS: ${GEE_HTTP_TIMEOUT_SECONDS:-60}
+  LOCAL_CACHE_MAX_BYTES: ${LOCAL_CACHE_MAX_BYTES:-67108864}
+  CACHE_MAX_PENDING_BYTES: ${CACHE_MAX_PENDING_BYTES:-67108864}
+
 x-common-celery-env: &common-celery-env
+  <<: *google-budget
   GEE_SA_DIRECTORY: /app/.service-accounts/
   LIFESPAN_URL: "24"
   LOG_LEVEL: WARNING
@@ -30,6 +43,7 @@ x-common-celery-env: &common-celery-env
   MONGODB_DB: tvi
 
 x-common-tile-env: &common-tile-env
+  <<: *google-budget
   ALLOW_ORIGINS: http://localhost:4200
   GEE_SA_DIRECTORY: /app/.service-accounts/
   LIFESPAN_URL: "24"
@@ -254,7 +268,7 @@ services:
       - --port
       - '8080'
       - --workers
-      - '8'
+      - '${TILES_API_WORKERS:-8}'
       - main:app
       - --timeout-keep-alive
       - '300'
@@ -262,9 +276,9 @@ services:
       <<: *common-tile-env
     deploy:
       mode: replicated
-      replicas: 20
+      replicas: ${TILES_API_REPLICAS:-20}
       placement:
-        max_replicas_per_node: 10
+        max_replicas_per_node: ${TILES_API_MAX_REPLICAS_PER_NODE:-10}
         preferences:
           - spread: node.labels.name
       labels:

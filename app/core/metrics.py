@@ -29,6 +29,27 @@ cache_hits_total = Counter(
     labelnames=("layer", "type"),
 )
 
+gee_external_attempts_total = Counter(
+    'gee_external_attempts_total', 'Tentativas externas concluídas por operação e resultado',
+    labelnames=('operation', 'traffic', 'status'),
+)
+
+gee_external_active = Gauge(
+    'gee_external_active', 'Tentativas externas em execução neste processo',
+    labelnames=('operation', 'traffic'),
+)
+
+gee_admission_wait_seconds = Histogram(
+    'gee_admission_wait_seconds', 'Tempo de espera pela admissão distribuída',
+    labelnames=('operation', 'traffic'),
+    buckets=(.01, .05, .1, .25, .5, 1, 2, 5),
+)
+
+gee_admission_rejected_total = Counter(
+    'gee_admission_rejected_total', 'Chamadas externas rejeitadas antes da execução',
+    labelnames=('operation', 'traffic', 'reason'),
+)
+
 
 # -- Métricas do pool de Service Accounts do GEE ------------------------------
 

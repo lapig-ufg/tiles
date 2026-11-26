@@ -317,3 +317,109 @@ def test_internal_serve_tile_persistent_429_returns_503_ee_unavailable(
     assert "no-store" in resp.headers.get("cache-control", "")
     # CB deve ter sido notificado da falha persistente.
     _cb.record_failure.assert_called_once()
+
+
+@pytest.fixture
+def admission_consumers(app_with_layers, monkeypatch):
+    import importlib
+    import ee
+    from unittest.mock import AsyncMock
+
+    rate_limiter = sys.modules['app.middleware.rate_limiter']
+    monkeypatch.setattr(rate_limiter, 'limit_imagery', lambda: lambda fn: fn, raising=False)
+    monkeypatch.setattr(rate_limiter, 'limit_embedding', lambda: lambda fn: fn, raising=False)
+    loader = sys.modules['app.visualization.vis_params_loader']
+    monkeypatch.setattr(loader, 'generate_landsat_list', lambda *args: [], raising=False)
+    monkeypatch.setattr(loader, 'get_visparams', AsyncMock(return_value={
+        'tvi-red': {'visparam': {'bands': ['B4']}},
+    }))
+
+    chain = ee.ImageCollection('collection')
+    monkeypatch.setattr(ee.Geometry, 'Point', lambda *args: chain, raising=False)
+    for name in ('lte', 'date', 'bounds'):
+        monkeypatch.setattr(ee.Filter, name, lambda *args: chain, raising=False)
+    for name in ('sum', 'mean', 'stdDev', 'minMax', 'count'):
+        monkeypatch.setattr(ee.Reducer, name, lambda *args: chain, raising=False)
+    monkeypatch.setattr(ee, 'Dictionary', lambda *args: chain, raising=False)
+
+    imagery = importlib.import_module('app.api.imagery')
+    embedding = importlib.import_module('app.modules.embedding_maps.router')
+    job = {
+        '_id': 'job-1', 'status': 'COMPLETED',
+        'config': {'year': 2023, 'roi': {'roi_type': 'bbox', 'bbox': [-50, -10, -49, -9]}},
+    }
+    monkeypatch.setattr(embedding.repository, 'get_job', AsyncMock(return_value=job))
+    for consumer in (imagery, embedding):
+        monkeypatch.setattr(consumer, 'set_meta', AsyncMock())
+        monkeypatch.setattr(consumer, 'set_png', AsyncMock())
+
+    app = FastAPI()
+    app.include_router(imagery.router, prefix='/imagery')
+    app.include_router(embedding.router, prefix='/embedding')
+    yield app, imagery, embedding, chain
+    imagery.ee_executor.shutdown(wait=True)
+    embedding.ee_executor.shutdown(wait=True)
+
+
+@pytest.mark.parametrize('consumer_name', ['imagery', 'embedding'])
+@pytest.mark.parametrize('phase', ['map', 'download'])
+def test_admission_denial_returns_uncacheable_tile_503(
+    admission_consumers, monkeypatch, consumer_name, phase,
+):
+    import ee
+    from unittest.mock import AsyncMock
+    from app.core.gee_admission import GoogleAdmissionError
+
+    app, imagery, embedding, _ = admission_consumers
+    consumer = imagery if consumer_name == 'imagery' else embedding
+    error = GoogleAdmissionError(2.25)
+    if phase == 'map':
+        def deny_map(*args, **kwargs):
+            raise error
+        monkeypatch.setattr(ee.data, 'getMapId', deny_map)
+    else:
+        monkeypatch.setattr(consumer, 'get_meta', AsyncMock(return_value={
+            'url': 'https://earthengine.googleapis.com/tile/{z}/{x}/{y}',
+            'date': '2999-01-01T00:00:00',
+        }))
+        monkeypatch.setattr(consumer, 'fetch_tile_with_rotation', AsyncMock(side_effect=error))
+
+    path = ('/imagery/s2_harmonized/100/100/10?imageId=COPERNICUS/S2/test'
+            if consumer_name == 'imagery'
+            else '/embedding/tiles/job-1/10/100/100.png?product=magnitude')
+    response = TestClient(app).get(path)
+
+    assert response.status_code == 503
+    assert response.headers['retry-after'] == '3'
+    assert response.headers['cache-control'] == 'no-store, must-revalidate'
+    assert response.headers['x-error-reason'] == 'gee_busy'
+    assert response.headers['content-type'] == 'image/png'
+    consumer.set_meta.assert_not_awaited()
+    consumer.set_png.assert_not_awaited()
+
+
+@pytest.mark.parametrize('endpoint', ['catalog', 'stats'])
+def test_admission_denial_returns_uncacheable_json_503(admission_consumers, monkeypatch, endpoint):
+    from unittest.mock import AsyncMock
+    from app.core.gee_admission import GoogleAdmissionError
+
+    app, imagery, embedding, chain = admission_consumers
+    error = GoogleAdmissionError(2.25)
+    if endpoint == 'catalog':
+        monkeypatch.setattr(imagery, 'compute_value', AsyncMock(side_effect=error))
+        path = '/imagery/s2_harmonized/catalog?lat=-10&lon=-50&start=2023-01-01&end=2023-02-01'
+        consumer = imagery
+    else:
+        def deny_compute(*args, **kwargs):
+            raise error
+        monkeypatch.setattr(chain, 'getInfo', deny_compute)
+        path = '/embedding/jobs/job-1/stats?product=magnitude'
+        consumer = embedding
+
+    response = TestClient(app).get(path)
+
+    assert response.status_code == 503
+    assert response.headers['retry-after'] == '3'
+    assert response.headers['cache-control'] == 'no-store, must-revalidate'
+    assert response.headers['content-type'] == 'application/json'
+    consumer.set_meta.assert_not_awaited()

@@ -24,6 +24,9 @@ from app.core.database import Base, engine
 from app.router import created_routes
 from app.utils.cors import origin_regex, allow_origins
 from app.cache import tile_cache
+from app.cache.errors import TileLockUnavailable
+from app.core.errors import capacity_exception_handler
+from app.core.gee_admission import GoogleAdmissionError
 
 # create_all com tratamento de race condition para multi-worker (uvicorn/gunicorn).
 # Múltiplos workers podem tentar criar tabelas simultaneamente no mesmo SQLite.
@@ -138,6 +141,8 @@ app = FastAPI(
 # Adiciona rate limiter
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(GoogleAdmissionError, capacity_exception_handler)
+app.add_exception_handler(TileLockUnavailable, capacity_exception_handler)
 
 # Request ID precisa vir ANTES do timing middleware para que a contextvar
 # esteja setada quando observe_request() lê. ASGI middlewares executam

@@ -8,6 +8,9 @@ from typing import Dict, Optional, List, Any, Union
 from app.core.config import logger
 from app.core.mongodb import get_database
 from app.models.vis_params import VisParamDocument, LandsatCollectionMapping
+from app.visualization.catalog_config import (
+    landsat_collection, landsat_visualization, normalize_visualization, sentinel_visualization,
+)
 
 
 class VisParamsManager:
@@ -81,26 +84,8 @@ class VisParamsManager:
     
     def get_landsat_collection(self, year: int) -> str:
         """Get the appropriate Landsat collection for a given year"""
-        if not self._landsat_mappings:
-            # Fallback to hardcoded logic if DB not available
-            if 1985 <= year <= 2011:
-                return 'LANDSAT/LT05/C02/T1_L2'
-            elif 2012 <= year <= 2013:
-                return 'LANDSAT/LE07/C02/T1_L2'
-            elif 2014 <= year <= 2024:
-                return 'LANDSAT/LC08/C02/T1_L2'
-            elif year >= 2025:
-                return 'LANDSAT/LC09/C02/T1_L2'
-            else:
-                raise ValueError(f"Year {year} outside supported range (1985 onwards)")
-        
-        # Use DB mappings
-        for mapping in self._landsat_mappings.mappings:
-            if mapping["start_year"] <= year <= mapping["end_year"]:
-                return mapping["collection"]
-        
-        raise ValueError(f"No Landsat collection found for year {year}")
-    
+        return landsat_collection(year, self._landsat_mappings)
+
     async def get_landsat_vis_params(self, vis_type: str, year_or_collection: Union[int, str]) -> Dict[str, Any]:
         """Get Landsat visualization parameters for a specific type and year/collection"""
         if isinstance(year_or_collection, int):
@@ -109,27 +94,8 @@ class VisParamsManager:
             collection_name = year_or_collection
         
         vis_doc = await self.get_vis_param(vis_type)
-        if not vis_doc or not vis_doc.satellite_configs:
-            raise ValueError(f"No visualization parameters found for {vis_type}")
-        
-        # Find the matching satellite config
-        for sat_config in vis_doc.satellite_configs:
-            if sat_config.collection_id == collection_name:
-                landsat_params = sat_config.vis_params.model_dump(exclude_none=True)
-                
-                # Convert all numeric parameters to strings as expected by Google Earth Engine
-                for key in ["min", "max", "gamma"]:
-                    if key in landsat_params:
-                        if isinstance(landsat_params[key], list):
-                            landsat_params[key] = ",".join(map(str, landsat_params[key]))
-                        else:
-                            # Convert single values to string as well
-                            landsat_params[key] = str(landsat_params[key])
-                
-                return landsat_params
-        
-        raise ValueError(f"No parameters found for {vis_type} and collection {collection_name}")
-    
+        return landsat_visualization(vis_doc, collection_name)
+
     async def refresh_cache(self):
         """Refresh the cache from database"""
         self._initialized = False
@@ -152,41 +118,12 @@ async def get_visparams_dict() -> Dict[str, Dict[str, Any]]:
     
     for name, doc in all_params.items():
         if doc.vis_params:
-            # Sentinel-2 style
-            vis_params = doc.vis_params.model_dump(exclude_none=True)
-            
-            # Convert all numeric parameters to strings as expected by Google Earth Engine
-            for key in ["min", "max", "gamma"]:
-                if key in vis_params:
-                    if isinstance(vis_params[key], list):
-                        vis_params[key] = ",".join(map(str, vis_params[key]))
-                    else:
-                        # Convert single values to string as well
-                        vis_params[key] = str(vis_params[key])
-            
-            entry = {"visparam": vis_params}
-            if doc.band_config:
-                if doc.band_config.mapped_bands:
-                    entry["select"] = (doc.band_config.original_bands, doc.band_config.mapped_bands)
-                else:
-                    entry["select"] = doc.band_config.original_bands
-            result[name] = entry
+            result[name] = sentinel_visualization(doc)
         elif doc.satellite_configs:
             # Landsat style
             visparam = {}
             for sat_config in doc.satellite_configs:
-                landsat_vis_params = sat_config.vis_params.model_dump(exclude_none=True)
-                
-                # Convert all numeric parameters to strings as expected by Google Earth Engine
-                for key in ["min", "max", "gamma"]:
-                    if key in landsat_vis_params:
-                        if isinstance(landsat_vis_params[key], list):
-                            landsat_vis_params[key] = ",".join(map(str, landsat_vis_params[key]))
-                        else:
-                            # Convert single values to string as well
-                            landsat_vis_params[key] = str(landsat_vis_params[key])
-                
-                visparam[sat_config.collection_id] = landsat_vis_params
+                visparam[sat_config.collection_id] = normalize_visualization(sat_config.vis_params)
             result[name] = {"visparam": visparam}
     
     return result

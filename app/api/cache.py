@@ -799,16 +799,24 @@ async def get_task_status(task_id: str):
     """
     try:
         task_result = AsyncResult(task_id, app=celery_app)
+        if task_result.successful():
+            dispatched = task_result.result
+            if isinstance(dispatched, dict) and dispatched.get('status') == 'warming_started':
+                job_id = dispatched.get('job_id')
+                if isinstance(job_id, str) and job_id.startswith('warm-') and job_id != task_id:
+                    task_result = AsyncResult(job_id, app=celery_app)
+        state = task_result.state
         
         return CacheStatusResponse(
             status="success",
             message=f"Task {task_id} status",
             data={
                 "task_id": task_id,
-                "state": task_result.state,
+                "resolved_task_id": task_result.id,
+                "state": state,
                 "ready": task_result.ready(),
                 "successful": task_result.successful() if task_result.ready() else None,
-                "result": task_result.result if task_result.successful() else None,
+                "result": task_result.result if state in {'SUCCESS', 'PROGRESS'} else None,
                 "error": str(task_result.info) if task_result.failed() else None
             }
         )

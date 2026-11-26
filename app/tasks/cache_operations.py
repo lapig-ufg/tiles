@@ -6,6 +6,7 @@ import asyncio
 import calendar
 import math
 import random
+import uuid
 from collections import defaultdict
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -16,11 +17,19 @@ from celery import group, chord
 from loguru import logger
 
 from app.cache.cache_hybrid import tile_cache
+from app.cache.keys import build_tile_cache_keys
+from app.cache.sync_cache import InvalidTileError, SyncTileCache
+from app.cache.sync_lock import sync_tile_lock
+from app.core.gee_admission import call_gee, google_request, project_from_url
+from app.utils.http import EarthEngineRateLimitedError
+from app.utils.ee_http_sync import urlopen_without_redirects
 from app.core.config import settings
 from app.core.gee_pool import gee_retry
 from app.core.tvi_token import TviTokenDenied, get_campaign_token
 from app.utils.ee_maps import create_map_with_credential
 from app.visualization.indices import resolve_visualization
+from app.visualization.landsat_image import build_landsat_image
+from app.visualization.catalog_config import resolve_landsat_config_sync, resolve_s2_config_sync
 from app.core.mongodb import (
     get_points_collection, get_campaigns_collection,
     connect_to_mongo
@@ -470,135 +479,120 @@ def cache_warm_regions(self, regions: List[Dict[str, Any]] = None,
 def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                     period: str, year: int, month: int,
                     visparam: str, composite_mode: str = "BEST_IMAGE",
-                    tvi_campaign_id: Optional[str] = None) -> Dict[str, Any]:
-    """
-    Gera e cacheia um único tile replicando o fluxo exato da API (_serve_tile).
-
-    Usa a mesma chave de cache que a API HTTP, garantindo que tiles pré-aquecidos
-    sejam servidos como cache hit nos requests subsequentes.
-
-    Execução totalmente síncrona (Celery prefork) — sem event loops.
-    Usa Redis síncrono e urllib para evitar conflitos de async no prefork.
-    """
-    import hashlib
+                    tvi_campaign_id: Optional[str] = None,
+                    continue_on_error: bool = False) -> Dict[str, Any]:
+    """Persiste tiles equivalentes aos da API sob as mesmas concessões distribuídas."""
     import urllib.request
+    from urllib.error import HTTPError
 
     import orjson
-    import redis as sync_redis
     from app.services.tile import tile2goehashBBOX
 
-    REDIS_URL = settings.get("REDIS_URL", "redis://valkey:6379")
-    S3_ENDPOINT = settings.get("S3_ENDPOINT", "http://minio:9000")
-    PNG_TTL = 30 * 24 * 3600
-    META_TTL = 7 * 24 * 3600
-
+    file_cache = None
     try:
+        if layer not in {'landsat', 's2_harmonized'}:
+            return {'status': 'error', 'error': 'Camada desconhecida'}
         geohash, bbox = tile2goehashBBOX(x, y, z)
-
-        if layer == "landsat" and composite_mode:
-            path_cache = f"{layer}_{period}_{year}_{month}_{visparam}_{composite_mode}/{geohash}"
-        else:
-            path_cache = f"{layer}_{period}_{year}_{month}_{visparam}/{geohash}"
-        file_cache = f"{path_cache}/{z}/{x}_{y}.png"
-
-        # Redis síncrono — sem conflito de event loops
-        r = sync_redis.from_url(REDIS_URL, decode_responses=False)
-
-        # Já cacheado?
-        if r.exists(f"tile:{file_cache}"):
-            return {"status": "already_cached", "tile": file_cache}
-
-        # Gerar datas do período
-        dates = _build_period_dates(period, year, month)
-
-        # Obter URL do EE (ou do meta cache). URLs geradas com credencial de
-        # campanha ficam em namespace próprio: o mapa carrega a identidade de
-        # quem o registrou e não pode vazar para o caminho público (nem o
-        # contrário) — o PNG resultante é idêntico e continua compartilhado.
-        meta_key = (
-            f"meta:tvi:{tvi_campaign_id}:{path_cache}" if tvi_campaign_id else f"meta:{path_cache}"
+        keys = build_tile_cache_keys(
+            layer=layer, period=period, year=year, month=month, visparam=visparam,
+            geohash=geohash, x=x, y=y, z=z, composite_mode=composite_mode,
         )
-        raw_meta = r.get(meta_key)
-        meta = orjson.loads(raw_meta) if raw_meta else None
-        expired = (
-            meta is None or
-            (datetime.now() - datetime.fromisoformat(meta["date"])).total_seconds() / 3600
-            > settings.get("LIFESPAN_URL", 24)
-        )
+        file_cache = keys.png
+        candidates = (file_cache, *keys.legacy_pngs)
+        namespace = f'tvi:{tvi_campaign_id}:' if tvi_campaign_id else ''
+        url_path = namespace + keys.path
+        url_candidates = tuple(namespace + path for path in (keys.path, *keys.legacy_paths))
+        with SyncTileCache() as cache:
+            if any(cache.has_png(key) for key in candidates):
+                return {'status': 'already_cached', 'tile': file_cache}
+            with cache.tile_lock(file_cache) as png_lease:
+                if any(cache.has_png(key) for key in candidates):
+                    return {'status': 'already_cached', 'tile': file_cache}
+                layer_url = _cached_warm_url(cache.redis, url_candidates)
+                if layer_url is None:
+                    with cache.tile_lock('url:' + url_path) as url_lease:
+                        layer_url = _cached_warm_url(cache.redis, url_candidates)
+                        if layer_url is None:
+                            png_lease.ensure_owned()
+                            url_lease.ensure_owned()
+                            dates = _build_period_dates(period, year, month)
+                            geom = ee.Geometry.BBox(bbox['w'], bbox['s'], bbox['e'], bbox['n'])
+                            if layer == 'landsat':
+                                layer_url = _warm_create_landsat_url(
+                                    geom, dates, visparam, composite_mode,
+                                    tvi_campaign_id=tvi_campaign_id,
+                                )
+                            else:
+                                layer_url = _warm_create_s2_url(
+                                    geom, dates, visparam, tvi_campaign_id=tvi_campaign_id,
+                                )
+                            png_lease.ensure_owned()
+                            url_lease.ensure_owned()
+                            cache.redis.set(
+                                'meta:' + url_path,
+                                orjson.dumps({'url': layer_url, 'date': datetime.now().isoformat()}),
+                                ex=7 * 86400,
+                            )
+                png_lease.ensure_owned()
+                tile_url = layer_url.format(x=x, y=y, z=z)
+                request = urllib.request.Request(tile_url)
+                with google_request(project=project_from_url(tile_url), background=True) as admission:
+                    try:
+                        with urlopen_without_redirects(request, timeout=60) as response:
+                            admission.response(response.status, response.headers.get('Retry-After'))
+                            if response.status != 200:
+                                return {'status': 'error', 'tile': file_cache,
+                                        'http_status': response.status}
+                            content_length = response.headers.get('Content-Length')
+                            if content_length and int(content_length) > cache.max_tile_bytes:
+                                raise InvalidTileError('Tile excede o limite de tamanho')
+                            png_bytes = response.read(cache.max_tile_bytes + 1)
+                    except HTTPError as exc:
+                        try:
+                            admission.response(exc.code, exc.headers.get('Retry-After'))
+                        finally:
+                            exc.close()
+                        if exc.code == 429:
+                            raise EarthEngineRateLimitedError(
+                                'Limite de download no Earth Engine excedido',
+                                retry_after=admission.retry_after,
+                            ) from exc
+                        raise
+                ttl = (365 if year < datetime.now().year else 30) * 86400
+                cache.set_png(file_cache, png_bytes, ttl, lease=png_lease)
+                return {'status': 'cached', 'tile': file_cache, 'size': len(png_bytes)}
+    except TviTokenDenied as denied:
+        return {'status': 'failed', 'reason': 'gee_credential_denied',
+                'tile': file_cache, 'detail': denied.detail}
+    except InvalidTileError:
+        return {'status': 'failed', 'reason': 'invalid_tile', 'tile': file_cache}
+    except Exception as exc:
+        logger.warning('Falha no pré-cache de tile: {}', type(exc).__name__)
+        if continue_on_error and self.request.retries >= self.max_retries:
+            return {'status': 'failed', 'reason': 'cache_warm_failed',
+                    'tile': file_cache, 'error_type': type(exc).__name__,
+                    'attempts': self.request.retries + 1}
+        raise self.retry(exc=exc, countdown=max(5, math.ceil(getattr(exc, 'retry_after', 5))))
 
-        if expired:
-            geom = ee.Geometry.BBox(bbox["w"], bbox["s"], bbox["e"], bbox["n"])
 
-            try:
-                if layer == "landsat":
-                    layer_url = _warm_create_landsat_url(
-                        geom, dates, visparam, composite_mode, tvi_campaign_id=tvi_campaign_id
-                    )
-                elif layer == "s2_harmonized":
-                    layer_url = _warm_create_s2_url(
-                        geom, dates, visparam, tvi_campaign_id=tvi_campaign_id
-                    )
-                else:
-                    return {"status": "error", "tile": file_cache, "error": f"Unknown layer: {layer}"}
-            except TviTokenDenied as denied:
-                # Erro de negócio do tvi-api (conta revogada/desvinculada):
-                # falha legível, sem retentativa cega.
-                logger.warning(f"Warming negado para campanha {tvi_campaign_id}: {denied}")
-                return {
-                    "status": "failed",
-                    "reason": "gee_credential_denied",
-                    "tile": file_cache,
-                    "detail": denied.detail,
-                }
+def _cached_warm_url(redis_client, candidates):
+    import orjson
 
-            r.set(meta_key, orjson.dumps({"url": layer_url, "date": datetime.now().isoformat()}), ex=META_TTL)
-        else:
-            layer_url = meta["url"]
-
-        # Download do tile (síncrono)
-        tile_url = layer_url.format(x=x, y=y, z=z)
-        req = urllib.request.Request(tile_url)
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            if resp.status != 200:
-                return {"status": "error", "tile": file_cache, "http_status": resp.status}
-            png_bytes = resp.read()
-
-        # Salva metadados no Redis
-        hash_prefix = hashlib.md5(file_cache.encode()).hexdigest()[:2]
-        s3_key = f"tiles/{hash_prefix}/{file_cache}"
-        r.hset(f"tile:{file_cache}", mapping={
-            "s3_key": s3_key,
-            "size": str(len(png_bytes)),
-            "created": datetime.now().isoformat(),
-            "content_type": "image/png",
-            "s3_synced": "0",
-        })
-        r.expire(f"tile:{file_cache}", PNG_TTL)
-
-        # Upload S3 (best-effort, síncrono via boto3)
+    for path in candidates:
+        value = redis_client.get('meta:' + path)
+        if not value:
+            continue
         try:
-            import boto3
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=S3_ENDPOINT,
-                aws_access_key_id=settings.get("S3_ACCESS_KEY", "minioadmin"),
-                aws_secret_access_key=settings.get("S3_SECRET_KEY", "minioadmin"),
-                use_ssl=settings.get("S3_USE_SSL", False),
-                verify=settings.get("S3_VERIFY_SSL", False),
-            )
-            s3.put_object(Bucket=settings.get("S3_BUCKET", "tiles-cache"), Key=s3_key, Body=png_bytes, ContentType="image/png")
-            r.hset(f"tile:{file_cache}", "s3_synced", "1")
-        except Exception as s3_err:
-            logger.warning(f"S3 upload falhou (best-effort): {s3_err}")
-
-        r.close()
-
-        logger.info(f"Tile cached: {file_cache} ({len(png_bytes)} bytes)")
-        return {"status": "cached", "tile": file_cache, "size": len(png_bytes)}
-
-    except Exception as e:
-        logger.error(f"Erro warming tile {z}/{x}/{y}: {e}")
-        raise self.retry(exc=e, countdown=5)
+            metadata = orjson.loads(value)
+            if not isinstance(metadata, dict) or not isinstance(metadata.get('url'), str):
+                continue
+            created = datetime.fromisoformat(metadata['date']).timestamp()
+            age = datetime.now().timestamp() - created
+            if 0 <= age < float(settings.get('LIFESPAN_URL', 24)) * 3600:
+                return metadata['url']
+        except (TypeError, ValueError, KeyError):
+            continue
+    return None
 
 
 @celery_app.task(bind=True, max_retries=1, queue='high_priority')
@@ -614,33 +608,145 @@ def cache_warm_from_tiles_json(self, tiles: List[Dict[str, Any]],
         tvi_campaign_id: Campanha do TVI moderno — usa a credencial do
             responsável GEE (via tvi-api) em vez do pool de SAs
     """
-    total = len(tiles)
-    batches = math.ceil(total / batch_size)
+    if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+        raise ValueError("batch_size deve ser um inteiro positivo")
+    import orjson
 
-    subtasks = []
+    seen, unique = set(), []
     for tile in tiles:
-        params = tile.get("params", {})
-        subtasks.append(
-            cache_warm_tile.s(
-                x=tile["x"], y=tile["y"], z=tile["z"],
-                layer=tile.get("endpoint", "landsat"),
-                period=params.get("period", "MONTH"),
-                year=params.get("year", 2023),
-                month=params.get("month", 8),
-                visparam=params.get("visparam", "landsat-tvi-false"),
-                composite_mode=params.get("compositeMode", "BEST_IMAGE"),
-                tvi_campaign_id=tvi_campaign_id,
-            )
+        params = tile.get('params', {})
+        arguments = dict(
+            x=tile['x'], y=tile['y'], z=tile['z'], layer=tile.get('endpoint', 'landsat'),
+            period=params.get('period', 'MONTH'), year=params.get('year', 2023),
+            month=params.get('month', 8), visparam=params.get('visparam', 'landsat-tvi-false'),
+            composite_mode=params.get('compositeMode', 'BEST_IMAGE'),
         )
+        key = build_tile_cache_keys(**arguments, geohash='').png
+        if key not in seen:
+            seen.add(key)
+            unique.append(orjson.dumps(arguments))
+    if not unique:
+        return {'status': 'warming_started', 'total_tiles': 0, 'job_id': None}
 
-    # Dispara em grupos para controlar concorrência
-    job = group(subtasks).apply_async()
+    job_id = 'warm-' + (self.request.id or uuid.uuid4().hex)
+    with _warm_job_redis() as redis_client:
+        with sync_tile_lock(redis_client, 'warm:' + job_id) as lease:
+            state_key, tiles_key = _warm_job_keys(job_id)
+            if not redis_client.exists(state_key):
+                state = {
+                    'status': 'warming', 'total_tiles': len(unique), 'processed': 0,
+                    'scheduled': 0, 'batch_size': batch_size, 'campaign': tvi_campaign_id,
+                    'cached': 0, 'already_cached': 0, 'failed': 0, 'errors': [],
+                }
+                lease.ensure_owned()
+                with redis_client.pipeline(transaction=True) as pipeline:
+                    pipeline.set(state_key, orjson.dumps(state), ex=7 * 86400)
+                    pipeline.rpush(tiles_key, *unique)
+                    pipeline.expire(tiles_key, 7 * 86400)
+                    pipeline.execute()
+    try:
+        _publish_warm_window(job_id)
+    except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            celery_app.backend.store_result(job_id, RuntimeError('Falha ao publicar janela de pré-cache'), 'FAILURE')
+        raise self.retry(exc=exc, countdown=5)
+    return {'status': 'warming_started', 'total_tiles': len(unique), 'job_id': job_id}
 
-    return {
-        "status": "warming_started",
-        "total_tiles": total,
-        "job_id": str(job.id) if job else "inline",
-    }
+
+def _warm_job_redis():
+    import redis
+
+    return redis.Redis.from_url(
+        settings.get('REDIS_URL', 'redis://valkey:6379'),
+        socket_connect_timeout=3, socket_timeout=3, retry_on_timeout=False,
+    )
+
+
+def _warm_job_keys(job_id):
+    return f'warm:{job_id}:state', f'warm:{job_id}:tiles'
+
+
+def _warm_summary(state):
+    summary = {key: state[key] for key in
+               ('status', 'total_tiles', 'processed', 'cached', 'already_cached', 'failed', 'errors')}
+    summary['errors_truncated'] = state['failed'] > len(state['errors'])
+    return summary
+
+
+def _publish_warm_window(job_id):
+    import orjson
+
+    with _warm_job_redis() as redis_client:
+        with sync_tile_lock(redis_client, 'warm:' + job_id) as lease:
+            state_key, tiles_key = _warm_job_keys(job_id)
+            raw_state = redis_client.get(state_key)
+            if raw_state is None:
+                raise RuntimeError('Estado do pré-cache expirado')
+            state = orjson.loads(raw_state)
+            if state['processed'] >= state['total_tiles']:
+                state['status'] = 'completed_with_errors' if state['failed'] else 'completed'
+                lease.ensure_owned()
+                redis_client.set(state_key, orjson.dumps(state), ex=7 * 86400)
+                redis_client.delete(tiles_key)
+                celery_app.backend.store_result(job_id, _warm_summary(state), 'SUCCESS')
+                return
+            if state['scheduled'] > state['processed']:
+                return
+            offset = state['processed']
+            end = min(offset + state['batch_size'], state['total_tiles'])
+            serialized = redis_client.lrange(tiles_key, offset, end - 1)
+            if len(serialized) != end - offset:
+                raise RuntimeError('Janela de pré-cache incompleta')
+            tasks = [cache_warm_tile.si(**orjson.loads(tile),
+                                       tvi_campaign_id=state['campaign'], continue_on_error=True)
+                     for tile in serialized]
+            callback = celery_app.signature(cache_warm_batch_finished.name, args=(job_id, offset))
+            lease.ensure_owned()
+            chord(group(tasks, app=celery_app), callback, app=celery_app).apply_async(retry=False)
+            state['scheduled'] = end
+            lease.ensure_owned()
+            redis_client.set(state_key, orjson.dumps(state), ex=7 * 86400)
+            redis_client.expire(tiles_key, 7 * 86400)
+            celery_app.backend.store_result(job_id, _warm_summary(state), 'PROGRESS')
+
+
+@celery_app.task(bind=True, max_retries=2, queue='high_priority')
+def cache_warm_batch_finished(self, results, job_id, offset):
+    import orjson
+
+    try:
+        with _warm_job_redis() as redis_client:
+            with sync_tile_lock(redis_client, 'warm:' + job_id) as lease:
+                state_key, _ = _warm_job_keys(job_id)
+                raw_state = redis_client.get(state_key)
+                if raw_state is None:
+                    raise RuntimeError('Estado do pré-cache expirado')
+                state = orjson.loads(raw_state)
+                if state['processed'] == offset:
+                    expected = min(state['batch_size'], state['total_tiles'] - offset)
+                    if len(results) != expected:
+                        raise RuntimeError('Resultado de janela incompleto')
+                    for result in results:
+                        outcome = result.get('status') if isinstance(result, dict) else None
+                        if outcome in {'cached', 'already_cached'}:
+                            state[outcome] += 1
+                        else:
+                            state['failed'] += 1
+                            if len(state['errors']) < 100:
+                                result = result if isinstance(result, dict) else {}
+                                state['errors'].append({
+                                    'tile': result.get('tile'),
+                                    'reason': result.get('reason', 'tile_failed'),
+                                    'error_type': result.get('error_type'),
+                                })
+                    state['processed'] += len(results)
+                    lease.ensure_owned()
+                    redis_client.set(state_key, orjson.dumps(state), ex=7 * 86400)
+        _publish_warm_window(job_id)
+    except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            celery_app.backend.store_result(job_id, RuntimeError('Falha no coordenador de pré-cache'), 'FAILURE')
+        raise self.retry(exc=exc, countdown=5)
 
 
 # Helpers para cache_warm_tile (execução síncrona dentro do Celery worker)
@@ -660,79 +766,42 @@ def _build_period_dates(period: str, year: int, month: int) -> Dict[str, str]:
 
 
 def _build_landsat_image(geom, dates, visparam_name, composite_mode):
-    """Monta a imagem Landsat e devolve (image, vis) sem visualização aplicada."""
-    from app.visualization.visParam import get_landsat_collection, get_landsat_vis_params
-
     year = datetime.fromisoformat(dates["dtStart"]).year
-    collection = get_landsat_collection(year)
-    vis = get_landsat_vis_params(visparam_name, collection)
-
-    def scale(img):
-        return img.addBands(img.select("SR_B.").multiply(0.0000275).add(-0.2), None, True)
-
-    col = (ee.ImageCollection(collection)
-           .filterDate(dates["dtStart"], dates["dtEnd"])
-           .filterBounds(geom))
-
-    if composite_mode == "BEST_IMAGE":
-        col = col.filter(ee.Filter.lt('CLOUD_COVER', 40)).sort('CLOUD_COVER_LAND')
-        image = ee.Algorithms.If(
-            col.size().gt(0),
-            scale(col.first()).select(vis["bands"]),
-            ee.Image.constant(0).rename(['empty'])
-        )
-    else:
-        image = ee.Algorithms.If(
-            col.size().gt(0),
-            col.map(scale).select(vis["bands"]).mosaic(),
-            ee.Image.constant(0).rename(['empty'])
-        )
-    return image, vis
+    collection, vis = resolve_landsat_config_sync(visparam_name, year)
+    return build_landsat_image(geom, dates, vis, collection, composite_mode), vis
 
 
 @gee_retry()
 def _warm_create_landsat_url(geom, dates, visparam_name, composite_mode, tvi_campaign_id=None):
-    """Gera URL Landsat EE — réplica simplificada de _create_landsat_layer_sync.
-
-    Com ``tvi_campaign_id``, o mapa é registrado com a credencial do
-    responsável GEE da campanha (tvi-api) em vez da SA do pool.
-    """
     image, vis = _build_landsat_image(geom, dates, visparam_name, composite_mode)
 
     if tvi_campaign_id:
         credential = get_campaign_token(tvi_campaign_id)
         cred_image, vis_ee = resolve_visualization(ee.Image(image), vis)
-        return create_map_with_credential(cred_image, vis_ee, credential)
+        return create_map_with_credential(cred_image, vis_ee, credential, background=True)
 
-    for key in ("min", "max", "gamma"):
-        if isinstance(vis.get(key), list):
-            vis[key] = ",".join(map(str, vis[key]))
     image, vis_ee = resolve_visualization(image, vis)
-    map_id = ee.data.getMapId({"image": image, **vis_ee})
+    map_id = call_gee(ee.data.getMapId, {"image": image, **vis_ee}, operation="map", background=True)
     return map_id["tile_fetcher"].url_format
 
 
 @gee_retry()
 def _warm_create_s2_url(geom, dates, visparam_name, tvi_campaign_id=None):
-    """Gera URL S2 EE — réplica simplificada de _create_s2_layer_sync."""
-    from app.visualization.vis_params_loader import get_VISPARAMS_sync
-
-    visparams = get_VISPARAMS_sync()
-    vis = visparams.get(visparam_name, visparams.get("tvi-red", {}))
+    vis = resolve_s2_config_sync(visparam_name)
 
     s2 = (ee.ImageCollection("COPERNICUS/S2_HARMONIZED")
           .filterDate(dates["dtStart"], dates["dtEnd"])
           .filterBounds(geom)
           .sort("CLOUDY_PIXEL_PERCENTAGE", False)
-          .select(*vis.get("select", ["B4", "B3", "B2"])))
+          .select(*vis["select"]))
     best = s2.mosaic()
-    image, vis_ee = resolve_visualization(best, vis.get("visparam", {}))
+    image, vis_ee = resolve_visualization(best, vis["visparam"])
 
     if tvi_campaign_id:
         credential = get_campaign_token(tvi_campaign_id)
-        return create_map_with_credential(image, vis_ee, credential)
+        return create_map_with_credential(image, vis_ee, credential, background=True)
 
-    map_id = ee.data.getMapId({"image": image, **vis_ee})
+    map_id = call_gee(ee.data.getMapId, {"image": image, **vis_ee}, operation="map", background=True)
     return map_id["tile_fetcher"].url_format
 
 
