@@ -59,7 +59,13 @@
                                 }
                             ],
                             "outputHashing": "all",
-                            "baseHref": "/tiles/"
+                            "baseHref": "/tiles/",
+                            "fileReplacements": [
+                                {
+                                    "replace": "src/environments/environment.ts",
+                                    "with": "src/environments/environment.production.ts"
+                                }
+                            ]
                         },
                         "ghpages": {
                             "budgets": [
@@ -75,7 +81,13 @@
                                 }
                             ],
                             "outputHashing": "all",
-                            "baseHref": "/tiles/"
+                            "baseHref": "/tiles/",
+                            "fileReplacements": [
+                                {
+                                    "replace": "src/environments/environment.ts",
+                                    "with": "src/environments/environment.production.ts"
+                                }
+                            ]
                         },
                         "development": {
                             "buildOptimizer": false,

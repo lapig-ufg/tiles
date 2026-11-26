@@ -1,3 +1,4 @@
+import { environment } from '../../environments/environment';
 import { Injectable } from '@angular/core';
 import { HttpClient, HttpParams, HttpResponse } from '@angular/common/http';
 import { Observable, timeout } from 'rxjs';
@@ -5,7 +6,7 @@ import { BdcCollection, ItemDetail, RenderSelection, SearchFilters, SearchResult
 
 @Injectable()
 export class BdcLabApiService {
-    readonly base = '/api/bdc';
+    readonly base = environment.bdcApiBaseUrl;
     constructor(private http: HttpClient) {}
 
     collections(): Observable<{ collections: BdcCollection[]; paused: boolean }> {

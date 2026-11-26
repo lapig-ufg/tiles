@@ -1,3 +1,4 @@
+import { environment } from '../../environments/environment';
 import { Component, HostListener, OnDestroy, OnInit } from '@angular/core';
 import { HttpClient, HttpParams } from '@angular/common/http';
 import { Subscription, timeout } from 'rxjs';
@@ -26,7 +27,7 @@ export class BdcEvidenceComponent implements OnInit, OnDestroy {
     options: Record<string, string[]> = {};
     comparisonCounts: Record<string, number> = {};
     private comparisonRequest?: Subscription;
-    readonly base = '/api/bdc/evidence';
+    readonly base = `${environment.bdcApiBaseUrl}/evidence`;
     files: EvidenceFile[] = [];
     counts: Record<string, number> = {};
     total = 0;

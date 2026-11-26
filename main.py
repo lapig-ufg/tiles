@@ -164,7 +164,7 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=True,
     allow_origin_regex=origin_regex,
-    expose_headers=["X-Response-Time", "X-Cache-Status", "Retry-After", "X-Error-Reason"],
+    expose_headers=["X-Response-Time", "X-Cache-Status", "Retry-After", "X-Error-Reason", "X-Cache", "X-Render-Ms", "X-Range-Requests", "X-Origin-Bytes"],
     max_age=3600,
 )
 

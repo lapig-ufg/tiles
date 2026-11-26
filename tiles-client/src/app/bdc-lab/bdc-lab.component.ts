@@ -68,7 +68,7 @@ export class BdcLabComponent implements OnInit, OnDestroy {
                 this.collections = result.collections; this.online = true; this.paused = result.paused; this.catalogLoading = false;
                 if (!this.collection) this.collectionId = this.collections[0]?.id ?? '';
             },
-            error: error => { this.catalogLoading = false; this.online = false; this.error = this.message(error, 'O serviço do laboratório não está disponível. Consulte as instruções de inicialização local.'); },
+            error: error => { this.catalogLoading = false; this.online = false; this.error = this.message(error, 'Não foi possível carregar o catálogo do BDC. Verifique a conexão e tente novamente.'); },
         });
     }
     chooseCollection(): void {

@@ -28,5 +28,5 @@ def test_pages_can_read_retry_after_from_capacity_response():
     response = TestClient(app).get('/tile', headers={'Origin': 'https://lapig-ufg.github.io'})
     assert response.headers['access-control-allow-origin'] == 'https://lapig-ufg.github.io'
     exposed = {header.strip().lower() for header in response.headers['access-control-expose-headers'].split(',')}
-    assert {'retry-after', 'x-error-reason'} <= exposed
+    assert {'retry-after', 'x-error-reason', 'x-cache', 'x-render-ms', 'x-range-requests', 'x-origin-bytes'} <= exposed
     assert response.headers['retry-after'] == '5'
