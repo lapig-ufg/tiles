@@ -41,29 +41,60 @@ def source_absence_evidence(params):
     return None
 
 
-def process_window(store, job, token, generate, limit=8):
+def process_window(store, job, token, generate, limit=8, bdc_generate=None):
     started = time.monotonic()
+    is_bdc = job['config'].get('source') == 'bdc'
+    if is_bdc and bdc_generate is None:
+        from app.modules.bdc.campaign_cache import generate_tile
+        bdc_generate = generate_tile
     for _ in range(limit):
         if time.monotonic() - started >= 180:
             break
         item = store.next_item(job, token)
         if not item:
             break
+        if is_bdc and store.configuration_changed(job, check_points=False):
+            store.mark_stale(job, token)
+            break
         point = store.db.points.find_one({'_id': item.get('point_ref'), 'campaign': job['_id']})
         from app.cache.campaign_manifest import fingerprint
         if point is None or fingerprint([type(point['_id']).__name__, str(point['_id']), point.get('lat'), point.get('lon')]) != item.get('point_fingerprint'):
             store.mark_stale(job, token)
             break
+        if is_bdc and point.get('pointMutationLock'):
+            store.mark_stale(job, token)
+            break
         try:
             shared = store.items.find_one({'run_id': job['run_id'], 'key': item['key'], 'state': 'completed'}, {'_id': 1})
-            result = generate(**item['params'], validate_image=True,
-                              force=job['mode'] == 'regenerate' and not shared)
+            if is_bdc:
+                campaign = store.db.campaign.find_one({'_id': job['_id']})
+                result = bdc_generate(store.db, campaign, point, item['params'],
+                                      force=job['mode'] == 'regenerate' and not shared,
+                                      retry=job['mode'] in {'retry_failed', 'regenerate'},
+                                      retry_request=job.get('retry_request', job['run_id']))
+                current = store.db.points.find_one({'_id': point['_id'], 'campaign': job['_id']})
+                if (current is None or current.get('pointMutationLock')
+                        or current.get('lat') != point['lat'] or current.get('lon') != point['lon']
+                        or store.configuration_changed(job, check_points=False)):
+                    store.mark_stale(job, token)
+                    break
+            else:
+                result = generate(**item['params'], validate_image=True,
+                                  force=job['mode'] == 'regenerate' and not shared)
         except Exception as exc:
             result = {'status': 'failed', 'reason': type(exc).__name__,
                       'retry_after': getattr(exc, 'retry_after', 0)}
         if not store.complete_item(job, token, item, result):
             break
     return store.finish(job, token)
+
+
+def enqueue_offline_campaign(job, countdown=None):
+    if job.get('config', {}).get('source') == 'bdc':
+        return run_offline_campaign.apply_async(args=[job['_id']], queue='bdc', countdown=countdown or 0)
+    if countdown is not None:
+        return run_offline_campaign.apply_async(args=[job['_id']], countdown=countdown)
+    return run_offline_campaign.delay(job['_id'])
 
 
 @celery_app.task(queue='low_priority', acks_late=True, reject_on_worker_lost=True)
@@ -90,7 +121,7 @@ def run_offline_campaign(campaign_id):
             store.release(campaign_id, token)
         status = store.jobs.find_one({'_id': campaign_id})
         if status['status'] in ACTIVE:
-            run_offline_campaign.apply_async(args=[campaign_id], countdown=5)
+            enqueue_offline_campaign(status, countdown=5)
         return {'status': status['status'], 'total': status.get('total', 0)}
 
 
@@ -98,9 +129,9 @@ def run_offline_campaign(campaign_id):
 def recover_offline_campaigns():
     with campaign_store() as store:
         jobs = store.jobs.find({'status': {'$in': ACTIVE}, 'lease_until': {'$lte': datetime.now(timezone.utc)}},
-                               {'_id': 1}).sort('updated_at', 1).limit(20)
+                               {'_id': 1, 'config.source': 1}).sort('updated_at', 1).limit(20)
         for job in jobs:
-            run_offline_campaign.delay(job['_id'])
+            enqueue_offline_campaign(job)
 
 
 celery_app.conf.beat_schedule['offline-campaign-recovery'] = {

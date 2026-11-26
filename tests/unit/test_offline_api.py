@@ -14,7 +14,7 @@ def client(store, monkeypatch):
     def session():
         yield store
     monkeypatch.setattr(offline_cache, 'campaign_store', session)
-    monkeypatch.setattr(offline_cache.run_offline_campaign, 'delay', lambda *args: None)
+    monkeypatch.setattr(offline_cache, 'enqueue_offline_campaign', lambda job: None)
     app = FastAPI()
     app.include_router(offline_cache.router)
     for dependency in offline_cache.router.dependencies:

@@ -17,7 +17,7 @@ MAX_ATTEMPTS = 5
 
 
 def failure_state(reason, attempts, retry_after=0, *, validation_code=None):
-    if (reason == 'gee_credential_denied' or attempts >= MAX_ATTEMPTS
+    if (reason in {'gee_credential_denied', 'bdc_selection_failed'} or attempts >= MAX_ATTEMPTS
             or reason == 'invalid_tile' and validation_code == 'black_image'):
         return {'state': 'blocked', 'delay': 0}
     try:
@@ -87,7 +87,7 @@ class OfflineCampaignStore:
             claimed = self.jobs.find_one_and_update(
                 {'_id': campaign_id, 'run_id': previous['run_id'], 'status': previous['status'],
                  '$or': [{'lease_until': {'$lte': datetime.now(timezone.utc)}}, {'lease_until': {'$exists': False}}]},
-                {'$set': {'status': 'running', 'retry_reset_pending': True, 'lease_token': token,
+                {'$set': {'status': 'running', 'mode': mode, 'retry_request': uuid.uuid4().hex, 'retry_reset_pending': True, 'lease_token': token,
                           'lease_until': datetime.now(timezone.utc) + timedelta(seconds=LEASE_SECONDS)}},
                 return_document=ReturnDocument.AFTER)
             if claimed is None:
@@ -246,6 +246,8 @@ class OfflineCampaignStore:
                         'concurrency', 'rate', 'cooldown', 'local_queue', 'local_capacity',
                         'coordinator_unavailable', 'startup_timeout', 'saturated'}
                     and result.get('http_status') is None and not result.get('transport_error'))
+        if item['params'].get('source') == 'bdc' and result.get('status') == 'deferred':
+            deferred = reason in {'bdc_selection_pending', 'bdc_origin_busy', 'bdc_origin_paused'}
         expiry = result.get('expires_at')
         if successful and (type(expiry) not in (int, float) or not math.isfinite(expiry) or expiry <= time.time()):
             successful = False
@@ -270,13 +272,19 @@ class OfflineCampaignStore:
                           next_retry=(datetime.now(timezone.utc) + timedelta(seconds=failure['delay'])
                                       if failure['state'] == 'retry_wait' else None))
         evidence = result.get('evidence') or {}
-        if (result.get('status') == 'no_data' and evidence.get('kind') == 'empty_collection'
+        verified_absence = evidence.get('kind') == 'empty_collection' and item['params'].get('source') != 'bdc'
+        if item['params'].get('source') == 'bdc':
+            verified_absence = (evidence.get('kind') == 'bdc_selection_no_image'
+                                and isinstance(evidence.get('selection_id'), str)
+                                and len(evidence['selection_id']) == 64
+                                and evidence.get('collection') == job['config']['bdc']['collection'])
+        if (result.get('status') == 'no_data' and verified_absence
                 and type(expiry) in (int, float) and math.isfinite(expiry) and expiry > time.time()
                 and type(evidence.get('count')) is int and evidence['count'] == 0
                 and evidence.get('collection') and evidence.get('checked_at')
                 and evidence.get('period') == item['params']['period']
                 and evidence.get('year') == item['params']['year']):
-            change.update(state='no_data', reason='empty_collection', next_retry=None,
+            change.update(state='no_data', reason='bdc_no_image' if item['params'].get('source') == 'bdc' else 'empty_collection', next_retry=None,
                           evidence=evidence, expires_at=expiry, completed_at=datetime.now(timezone.utc))
         update = {'$set': change, '$unset': {'worker_token': ''}}
         if deferred:

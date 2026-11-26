@@ -69,3 +69,40 @@ def test_invalid_tvi_visualizations_do_not_fall_back_to_legacy_field(value):
     from app.cache.campaign_manifest import campaign_config
     with pytest.raises(ValueError):
         campaign_config(campaign(visParams=value))
+
+
+def bdc_campaign(**changes):
+    config = {'schemaVersion': 1, 'collection': 'landsat-2', 'selectionStrategy': 'local_cloud',
+              'bufferRadiusM': 1000, 'periodPolicy': 'tvi-seasonal-v1', 'selectionRevision': 1,
+              'profiles': ['landsat-tvi-true'], 'defaultProfile': 'landsat-tvi-true'}
+    config.update(changes)
+    return campaign(imagerySource='bdc', bdcConfig=config, visParams=[])
+
+
+def test_bdc_manifest_uses_selection_revision_and_profiles_without_gee_keys():
+    from app.cache.campaign_manifest import campaign_config, manifest_for_point
+    config = campaign_config(bdc_campaign())
+    assert config['source'] == 'bdc'
+    assert config['visualizations'] == ['landsat-tvi-true']
+    point = {'_id': 'p1', 'lat': -16, 'lon': -49}
+    items = list(manifest_for_point(point, config))
+    assert items and all(i['params']['source'] == 'bdc' for i in items)
+    assert all('composite_mode' not in i['params'] for i in items)
+    assert len(items) == len({i['key'] for i in items})
+    revised = list(manifest_for_point(point, campaign_config(bdc_campaign(selectionRevision=2))))
+    assert not {i['key'] for i in items}.intersection(i['key'] for i in revised)
+    moved = list(manifest_for_point(dict(point, lat=-17), config))
+    assert not {i['key'] for i in items}.intersection(i['key'] for i in moved)
+    assert list(manifest_for_point(point, config, start=17)) == items[17:]
+
+
+@pytest.mark.parametrize('change', [
+    {'collection': 'S2_L2A-1'}, {'selectionRevision': 0}, {'selectionRevision': True},
+    {'bufferRadiusM': 99}, {'bufferRadiusM': float('nan')}, {'profiles': []},
+    {'selectionStrategy': 'global_cloud'}, {'periodPolicy': 'other'},
+    {'defaultProfile': 'missing'}, {'profiles': ['../bad']}, {'schemaVersion': 2},
+])
+def test_invalid_bdc_configuration_never_falls_back_to_gee(change):
+    from app.cache.campaign_manifest import campaign_config
+    with pytest.raises(ValueError):
+        campaign_config(bdc_campaign(**change))

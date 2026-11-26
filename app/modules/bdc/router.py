@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from .admission import admission
 from .http import BdcRoute
+from .selection_jobs import OriginBusy
 from .service import BdcService
 from .transport import ServicePaused
 
@@ -43,6 +44,12 @@ def create_router(service=None):
                 )
             ):
                 return operation()
+        except OriginBusy as exc:
+            raise HTTPException(
+                503,
+                "Origem BDC ocupada. Aguarde as leituras em andamento.",
+                headers={"Retry-After": "2", "Cache-Control": "no-store"},
+            ) from exc
         except ServicePaused as exc:
             raise HTTPException(
                 503,

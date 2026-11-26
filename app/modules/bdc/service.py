@@ -180,7 +180,13 @@ class BdcService:
         format_,
         quality=90,
         background="white",
+        *,
+        _offline_lookup=True,
+        _refresh=False,
     ):
+        identifier(collection_id)
+        identifier(item_id)
+        identifier(profile_id)
         tile_region(x, y, z)
         if (
             format_ not in {"png", "jpeg"}
@@ -188,14 +194,25 @@ class BdcService:
             or background not in {"white", "black"}
         ):
             raise ValueError("Configuração de imagem inválida")
+        if format_ == "png" and _offline_lookup:
+            from .offline_tiles import read_tile, tile_key
+            started = time.monotonic()
+            stored = read_tile(collection_id, item_id, profile_id, z, x, y)
+            if stored is not None:
+                data, expires_at = stored
+                return data, dict(cache="HIT", ms=(time.monotonic() - started) * 1000,
+                                  ranges=0, bytes=0, expires_at=expires_at,
+                                  key=tile_key(collection_id, item_id, profile_id, z, x, y))
         detail = self.detail(collection_id, item_id)
         profile = next((p for p in detail["profiles"] if p["id"] == profile_id), None)
         if profile is None:
             raise ValueError("Composição indisponível para esta imagem")
         item = detail["item"]
+        from .offline_tiles import renderer_revision
         key = digest(
             dict(
                 version=1,
+                renderer=renderer_revision(),
                 item=item,
                 profile=profile,
                 xyz=[x, y, z],
@@ -208,7 +225,7 @@ class BdcService:
         path = self.root / "tiles" / f"{key}.{format_}"
         started = time.monotonic()
         with file_lock(path.with_suffix(".lock")):
-            if path.exists():
+            if path.exists() and not _refresh:
                 return path.read_bytes(), dict(
                     cache="HIT",
                     ms=(time.monotonic() - started) * 1000,

@@ -16,19 +16,51 @@ def campaign_config(campaign, width=512, height=512):
     values = (first, last, zoom, width, height)
     if any(isinstance(v, bool) or not isinstance(v, int) for v in values):
         raise ValueError('Anos, zoom e dimensões devem ser inteiros')
-    if not 1985 <= first <= last <= datetime.now().year or not 10 <= zoom <= 18:
+    minimum_year = 1970 if campaign.get('imagerySource') == 'bdc' else 1985
+    if not minimum_year <= first <= last <= datetime.now().year or not 10 <= zoom <= 18:
         raise ValueError('Período ou zoom inválido')
     if not 256 <= width <= 2048 or not 256 <= height <= 2048:
         raise ValueError('Dimensões da cobertura devem estar entre 256 e 2048 pixels')
-    visualizations = campaign.get('visParams', campaign.get('visParamsEnable'))
+    bdc = None
+    if campaign.get('imagerySource') == 'bdc':
+        bdc = bdc_config(campaign)
+    visualizations = bdc['profiles'] if bdc else campaign.get('visParams', campaign.get('visParamsEnable'))
     if not isinstance(visualizations, list) or not visualizations or len(visualizations) > 32:
         raise ValueError('Selecione os parâmetros de visualização da campanha')
     if any(not isinstance(v, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', v) for v in visualizations):
         raise ValueError('Parâmetro de visualização inválido')
-    return {'layer': layer, 'years': list(range(first, last + 1)),
+    config = {'layer': layer, 'years': list(range(first, last + 1)),
             'visualizations': sorted(set(visualizations)), 'periods': ['WET', 'DRY'],
             'zooms': list(range(zoom, min(zoom + 6, 18) + 1)),
             'width': width, 'height': height, 'buffer': 2, 'version': 1}
+    if bdc:
+        from app.modules.bdc.offline_tiles import renderer_revision
+        config.update(source='bdc', bdc=bdc, renderer_revision=renderer_revision())
+    return config
+
+
+def bdc_config(campaign):
+    from app.modules.bdc.profiles import profiles
+
+    config = campaign.get('bdcConfig')
+    expected = {'landsat': 'landsat-2', 'sentinel-2': 'S2_L2A-1'}.get(campaign.get('imageType'))
+    if not isinstance(config, dict) or config.get('collection') != expected:
+        raise ValueError('Coleção BDC incompatível com o sensor')
+    revision, radius = config.get('selectionRevision'), config.get('bufferRadiusM')
+    if (type(config.get('schemaVersion')) is not int or config['schemaVersion'] != 1
+            or type(revision) is not int or not 1 <= revision <= 9007199254740991
+            or type(radius) not in (int, float) or not math.isfinite(radius) or not 100 <= radius <= 5000
+            or config.get('periodPolicy') != 'tvi-seasonal-v1'
+            or config.get('selectionStrategy') not in {'local_cloud', 'local_unusable'}):
+        raise ValueError('Configuração de seleção BDC inválida')
+    selected = config.get('profiles')
+    available = {profile['id'] for profile in profiles({'id': expected})}
+    if (not isinstance(selected, list) or not selected or len(selected) > 32
+            or any(not isinstance(profile, str) or profile not in available for profile in selected)
+            or config.get('defaultProfile') not in selected):
+        raise ValueError('Composições BDC inválidas')
+    return {key: config[key] for key in ('schemaVersion', 'collection', 'selectionRevision',
+            'bufferRadiusM', 'periodPolicy', 'selectionStrategy')} | {'profiles': sorted(set(selected))}
 
 
 def fingerprint(value):
@@ -60,7 +92,8 @@ def viewport_tiles(lat, lon, zooms, width, height, buffer=2):
 
 
 def manifest_for_point(point, config, start=0):
-    from app.services.tile import tile2goehashBBOX
+    if config.get('source') != 'bdc':
+        from app.services.tile import tile2goehashBBOX
 
     combinations = len(config['years']) * len(config['periods']) * len(config['visualizations'])
     point_digest = fingerprint([type(point['_id']).__name__, str(point['_id']), point['lat'], point['lon']])
@@ -68,13 +101,21 @@ def manifest_for_point(point, config, start=0):
                                       config['width'], config['height'], config['buffer'])):
         if (tile_index + 1) * combinations <= start:
             continue
-        geohash, _ = tile2goehashBBOX(tile['x'], tile['y'], tile['z'])
+        geohash = None
+        if config.get('source') != 'bdc':
+            geohash, _ = tile2goehashBBOX(tile['x'], tile['y'], tile['z'])
         index = tile_index * combinations
         for year in reversed(config['years']):
             for period in config['periods']:
                 for visparam in config['visualizations']:
                     index += 1
                     if index <= start:
+                        continue
+                    if config.get('source') == 'bdc':
+                        params = dict(tile, source='bdc', year=year, period=period, visparam=visparam)
+                        key = 'bdc:' + fingerprint([point_digest, config['bdc'], config['renderer_revision'], params])
+                        yield {'point_id': str(point['_id']), 'point_ref': point['_id'],
+                               'point_fingerprint': point_digest, 'params': params, 'key': key}
                         continue
                     params = dict(tile, layer=config['layer'], year=year, period=period,
                                   month=1, visparam=visparam, composite_mode='BEST_IMAGE')

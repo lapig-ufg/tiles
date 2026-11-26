@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from bson import ObjectId
 
 from app.core.auth import SuperAdminRequired
-from app.tasks.offline_campaign import campaign_store, run_offline_campaign
+from app.tasks.offline_campaign import campaign_store, enqueue_offline_campaign
 
 def encode_status(value):
     return jsonable_encoder(value, custom_encoder={datetime: lambda date: date.replace(tzinfo=timezone.utc).isoformat(), ObjectId: str})
@@ -37,14 +37,14 @@ def start_offline_cache(request: OfflineCacheRequest,
                         campaign_id: str = Path(min_length=1, max_length=200)):
     with campaign_store() as store:
         try:
-            store.start(campaign_id, request.mode, request.width, request.height)
+            job = store.start(campaign_id, request.mode, request.width, request.height)
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         # O estado persiste antes da publicação; o reconciliador recupera falhas do broker.
         try:
-            run_offline_campaign.delay(campaign_id)
+            enqueue_offline_campaign(job)
         except Exception:
             return encode_status(dict(store.status(campaign_id), dispatch_pending=True))
         return encode_status(store.status(campaign_id))

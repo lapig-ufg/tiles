@@ -68,7 +68,7 @@ class SelectionJobStore:
         self.origin = database.bdc_origin_leases
         self.jobs.create_index([('state', 1), ('lease_until', 1), ('updated_at', 1)])
 
-    def submit(self, params, key, retry=False):
+    def submit(self, params, key, retry=False, retry_request=None):
         params = SelectionRequest(**params, idempotency_key=key).parameters()
         job_id = digest({'params': params, 'algorithm_version': ALGORITHM_VERSION})
         key_id = digest(key)
@@ -86,9 +86,14 @@ class SelectionJobStore:
         except DuplicateKeyError:
             pass
         if retry:
-            self.jobs.update_one({'_id': job_id, 'state': 'failed', 'error.retryable': True},
-                                 {'$set': {'state': 'pending', 'lease_until': now, 'updated_at': now,
-                                           'error': None, 'result': None}, '$inc': {'retry_epoch': 1}})
+            query = {'_id': job_id, 'state': 'failed', 'error.retryable': True}
+            update = {'$set': {'state': 'pending', 'lease_until': now, 'updated_at': now,
+                               'error': None, 'result': None}, '$inc': {'retry_epoch': 1}}
+            if retry_request is not None:
+                request_id = digest(retry_request)
+                query['offline_retry_requests'] = {'$ne': request_id}
+                update['$addToSet'] = {'offline_retry_requests': request_id}
+            self.jobs.update_one(query, update)
         return self.get(job_id)
 
     def get(self, job_id):
