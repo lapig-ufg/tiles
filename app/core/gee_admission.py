@@ -121,9 +121,10 @@ class GoogleAdmissionError(RuntimeError):
 class AdmissionLimits:
     max_concurrent: int = 20
     rate_per_second: int = 50
-    interactive_reserve: int = 5
-    interactive_rate_reserve: int = 10
-    wait_seconds: float = 2
+    interactive_reserve: int = 15
+    interactive_rate_reserve: int = 40
+    wait_seconds: float = 8
+    background_wait_seconds: float = 2
     lease_seconds: float = 60
     cooldown_seconds: float = 5
 
@@ -137,9 +138,9 @@ class AdmissionLimits:
             raise ValueError('Reserva interativa incompatível com a concorrência')
         if not 0 <= self.interactive_rate_reserve < self.rate_per_second:
             raise ValueError('Reserva interativa incompatível com a taxa')
-        for name in ('wait_seconds', 'lease_seconds', 'cooldown_seconds'):
+        for name in ('wait_seconds', 'background_wait_seconds', 'lease_seconds', 'cooldown_seconds'):
             value = getattr(self, name)
-            if not math.isfinite(value) or value < 0 or (name != 'wait_seconds' and value == 0):
+            if not math.isfinite(value) or value < 0 or (name not in ('wait_seconds', 'background_wait_seconds') and value == 0):
                 raise ValueError(f'{name} inválido')
 
 
@@ -173,6 +174,11 @@ class RedisAdmission:
         self.limits = limits
         self._pending = threading.BoundedSemaphore(32)
 
+    def _wait_seconds(self, background):
+        if background:
+            return min(self.limits.background_wait_seconds, self.limits.wait_seconds)
+        return self.limits.wait_seconds
+
     def _keys(self, project):
         # O teto comum inclui chamadas sem projeto comprovado e evita somar sua cota à de REST.
         budgets = ['shared']
@@ -185,10 +191,13 @@ class RedisAdmission:
         keys = self._keys(project)
         token = uuid.uuid4().hex
         labels = _labels(operation, background)
+        if not self._pending.acquire(blocking=False):
+            gee_admission_rejected_total.labels(**labels, reason='local_queue').inc()
+            raise GoogleAdmissionError(1, 'local_queue')
         started = time.monotonic()
         deadline = _startup_deadline.get()
         if deadline is None:
-            deadline = started + self.limits.wait_seconds
+            deadline = started + self._wait_seconds(background)
         try:
             while True:
                 startup_remaining_seconds()
@@ -200,6 +209,7 @@ class RedisAdmission:
             gee_admission_rejected_total.labels(**labels, reason=exc.reason).inc()
             raise
         finally:
+            self._pending.release()
             gee_admission_wait_seconds.labels(**labels).observe(time.monotonic() - started)
 
     def _attempt(self, keys, token, labels, background):
@@ -220,11 +230,11 @@ class RedisAdmission:
         _, delay_ms, reason = result
         remaining = deadline - time.monotonic()
         delay = max(.001, delay_ms / 1000)
+        if isinstance(reason, bytes):
+            reason = reason.decode('ascii')
         if remaining <= 0 or delay > remaining:
-            if isinstance(reason, bytes):
-                reason = reason.decode('ascii')
             raise GoogleAdmissionError(delay, reason)
-        return min(delay, .05, remaining)
+        return min(delay, .05, remaining) if reason == 'concurrency' else min(delay, remaining)
 
     async def acquire_async(self, *, project=None, operation='download', background=False):
         labels = _labels(operation, background)
@@ -232,7 +242,7 @@ class RedisAdmission:
             gee_admission_rejected_total.labels(**labels, reason='local_queue').inc()
             raise GoogleAdmissionError(1, 'local_queue')
         started = time.monotonic()
-        deadline = started + self.limits.wait_seconds
+        deadline = started + self._wait_seconds(background)
         keys, token = self._keys(project), uuid.uuid4().hex
         try:
             while True:

@@ -534,3 +534,35 @@ def test_sdk_connection_failure_never_retries_inside_one_admission(admission, co
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_pause_wait_does_not_poll_every_fifty_ms(admission):
+    assert admission.RedisAdmission._delay([0, 500, b'cooldown'], time.monotonic() + 2) == .5
+    assert admission.RedisAdmission._delay([0, 500, 'rate'], time.monotonic() + 2) == .5
+    assert admission.RedisAdmission._delay([0, 500, 'concurrency'], time.monotonic() + 2) == .05
+
+
+def test_sync_waiting_queue_is_bounded(admission, coordinator):
+    for _ in range(32):
+        assert coordinator._pending.acquire(False)
+    try:
+        with pytest.raises(admission.GoogleAdmissionError, match='Earth Engine') as error:
+            coordinator.acquire()
+        assert error.value.reason == 'local_queue'
+    finally:
+        for _ in range(32):
+            coordinator._pending.release()
+
+
+def test_foreground_waits_for_pause_background_fails_fast(admission):
+    client = fakeredis.FakeRedis()
+    limits = admission.AdmissionLimits(wait_seconds=.5, background_wait_seconds=.01)
+    controller = admission.RedisAdmission(client, limits)
+    client.set(controller._keys('p')[-1], '1', px=100)
+    with pytest.raises(admission.GoogleAdmissionError) as error:
+        controller.acquire(project='p', background=True)
+    assert error.value.reason == 'cooldown'
+    lease = controller.acquire(project='p')
+    lease.release()
+    assert controller._pending.acquire(False)
+    controller._pending.release()

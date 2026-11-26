@@ -8,6 +8,8 @@ interface TileRequest {
     url: string;
     controller: AbortController;
     started: boolean;
+    attempts: number;
+    createdAt: number;
     objectUrl?: string;
     cleanupImage?: () => void;
 }
@@ -16,13 +18,15 @@ export class TileRequestQueue {
     private readonly requests = new Set<TileRequest>();
     private pending: TileRequest[] = [];
     private running = 0;
+    private blockedUntil = 0;
+    private wakeup?: ReturnType<typeof setTimeout>;
 
     constructor(private readonly concurrency: number = 8) {}
 
     load(owner: object, tile: Tile, url: string): void {
         const request: TileRequest = {
             owner, tile: tile as ImageTile, url,
-            controller: new AbortController(), started: false,
+            controller: new AbortController(), started: false, attempts: 0, createdAt: Date.now(),
         };
         this.requests.add(request);
         this.pending.push(request);
@@ -39,9 +43,16 @@ export class TileRequestQueue {
             if (!request.started) this.requests.delete(request);
         }
         this.pending = this.pending.filter(request => !request.controller.signal.aborted);
+        this.drain();
     }
 
     private drain(): void {
+        clearTimeout(this.wakeup);
+        this.wakeup = undefined;
+        if (this.pending.length && this.blockedUntil > Date.now()) {
+            this.wakeup = setTimeout(() => this.drain(), this.blockedUntil - Date.now());
+            return;
+        }
         while (this.running < this.concurrency && this.pending.length) {
             const request = this.pending.shift()!;
             request.started = true;
@@ -51,6 +62,8 @@ export class TileRequestQueue {
     }
 
     private async download(request: TileRequest): Promise<void> {
+        let retry = false;
+        request.attempts++;
         try {
             const response = await fetch(request.url, {
                 signal: request.controller.signal,
@@ -59,6 +72,8 @@ export class TileRequestQueue {
             if (request.controller.signal.aborted || !response.ok) {
                 await response.body?.cancel();
                 if (request.controller.signal.aborted) return;
+                retry = this.deferRetry(request, response);
+                if (retry) return;
                 throw new Error(`Tile HTTP ${response.status}`);
             }
             const blob = await response.blob();
@@ -70,10 +85,29 @@ export class TileRequestQueue {
         } finally {
             request.cleanupImage?.();
             this.revokeObjectUrl(request);
-            this.requests.delete(request);
+            if (retry && !request.controller.signal.aborted) {
+                request.started = false;
+                this.pending.push(request);
+            } else {
+                this.requests.delete(request);
+            }
             this.running--;
             this.drain();
         }
+    }
+
+    private deferRetry(request: TileRequest, response: Response): boolean {
+        if (response.status !== 429 && response.status !== 503) return false;
+        const header = response.headers.get('Retry-After')?.trim();
+        if (!header) return false;
+        const now = Date.now();
+        const milliseconds = /^\d+(?:\.\d+)?$/.test(header)
+            ? Number(header) * 1000 : Date.parse(header) - now;
+        if (!Number.isFinite(milliseconds) || milliseconds < 0) return false;
+        const delay = Math.max(milliseconds, 500 * 2 ** (request.attempts - 1)) + Math.random() * 250;
+        if (delay > 30000) return false;
+        this.blockedUntil = Math.max(this.blockedUntil, now + delay);
+        return request.attempts < 3 && now + delay - request.createdAt <= 60000;
     }
 
     private decodeImage(request: TileRequest): Promise<void> {

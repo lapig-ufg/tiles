@@ -1,4 +1,4 @@
-import {fakeAsync, flushMicrotasks} from '@angular/core/testing';
+import {fakeAsync, flushMicrotasks, tick} from '@angular/core/testing';
 import ImageTile from 'ol/ImageTile';
 import TileState from 'ol/TileState';
 import {TileRequestQueue} from './tile-request-queue';
@@ -124,4 +124,103 @@ describe('TileRequestQueue', () => {
         queue.cancel(currentOwner);
         flushMicrotasks();
     }));
+    it('respeita Retry-After compartilhado e limita as tentativas', fakeAsync(() => {
+        spyOn(Math, 'random').and.returnValue(0);
+        fetchTile.and.callFake(() => Promise.resolve(new Response(null, {
+            status: 503, headers: {'Retry-After': '2'},
+        })));
+        const owner = {};
+        const pending = tile(owner, 1);
+        flushMicrotasks();
+        expect(pending.getState()).toBe(TileState.LOADING);
+        tick(1999);
+        expect(fetchTile.calls.count()).toBe(1);
+        tick(1);
+        expect(fetchTile.calls.count()).toBe(2);
+        tick(2000);
+        expect(fetchTile.calls.count()).toBe(3);
+        expect(pending.getState()).toBe(TileState.ERROR);
+        tick(10000);
+        expect(fetchTile.calls.count()).toBe(3);
+    }));
+
+    it('cancela uma retentativa pendente sem fazer outra chamada', fakeAsync(() => {
+        fetchTile.and.returnValue(Promise.resolve(new Response(null, {
+            status: 429, headers: {'Retry-After': '2'},
+        })));
+        const owner = {};
+        const pending = tile(owner, 1);
+        flushMicrotasks();
+        queue.cancel(owner);
+        tick(10000);
+        expect(fetchTile.calls.count()).toBe(1);
+        expect(pending.getState()).toBe(TileState.EMPTY);
+    }));
+
+    for (const header of ['invalid', '120']) {
+        it(`não antecipa uma pausa inválida ou excessiva: ${header}`, fakeAsync(() => {
+            fetchTile.and.returnValue(Promise.resolve(new Response(null, {
+                status: 503, headers: {'Retry-After': header},
+            })));
+            const pending = tile({}, 1);
+            flushMicrotasks();
+            expect(pending.getState()).toBe(TileState.ERROR);
+            expect(fetchTile.calls.count()).toBe(1);
+        }));
+    }
+
+    it('carrega 38 anos com seis tiles inéditos por ano após uma limitação', fakeAsync(() => {
+        queue = new TileRequestQueue(8);
+        spyOn(Math, 'random').and.returnValue(0);
+        const attempts = new Map<string, number>();
+        let active = 0;
+        let peak = 0;
+        fetchTile.and.callFake(url => {
+            const key = String(url);
+            const count = (attempts.get(key) || 0) + 1;
+            attempts.set(key, count);
+            active++;
+            peak = Math.max(peak, active);
+            return new Promise(resolve => setTimeout(() => {
+                active--;
+                resolve(key === '/tile/1' && count === 1
+                    ? new Response(null, {status: 503, headers: {'Retry-After': '2'}})
+                    : response());
+            }, 20));
+        });
+        const pending: ImageTile[] = [];
+        for (let year = 0; year < 38; year++) {
+            const owner = {};
+            for (let offset = 0; offset < 6; offset++) pending.push(tile(owner, year * 6 + offset));
+        }
+        let decoded = 0;
+        for (let elapsed = 0; elapsed < 10000; elapsed += 20) {
+            tick(20);
+            while (decoded < images.length) images[decoded++].dispatchEvent(new Event('load'));
+            flushMicrotasks();
+        }
+        expect(pending.every(item => item.getState() === TileState.LOADED)).toBeTrue();
+        expect(attempts.size).toBe(228);
+        expect(fetchTile.calls.count()).toBe(229);
+        expect(peak).toBeLessThanOrEqual(8);
+        expect(revokeUrl.calls.count()).toBe(228);
+    }));
+
+    it('respeita uma data HTTP e pausa também as solicitações de outro mapa', fakeAsync(() => {
+        spyOn(Math, 'random').and.returnValue(0);
+        const deadline = Math.ceil(Date.now() / 1000) * 1000 + 2000;
+        fetchTile.and.returnValue(Promise.resolve(new Response(null, {
+            status: 429, headers: {'Retry-After': new Date(deadline).toUTCString()},
+        })));
+        const owner = {};
+        tile(owner, 1);
+        flushMicrotasks();
+        tile(owner, 2);
+        tick(deadline - Date.now() - 1);
+        expect(fetchTile.calls.count()).toBe(1);
+        queue.cancel(owner);
+        tick(10000);
+        expect(fetchTile.calls.count()).toBe(1);
+    }));
+
 });
