@@ -36,7 +36,7 @@ class Storage:
         if Key not in self.objects:
             raise ClientError({'Error': {'Code': '404'}}, 'HeadObject')
         value = self.objects[Key]
-        return {'ContentLength': len(value['Body']), 'ContentType': 'image/png',
+        return {'ContentLength': len(value['Body']), 'ContentType': value.get('ContentType', 'image/png'),
                 'Metadata': value.get('Metadata', {})}
 
     def put_object(self, **kwargs):
@@ -468,3 +468,23 @@ def test_sync_google_download_does_not_follow_redirect_inside_one_attempt():
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+def test_valid_jpeg_is_persisted_and_reused_without_another_download(warming):
+    data = io.BytesIO()
+    Image.new('RGB', (256, 256), 'green').save(data, format='JPEG')
+    warming.png = data.getvalue()
+    assert warm(warming)['status'] == 'cached'
+    assert warming.storage.uploads[0]['Body'] == warming.png
+    assert warming.storage.uploads[0]['ContentType'] == 'image/jpeg'
+    assert warming.redis.hget('tile:' + KEY, 'content_type') == b'image/jpeg'
+    assert warm(warming)['status'] == 'already_cached'
+    assert len(warming.downloads) == 1
+
+
+def test_truncated_jpeg_is_not_persisted(warming):
+    data = io.BytesIO()
+    Image.new('RGB', (256, 256), 'green').save(data, format='JPEG')
+    warming.png = data.getvalue()[:-100]
+    assert warm(warming)['status'] == 'failed'
+    assert warming.storage.uploads == []

@@ -91,7 +91,7 @@ class SyncTileCache:
         if index_expiry and expiry:
             expiry = min(index_expiry, expiry)
         return bool(
-            expiry and expiry > time.time() and obj.get('ContentType') == 'image/png'
+            expiry and expiry > time.time() and obj.get('ContentType') in {'image/png', 'image/jpeg'}
             and 0 < int(obj.get('ContentLength', 0)) <= self.max_tile_bytes
         )
 
@@ -104,16 +104,20 @@ class SyncTileCache:
             raise InvalidTileError('Tamanho de tile inválido')
         try:
             with Image.open(io.BytesIO(data)) as png:
-                if png.format != 'PNG':
-                    raise InvalidTileError('Conteúdo não é PNG')
-                png.verify()
+                if png.format not in {'PNG', 'JPEG'}:
+                    raise InvalidTileError('Formato de imagem não suportado')
+                content_type = Image.MIME[png.format]
+                if png.format == 'JPEG':
+                    png.load()
+                else:
+                    png.verify()
         except (OSError, SyntaxError, ValueError, UnidentifiedImageError) as exc:
-            raise InvalidTileError('Conteúdo PNG inválido') from exc
+            raise InvalidTileError('Conteúdo de imagem inválido') from exc
         lease.ensure_owned()
         expires_at = time.time() + ttl
         object_key = _s3_key(key)
         self.s3.put_object(
-            Bucket=self.bucket, Key=object_key, Body=data, ContentType='image/png',
+            Bucket=self.bucket, Key=object_key, Body=data, ContentType=content_type,
             CacheControl=f'public, max-age={math.ceil(ttl)}',
             Metadata={'expires_at': str(expires_at)},
         )
@@ -124,7 +128,7 @@ class SyncTileCache:
         with self.redis.pipeline(transaction=True) as pipeline:
             pipeline.hset('tile:' + key, mapping={
                 's3_key': object_key, 'size': str(len(data)),
-                'created': datetime.now().isoformat(), 'content_type': 'image/png',
+                'created': datetime.now().isoformat(), 'content_type': content_type,
                 's3_synced': '1', 'expires_at': str(expires_at),
             })
             pipeline.expire('tile:' + key, remaining)
