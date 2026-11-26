@@ -226,6 +226,80 @@ services:
         reservations:
           memory: 1536m
 
+  celery_worker_bdc:
+    <<: *common-config
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app
+      - worker
+      - --loglevel=info
+      - --concurrency=2
+      - --prefetch-multiplier=1
+      - --max-tasks-per-child=100
+      - --pool=prefork
+      - --queues=bdc
+      - --without-gossip
+      - --without-mingle
+      - --without-heartbeat
+    environment:
+      <<: *common-celery-env
+      SKIP_GEE_INIT: "true"
+      S3_ENDPOINT: http://s3-tiles:8333
+      BDC_INPE_TOKEN_FILE: /run/secrets/bdc_inpe_token
+    secrets:
+      - source: bdc_inpe_token
+        target: bdc_inpe_token
+    deploy:
+      <<: *deploy-celery-worker
+      replicas: 2
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
+      resources:
+        limits:
+          memory: 2g
+        reservations:
+          memory: 1g
+
+  celery_worker_bdc_offline:
+    <<: *common-config
+    command:
+      - celery
+      - -A
+      - app.tasks.celery_app
+      - worker
+      - --loglevel=info
+      - --concurrency=1
+      - --prefetch-multiplier=1
+      - --max-tasks-per-child=100
+      - --pool=prefork
+      - --queues=bdc_offline
+      - --without-gossip
+      - --without-mingle
+      - --without-heartbeat
+    environment:
+      <<: *common-celery-env
+      SKIP_GEE_INIT: "true"
+      S3_ENDPOINT: http://s3-tiles:8333
+      BDC_INPE_TOKEN_FILE: /run/secrets/bdc_inpe_token
+    secrets:
+      - source: bdc_inpe_token
+        target: bdc_inpe_token
+    deploy:
+      <<: *deploy-celery-worker
+      replicas: 1
+      update_config:
+        parallelism: 1
+        order: stop-first
+        failure_action: rollback
+      resources:
+        limits:
+          memory: 2g
+        reservations:
+          memory: 512m
+
   celery_worker_cache:
     <<: *common-config
     command:
@@ -314,6 +388,11 @@ services:
           memory: 4g
         reservations:
           memory: 2g
+
+secrets:
+  bdc_inpe_token:
+    external: true
+    name: ${BDC_INPE_SECRET_NAME:-lapig_inpe_token_20261126T201004Z}
 
 networks:
   traefik-public:

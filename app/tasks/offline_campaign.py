@@ -91,7 +91,7 @@ def process_window(store, job, token, generate, limit=8, bdc_generate=None):
 
 def enqueue_offline_campaign(job, countdown=None):
     if job.get('config', {}).get('source') == 'bdc':
-        return run_offline_campaign.apply_async(args=[job['_id']], queue='bdc', countdown=countdown or 0)
+        return run_offline_campaign.apply_async(args=[job['_id']], queue='bdc_offline', countdown=countdown or 0)
     if countdown is not None:
         return run_offline_campaign.apply_async(args=[job['_id']], countdown=countdown)
     return run_offline_campaign.delay(job['_id'])
@@ -121,7 +121,8 @@ def run_offline_campaign(campaign_id):
             store.release(campaign_id, token)
         status = store.jobs.find_one({'_id': campaign_id})
         if status['status'] in ACTIVE:
-            enqueue_offline_campaign(status, countdown=5)
+            preparing_bdc = job['status'] == 'preparing' and job.get('config', {}).get('source') == 'bdc'
+            enqueue_offline_campaign(status, countdown=0 if preparing_bdc else 5)
         return {'status': status['status'], 'total': status.get('total', 0)}
 
 

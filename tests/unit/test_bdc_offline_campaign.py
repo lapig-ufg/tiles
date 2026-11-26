@@ -152,9 +152,9 @@ def test_bdc_dispatch_uses_authenticated_worker_for_initial_and_followup(monkeyp
     monkeypatch.setattr(offline_campaign, 'run_offline_campaign', task)
     job = {'_id': 'test', 'config': {'source': 'bdc'}}
     offline_campaign.enqueue_offline_campaign(job)
-    task.apply_async.assert_called_with(args=['test'], queue='bdc', countdown=0)
+    task.apply_async.assert_called_with(args=['test'], queue='bdc_offline', countdown=0)
     offline_campaign.enqueue_offline_campaign(job, countdown=5)
-    task.apply_async.assert_called_with(args=['test'], queue='bdc', countdown=5)
+    task.apply_async.assert_called_with(args=['test'], queue='bdc_offline', countdown=5)
     task.delay.assert_not_called()
     offline_campaign.enqueue_offline_campaign({'_id': 'legacy', 'config': {}})
     task.delay.assert_called_once_with('legacy')
@@ -173,5 +173,75 @@ def test_recovery_preserves_bdc_worker_queue(store, monkeypatch):
     monkeypatch.setattr(offline_campaign, 'campaign_store', factory)
     monkeypatch.setattr(offline_campaign, 'run_offline_campaign', task)
     offline_campaign.recover_offline_campaigns.run()
-    task.apply_async.assert_called_once_with(args=['test'], queue='bdc', countdown=0)
+    task.apply_async.assert_called_once_with(args=['test'], queue='bdc_offline', countdown=0)
     task.delay.assert_not_called()
+
+
+def test_manifest_followup_is_immediate_bounded_and_releases_lease(store, monkeypatch):
+    from contextlib import contextmanager
+    from app.tasks import offline_campaign
+
+    store.db.campaign.replace_one({'_id': 'test'}, dict(bdc_campaign(), _id='test', zoomLevel=18,
+                                                       initialYear=1985, finalYear=2025))
+    job = store.start('test')
+
+    @contextmanager
+    def factory():
+        yield store
+
+    dispatched = []
+    def enqueue(current, countdown=None):
+        assert store.jobs.find_one({'_id': 'test'}).get('lease_token') is None
+        dispatched.append((current, countdown))
+
+    monkeypatch.setattr(offline_campaign, 'campaign_store', factory)
+    monkeypatch.setattr(offline_campaign, 'enqueue_offline_campaign', enqueue)
+    result = offline_campaign.run_offline_campaign.run('test')
+    assert result['status'] == 'preparing'
+    assert store.items.count_documents({'run_id': job['run_id']}) == 250
+    assert dispatched[0][1] == 0
+    assert store.jobs.find_one({'_id': 'test'})['point_offset'] == 250
+    offline_campaign.run_offline_campaign.run('test')
+    assert store.items.count_documents({'run_id': job['run_id']}) == 500
+    assert dispatched[1][1] == 0
+
+
+def test_manifest_sealing_starts_rendering_immediately(store, monkeypatch):
+    from contextlib import contextmanager
+    from app.tasks import offline_campaign
+
+    store.db.campaign.replace_one({'_id': 'test'}, dict(bdc_campaign(), _id='test', zoomLevel=18,
+                                                       initialYear=2020, finalYear=2020))
+    store.start('test')
+
+    @contextmanager
+    def factory():
+        yield store
+
+    dispatch = Mock()
+    monkeypatch.setattr(offline_campaign, 'campaign_store', factory)
+    monkeypatch.setattr(offline_campaign, 'enqueue_offline_campaign', dispatch)
+    result = offline_campaign.run_offline_campaign.run('test')
+    assert result['status'] == 'running'
+    assert store.jobs.find_one({'_id': 'test'})['manifest_complete'] is True
+    assert dispatch.call_args.kwargs['countdown'] == 0
+
+
+def test_busy_campaign_does_not_prepare_or_dispatch_duplicate(store, monkeypatch):
+    from contextlib import contextmanager
+    from app.tasks import offline_campaign
+
+    store.start('test')
+    token = store.claim('test')
+
+    @contextmanager
+    def factory():
+        yield store
+
+    dispatch = Mock()
+    monkeypatch.setattr(offline_campaign, 'campaign_store', factory)
+    monkeypatch.setattr(offline_campaign, 'enqueue_offline_campaign', dispatch)
+    assert offline_campaign.run_offline_campaign.run('test') == {'status': 'busy'}
+    assert store.items.count_documents({}) == 0
+    assert store.jobs.find_one({'_id': 'test'})['lease_token'] == token
+    dispatch.assert_not_called()
