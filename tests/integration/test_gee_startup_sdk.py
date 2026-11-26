@@ -6,6 +6,7 @@ import textwrap
 def test_real_sdk_initialization_waits_for_admission_then_builds_image():
     result = subprocess.run([sys.executable, '-c', textwrap.dedent('''
         import threading
+        import io
         from pathlib import Path
         from unittest.mock import patch
 
@@ -34,11 +35,16 @@ def test_real_sdk_initialization_waits_for_admission_then_builds_image():
                 raise AssertionError(uri)
             return httplib2.Response({'status': 200}), content
 
+        def catalog(url, **kwargs):
+            assert url == 'https://storage.googleapis.com/earthengine-stac/catalog/catalog_deprecated.json'
+            return io.BytesIO(b'{"links": []}')
+
         timer = threading.Timer(.1, occupied.release)
         timer.start()
         try:
             with patch.object(admission, 'get_admission_controller', return_value=coordinator), \\
-                 patch.object(admission.GoogleAdmissionTransport, '_request_once', respond):
+                 patch.object(admission.GoogleAdmissionTransport, '_request_once', respond), \\
+                 patch('urllib.request.urlopen', side_effect=catalog):
                 with admission.gee_startup():
                     admission.initialize_gee_transport(Credentials(
                         token='test-token', quota_project_id='test-project'))

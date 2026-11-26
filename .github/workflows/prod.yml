@@ -76,6 +76,14 @@ jobs:
           cache-to: type=inline
           no-cache: false
 
+      - name: Verify scheduling with host timezone
+        run: |
+          docker run --rm --entrypoint python -e PYTHONPATH=/app \
+            --mount type=bind,src=/usr/share/zoneinfo/America/Sao_Paulo,dst=/etc/localtime,readonly \
+            --mount "type=bind,src=$PWD/tests/container/check_timezone.py,dst=/tmp/check_timezone.py,readonly" \
+            lapig/${{ env.APPLICATION_NAME }}:${{ env.DOCKER_PATH }}_${{ env.LAST_COMMIT_HASH }} \
+            /tmp/check_timezone.py
+
       - name: Verify Redis transport in production image
         run: |
           docker run --rm --network host --entrypoint python \

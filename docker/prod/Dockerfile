@@ -1,4 +1,8 @@
 FROM python:3.12-slim-bookworm
+
+# A montagem de /etc/localtime deve atingir um arquivo, sem substituir Etc/UTC.
+RUN cp /etc/localtime /tmp/container-localtime && \
+    rm /etc/localtime && mv /tmp/container-localtime /etc/localtime
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/uv
 
 
