@@ -109,8 +109,7 @@ async def list_vis_params(
         if tag:
             filter_query["tags"] = tag
         
-        # Exclude landsat_collections document
-        filter_query["_id"] = {"$ne": "landsat_collections"}
+        filter_query["_id"] = {"$nin": ["landsat_collections", "sentinel_collections"]}
         
         cursor = collection.find(filter_query)
         results = []
@@ -124,7 +123,6 @@ async def list_vis_params(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{name}", response_model=Dict[str, Any])
 async def get_vis_param(name: str):
     """Get a specific visualization parameter by name"""
     try:
@@ -199,7 +197,6 @@ async def create_vis_param(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.put("/{name}", response_model=Dict[str, Any])
 async def update_vis_param(
     name: str,
     request: VisParamUpdateRequest,
@@ -1000,3 +997,7 @@ async def get_sentinel_bands(collection_name: str = "COPERNICUS/S2_HARMONIZED"):
     except Exception as e:
         logger.exception(f"Error getting sentinel bands: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+router.add_api_route("/{name}", get_vis_param, methods=["GET"], response_model=Dict[str, Any])
+router.add_api_route("/{name}", update_vis_param, methods=["PUT"], response_model=Dict[str, Any])
