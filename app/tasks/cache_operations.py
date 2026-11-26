@@ -19,9 +19,9 @@ from loguru import logger
 
 from app.cache.cache_hybrid import tile_cache
 from app.cache.keys import build_tile_cache_keys
-from app.cache.sync_cache import InvalidTileError, SyncTileCache, validate_offline_image
+from app.cache.sync_cache import InvalidTileError, SyncTileCache, image_diagnostics, validate_offline_image
 from app.cache.sync_lock import sync_tile_lock
-from app.core.gee_admission import call_gee, google_request, project_from_url
+from app.core.gee_admission import GoogleAdmissionError, call_gee, google_request, project_from_url
 from app.utils.http import EarthEngineRateLimitedError
 from app.utils.ee_http_sync import urlopen_without_redirects
 from app.core.config import settings
@@ -492,6 +492,10 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
     from app.cache.offline_absence import clear_absence, get_absence
 
     file_cache = None
+    phase = 'cache_lookup'
+    source_failure = None
+    source_exception = None
+    http_status = None
     try:
         if layer not in {'landsat', 's2_harmonized'}:
             return {'status': 'error', 'error': 'Camada desconhecida'}
@@ -530,10 +534,13 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                         remaining = expires_at - time.time()
                         if remaining <= 0:
                             continue
+                        phase = 'persistence'
                         cache.set_png(file_cache, data, remaining, lease=png_lease)
+                        phase = 'persistence_verify'
                         expires_at = cache.confirm_valid_image(file_cache, png_lease)
                         if not expires_at:
-                            raise InvalidTileError('A imagem persistida não passou na validação')
+                            raise InvalidTileError('A imagem persistida não passou na validação',
+                                                   code='persistence_unconfirmed', details=image_diagnostics(data))
                         clear_absence(cache.redis, file_cache, lease=png_lease)
                         return {'status': 'already_cached', 'tile': file_cache, 'expires_at': expires_at}
                     absence = get_absence(cache.redis, file_cache)
@@ -548,6 +555,7 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                             url_lease.ensure_owned()
                             dates = _build_period_dates(period, year, month)
                             geom = ee.Geometry.BBox(bbox['w'], bbox['s'], bbox['e'], bbox['n'])
+                            phase = 'map_create'
                             try:
                                 if layer == 'landsat':
                                     layer_url = _warm_create_landsat_url(
@@ -558,8 +566,11 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                                     layer_url = _warm_create_s2_url(
                                         geom, dates, visparam, tvi_campaign_id=tvi_campaign_id,
                                     )
-                            except ee.EEException:
+                            except ee.EEException as exc:
+                                source_exception = exc
+                                source_failure = {'reason': type(exc).__name__, 'failure_phase': phase}
                                 if validate_image:
+                                    phase = 'absence_check'
                                     absence = _prove_warm_absence(cache, png_lease, dict(
                                         x=x, y=y, z=z, layer=layer, period=period, year=year,
                                         month=month, visparam=visparam, composite_mode=composite_mode))
@@ -576,18 +587,25 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                 png_lease.ensure_owned()
                 tile_url = layer_url.format(x=x, y=y, z=z)
                 request = urllib.request.Request(tile_url)
+                phase = 'download'
                 with google_request(project=project_from_url(tile_url), background=True) as admission:
                     try:
                         with urlopen_without_redirects(request, timeout=60) as response:
+                            http_status = response.status
                             admission.response(response.status, response.headers.get('Retry-After'))
                             if response.status != 200:
                                 return {'status': 'error', 'tile': file_cache,
                                         'http_status': response.status}
                             content_length = response.headers.get('Content-Length')
                             if content_length and int(content_length) > cache.max_tile_bytes:
-                                raise InvalidTileError('Tile excede o limite de tamanho')
+                                raise InvalidTileError('Tile excede o limite de tamanho', code='oversized_image',
+                                                       details={'byte_length': int(content_length)})
                             png_bytes = response.read(cache.max_tile_bytes + 1)
+                            if len(png_bytes) > cache.max_tile_bytes:
+                                raise InvalidTileError('Tile excede o limite de tamanho', code='oversized_image',
+                                                       details=image_diagnostics(png_bytes))
                     except HTTPError as exc:
+                        http_status = exc.code
                         try:
                             admission.response(exc.code, exc.headers.get('Retry-After'))
                         finally:
@@ -600,31 +618,61 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                         raise
                 ttl = (365 if year < datetime.now().year else 30) * 86400
                 if validate_image:
+                    phase = 'image_validation'
                     try:
                         validate_offline_image(png_bytes)
-                    except InvalidTileError:
+                    except InvalidTileError as exc:
+                        source_exception = exc
+                        source_failure = {'reason': 'invalid_tile', 'failure_phase': phase,
+                                          'diagnostics': exc.diagnostics}
+                        phase = 'absence_check'
                         absence = _prove_warm_absence(cache, png_lease, dict(
                             x=x, y=y, z=z, layer=layer, period=period, year=year,
                             month=month, visparam=visparam, composite_mode=composite_mode))
                         if not absence:
                             raise
                         return absence
+                phase = 'persistence'
                 cache.set_png(file_cache, png_bytes, ttl, lease=png_lease)
                 clear_absence(cache.redis, file_cache, lease=png_lease)
                 result = {'status': 'cached', 'tile': file_cache, 'size': len(png_bytes)}
                 if validate_image:
+                    phase = 'persistence_verify'
                     expires_at = cache.confirm_valid_image(file_cache, png_lease)
                     if not expires_at:
-                        raise InvalidTileError('A imagem persistida não passou na validação')
+                        raise InvalidTileError('A imagem persistida não passou na validação',
+                                               code='persistence_unconfirmed', details=image_diagnostics(png_bytes))
                     result['expires_at'] = expires_at
                 return result
     except TviTokenDenied as denied:
         return {'status': 'failed', 'reason': 'gee_credential_denied',
-                'tile': file_cache, 'detail': denied.detail}
-    except InvalidTileError:
-        return {'status': 'failed', 'reason': 'invalid_tile', 'tile': file_cache}
+                'tile': file_cache, 'detail': denied.detail, 'failure_phase': phase}
+    except InvalidTileError as exc:
+        return {'status': 'failed', 'reason': 'invalid_tile', 'tile': file_cache,
+                'failure_phase': (source_failure or {}).get('failure_phase', phase),
+                'http_status': http_status, 'diagnostics': exc.diagnostics}
     except Exception as exc:
         logger.warning('Falha no pré-cache de tile: {}', type(exc).__name__)
+        if validate_image:
+            if isinstance(exc, GoogleAdmissionError):
+                http_status = exc.http_status or http_status
+                result = {'status': 'failed' if source_failure or http_status or exc.transport_error else 'deferred',
+                          'reason': ('EarthEngineRateLimitedError' if http_status == 429
+                                     else exc.transport_error or 'GoogleAdmissionError'),
+                          'tile': file_cache, 'failure_phase': phase, 'admission_reason': exc.reason,
+                          'retry_after': exc.retry_after, 'http_status': http_status,
+                          'transport_error': exc.transport_error}
+                if source_failure:
+                    result.update(source_failure, admission_phase=phase)
+                return result
+            result = {'status': 'failed', 'reason': type(exc).__name__, 'tile': file_cache,
+                      'failure_phase': phase, 'http_status': http_status,
+                      'retry_after': getattr(exc, 'retry_after', 0)}
+            if source_failure:
+                result.update(source_failure)
+                if exc is not source_exception:
+                    result.update(secondary_error=type(exc).__name__, secondary_phase=phase)
+            return result
         if continue_on_error and self.request.retries >= self.max_retries:
             return {'status': 'failed', 'reason': 'cache_warm_failed',
                     'tile': file_cache, 'error_type': type(exc).__name__,

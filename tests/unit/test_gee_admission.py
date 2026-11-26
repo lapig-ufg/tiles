@@ -566,3 +566,90 @@ def test_foreground_waits_for_pause_background_fails_fast(admission):
     lease.release()
     assert controller._pending.acquire(False)
     controller._pending.release()
+
+
+def test_coordinator_failure_after_http_429_retains_source_response(admission, coordinator, monkeypatch):
+    import redis
+    lease = coordinator.acquire()
+    original = coordinator.redis.eval
+    def unavailable_pause(script, *args):
+        if script == admission._PAUSE:
+            raise redis.ConnectionError('unavailable')
+        return original(script, *args)
+    monkeypatch.setattr(coordinator.redis, 'eval', unavailable_pause)
+    try:
+        with pytest.raises(admission.GoogleAdmissionError) as error:
+            lease.response(429, '45')
+        assert error.value.reason == 'coordinator_unavailable'
+        assert error.value.http_status == 429
+        assert error.value.retry_after == 45
+    finally:
+        lease.release()
+
+
+def test_sdk_retry_admission_retains_prior_http_failure_without_leaking_to_next_call(admission, coordinator, monkeypatch):
+    import requests
+    from googleapiclient.http import HttpRequest
+    monkeypatch.setattr(admission, 'get_admission_controller', lambda: coordinator)
+    monkeypatch.setattr(admission, '_sdk_transport_installed', True)
+    network_calls = []
+    def network(*args, **kwargs):
+        network_calls.append(True)
+        return http_response(429, b'{}', {'retry-after': '30'})
+    monkeypatch.setattr(requests.Session, 'request', network)
+    request = HttpRequest(admission.GoogleAdmissionTransport(), lambda response, body: body,
+                          'https://earthengine.googleapis.com/v1/projects/test/maps')
+    request._sleep = lambda seconds: None
+    with pytest.raises(admission.GoogleAdmissionError) as first:
+        admission.call_gee(request.execute, num_retries=1, operation='map', background=True)
+    assert first.value.reason == 'cooldown'
+    assert first.value.http_status == 429
+    assert 29 <= first.value.retry_after <= 30
+    with pytest.raises(admission.GoogleAdmissionError) as second:
+        admission.call_gee(request.execute, num_retries=1, operation='map', background=True)
+    assert second.value.reason == 'cooldown'
+    assert second.value.http_status is None
+    assert len(network_calls) == 1
+
+
+@pytest.mark.parametrize('retry_after', [float('nan'), float('inf'), float('-inf'), None, 'invalid'])
+def test_admission_error_retry_delay_is_finite(admission, retry_after):
+    import math
+    error = admission.GoogleAdmissionError(retry_after, 'rate')
+    assert math.isfinite(error.retry_after)
+    assert error.retry_after > 0
+
+
+@pytest.mark.parametrize(('exception_name', 'error_type'), [
+    ('Timeout', 'TimeoutError'), ('ConnectionError', 'ConnectionError'),
+    ('ChunkedEncodingError', 'ConnectionError'), ('SSLError', 'ConnectionError'),
+])
+@pytest.mark.parametrize('nested', [False, True])
+def test_sdk_retry_preserves_transport_failure_without_http_or_context_leak(
+        admission, coordinator, monkeypatch, exception_name, error_type, nested):
+    import requests
+    from googleapiclient.http import HttpRequest
+    monkeypatch.setattr(admission, 'get_admission_controller', lambda: coordinator)
+    monkeypatch.setattr(admission, '_sdk_transport_installed', True)
+    calls = []
+    def network(*args, **kwargs):
+        calls.append(True)
+        monkeypatch.setattr(coordinator, '_attempt', lambda *args: [0, 1000, 'rate'])
+        raise getattr(requests.exceptions, exception_name)('simulated source failure')
+    monkeypatch.setattr(requests.Session, 'request', network)
+    request = HttpRequest(admission.GoogleAdmissionTransport(), lambda response, body: body,
+                          'https://earthengine.googleapis.com/v1/projects/test/maps')
+    request._sleep = lambda seconds: None
+    def execute():
+        return admission.call_gee(request.execute, num_retries=1, operation='map', background=True)
+    with pytest.raises(admission.GoogleAdmissionError) as first:
+        admission.call_gee(execute) if nested else execute()
+    assert first.value.http_status is None
+    assert first.value.transport_error == error_type
+    assert first.value.reason == 'rate'
+    assert first.value.retry_after == 1
+    with pytest.raises(admission.GoogleAdmissionError) as second:
+        admission.call_gee(request.execute, num_retries=1, operation='map', background=True)
+    assert second.value.http_status is None
+    assert second.value.transport_error is None
+    assert len(calls) == 1

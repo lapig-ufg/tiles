@@ -111,9 +111,11 @@ return 1
 
 
 class GoogleAdmissionError(RuntimeError):
-    def __init__(self, retry_after: float, reason: str = 'saturated'):
-        self.retry_after = max(.001, float(retry_after))
+    def __init__(self, retry_after: float, reason: str = 'saturated', *, http_status=None):
+        self.retry_after = _retry_after(retry_after, 1)
         self.reason = reason
+        self.http_status = http_status
+        self.transport_error = None
         super().__init__('Orçamento de chamadas ao Earth Engine indisponível')
 
 
@@ -289,13 +291,18 @@ class GoogleLease:
 
     def response(self, status: int, retry_after=None):
         self.status = '429' if status == 429 else f'{status // 100}xx'
+        failure = _sdk_failure.get()
+        if failure is not None and status >= 400:
+            failure['http_status'] = status
         if status == 429:
             delay = _retry_after(retry_after, self.controller.limits.cooldown_seconds)
             self.retry_after = delay
+            if failure is not None:
+                failure['retry_until'] = time.monotonic() + delay
             try:
                 self.controller.redis.eval(_PAUSE, 1, self.keys[-1], math.ceil(delay * 1000))
             except redis.RedisError as exc:
-                raise GoogleAdmissionError(delay, 'coordinator_unavailable') from exc
+                raise GoogleAdmissionError(delay, 'coordinator_unavailable', http_status=status) from exc
 
     async def aresponse(self, status: int, retry_after=None):
         await _finish_thread(self.response, status, retry_after)
@@ -384,9 +391,18 @@ async def async_google_request(*, project=None, operation='download', background
 def call_gee(function, *args, project=None, operation='map', background=False, **kwargs):
     if _sdk_transport_installed:
         token = _sdk_operation.set((operation, background))
+        failure = {}
+        failure_token = _sdk_failure.set(failure)
         try:
             return function(*args, **kwargs)
+        except GoogleAdmissionError as exc:
+            exc.transport_error = exc.transport_error or failure.get('transport_error')
+            if failure.get('http_status'):
+                exc.http_status = exc.http_status or failure['http_status']
+                exc.retry_after = max(exc.retry_after, failure.get('retry_until', 0) - time.monotonic())
+            raise
         finally:
+            _sdk_failure.reset(failure_token)
             _sdk_operation.reset(token)
     with google_request(project=project, operation=operation, background=background):
         return function(*args, **kwargs)
@@ -421,6 +437,7 @@ def gee_startup():
 
 _sdk_transport_installed = False
 _sdk_operation = ContextVar('gee_operation', default=('sdk', False))
+_sdk_failure = ContextVar('gee_sdk_failure', default=None)
 _EE_HOSTS = {'earthengine.googleapis.com', 'earthengine-highvolume.googleapis.com',
              'earthengine.google.com'}
 
@@ -456,7 +473,13 @@ class GoogleAdmissionTransport(httplib2.Http):
                         if key.lower() == 'x-goog-user-project'), None) or project_from_url(uri)
         operation, background = _sdk_operation.get()
         with google_request(project=project, operation=operation, background=background) as lease:
-            response, content = self._request_once(uri, method, body, headers, **kwargs)
+            try:
+                response, content = self._request_once(uri, method, body, headers, **kwargs)
+            except (OSError, httplib2.ServerNotFoundError) as exc:
+                failure = _sdk_failure.get()
+                if failure is not None:
+                    failure['transport_error'] = type(exc).__name__
+                raise
             lease.response(response.status, response.get('retry-after'))
             return response, content
 

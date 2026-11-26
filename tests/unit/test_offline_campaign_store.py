@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 
 import mongomock
@@ -288,3 +288,104 @@ def test_expired_absence_is_rechecked_before_completion(store):
     assert store.status('test')['counts']['no_data'] == 0
     assert store.finish(job, token)['status'] == 'running'
     assert store.next_item(job, token) is not None
+
+
+def test_admission_deferrals_preserve_failure_budget_and_retry_deadline(store):
+    job, token = prepare(store)
+    first = store.items.find_one({'run_id': job['run_id']})
+    store.items.delete_many({'_id': {'$ne': first['_id']}})
+    for attempt in range(7):
+        store.items.update_one({'_id': first['_id']}, {'$set': {'next_retry': datetime.now(timezone.utc)}})
+        item = store.next_item(job, token)
+        assert store.complete_item(job, token, item, {
+            'status': 'deferred', 'reason': 'GoogleAdmissionError', 'retry_after': 180,
+            'failure_phase': 'download', 'admission_reason': 'concurrency',
+        })
+        saved = store.items.find_one({'_id': item['_id']})
+        assert saved['state'] == 'retry_wait'
+        assert saved['attempts'] == 0
+        assert saved['admission_deferrals'] == attempt + 1
+        assert saved['next_retry'].replace(tzinfo=timezone.utc) >= datetime.now(timezone.utc) + timedelta(seconds=179)
+        assert saved['admission_reason'] == 'concurrency'
+        assert saved['failure_phase'] == 'download'
+
+
+def test_real_validation_failure_still_exhausts_budget_after_deferral(store):
+    job, token = prepare(store)
+    first = store.items.find_one({'run_id': job['run_id']})
+    store.items.delete_many({'_id': {'$ne': first['_id']}})
+    store.complete_item(job, token, store.next_item(job, token), {
+        'status': 'deferred', 'reason': 'GoogleAdmissionError',
+        'failure_phase': 'download', 'admission_reason': 'rate',
+    })
+    for attempt in range(5):
+        store.items.update_one({'_id': first['_id']}, {'$set': {'next_retry': datetime.now(timezone.utc)}})
+        item = store.next_item(job, token)
+        assert store.complete_item(job, token, item, {
+            'status': 'failed', 'reason': 'invalid_tile', 'failure_phase': 'image_validation',
+            'diagnostics': {'validation_code': 'transparent_image', 'byte_length': 222},
+        })
+    saved = store.items.find_one({'_id': first['_id']})
+    assert saved['state'] == 'blocked'
+    assert saved['attempts'] == 5
+    assert saved['diagnostics']['validation_code'] == 'transparent_image'
+
+
+def test_deferral_cannot_compensate_twice_or_after_lease_loss(store):
+    job, token = prepare(store)
+    result = {'status': 'deferred', 'reason': 'GoogleAdmissionError',
+              'failure_phase': 'map_create', 'admission_reason': 'rate'}
+    first = store.next_item(job, token)
+    assert store.complete_item(job, token, first, result)
+    assert not store.complete_item(job, token, first, result)
+    assert store.items.find_one({'_id': first['_id']})['attempts'] == 0
+    second = store.next_item(job, token)
+    store.jobs.update_one({'_id': 'test'}, {'$set': {'lease_token': 'other'}})
+    assert not store.complete_item(job, token, second, result)
+    assert store.items.find_one({'_id': second['_id']})['attempts'] == 1
+
+
+@pytest.mark.parametrize('changes', [
+    {'http_status': 429}, {'failure_phase': 'absence_check'}, {'reason': 'invalid_tile'},
+])
+def test_ambiguous_or_source_failure_cannot_receive_free_retry(store, changes):
+    job, token = prepare(store)
+    item = store.next_item(job, token)
+    result = dict(status='deferred', reason='GoogleAdmissionError',
+                  failure_phase='download', admission_reason='coordinator_unavailable')
+    result.update(changes)
+    store.complete_item(job, token, item, result)
+    saved = store.items.find_one({'_id': item['_id']})
+    assert saved['attempts'] == 1
+    assert saved.get('admission_deferrals', 0) == 0
+
+
+@pytest.mark.parametrize('retry_after', [float('nan'), float('inf'), float('-inf'), None, 'invalid'])
+def test_deferred_retry_deadline_rejects_non_finite_values(store, retry_after):
+    job, token = prepare(store)
+    item = store.next_item(job, token)
+    store.complete_item(job, token, item, {
+        'status': 'deferred', 'reason': 'GoogleAdmissionError', 'failure_phase': 'download',
+        'admission_reason': 'rate', 'retry_after': retry_after,
+    })
+    saved = store.items.find_one({'_id': item['_id']})
+    delay = (saved['next_retry'].replace(tzinfo=timezone.utc) - datetime.now(timezone.utc)).total_seconds()
+    assert 29 <= delay <= 30
+    assert saved['attempts'] == 0
+
+
+@pytest.mark.parametrize(('status', 'reason'), [('failed', 'TimeoutError'), ('deferred', 'GoogleAdmissionError')])
+def test_transport_failure_consumes_attempt_without_fabricating_http_status(store, status, reason):
+    job, token = prepare(store)
+    item = store.next_item(job, token)
+    store.complete_item(job, token, item, {
+        'status': status, 'reason': reason, 'transport_error': 'TimeoutError',
+        'http_status': None, 'failure_phase': 'map_create', 'admission_reason': 'rate', 'retry_after': 1,
+    })
+    saved = store.items.find_one({'_id': item['_id']})
+    assert saved['attempts'] == 1
+    assert saved['state'] == 'retry_wait'
+    assert saved['reason'] == reason
+    assert saved['transport_error'] == 'TimeoutError'
+    assert saved['http_status'] is None
+    assert saved.get('admission_deferrals', 0) == 0

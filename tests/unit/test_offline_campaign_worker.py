@@ -59,3 +59,37 @@ def test_worker_stops_before_google_when_point_moves(store):
     calls = []
     assert process_window(store, job, token, lambda **kw: calls.append(kw))['status'] == 'stale'
     assert calls == []
+
+
+def test_worker_records_deferral_and_continues_without_spending_failure_budget(store):
+    from app.tasks.offline_campaign import process_window
+    job, token = prepare(store)
+    calls = []
+    def generate(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return {'status': 'deferred', 'reason': 'GoogleAdmissionError',
+                    'admission_reason': 'concurrency', 'failure_phase': 'map_create', 'retry_after': 60}
+        return {'status': 'cached', 'expires_at': time.time() + 3600}
+    process_window(store, job, token, generate, limit=2)
+    summary = store.status('test')
+    assert summary['counts']['completed'] == 1
+    assert summary['counts']['retry_wait'] == 1
+    assert summary['errors'][0]['attempts'] == 0
+    assert summary['errors'][0]['admission_deferrals'] == 1
+    assert summary['errors'][0]['admission_reason'] == 'concurrency'
+
+
+def test_worker_keeps_image_diagnostics_when_absence_check_is_deferred(store):
+    from app.tasks.offline_campaign import process_window
+    job, token = prepare(store)
+    def generate(**kwargs):
+        return {'status': 'failed', 'reason': 'invalid_tile', 'failure_phase': 'image_validation',
+                'admission_reason': 'rate', 'admission_phase': 'absence_check', 'retry_after': 60,
+                'diagnostics': {'validation_code': 'white_image', 'byte_length': 500}}
+    process_window(store, job, token, generate, limit=1)
+    error = store.status('test')['errors'][0]
+    assert error['reason'] == 'invalid_tile'
+    assert error['attempts'] == 1
+    assert error['admission_phase'] == 'absence_check'
+    assert error['diagnostics']['validation_code'] == 'white_image'

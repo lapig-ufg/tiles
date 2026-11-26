@@ -16,30 +16,47 @@ from app.core.config import settings
 
 
 class InvalidTileError(ValueError):
-    pass
+    def __init__(self, message, *, code='invalid_content', details=None):
+        self.diagnostics = dict(details or {}, validation_code=code)
+        super().__init__(message)
+
+
+def image_diagnostics(data):
+    if not isinstance(data, bytes):
+        return {}
+    return {'byte_length': len(data), 'content_sha256': hashlib.sha256(data).hexdigest()}
 
 
 def validate_offline_image(data):
+    details = image_diagnostics(data)
     if not isinstance(data, bytes) or not data:
-        raise InvalidTileError('Imagem vazia')
+        raise InvalidTileError('Imagem vazia', code='empty_image', details=details)
     try:
         with Image.open(io.BytesIO(data)) as image:
-            if image.format not in {'PNG', 'JPEG'} or image.size != (256, 256):
-                raise InvalidTileError('Formato ou dimensões de tile inválidos')
+            details.update(image_format=image.format, width=image.width, height=image.height)
+            if image.format not in {'PNG', 'JPEG'}:
+                raise InvalidTileError('Formato de tile inválido', code='unsupported_format', details=details)
+            if image.size != (256, 256):
+                raise InvalidTileError('Dimensões de tile inválidas', code='invalid_dimensions', details=details)
             content_type = Image.MIME[image.format]
             image.verify()
         with Image.open(io.BytesIO(data)) as image:
             image.load()
             rgba = image.convert('RGBA')
             if rgba.getchannel('A').getbbox() is None:
-                raise InvalidTileError('Imagem totalmente transparente')
+                raise InvalidTileError('Imagem totalmente transparente', code='transparent_image', details=details)
             visible = Image.new('RGBA', rgba.size, 'white')
             visible.alpha_composite(rgba)
-            if visible.convert('RGB').getextrema() == ((255, 255),) * 3:
-                raise InvalidTileError('Imagem totalmente branca')
+            extrema = visible.convert('RGB').getextrema()
+            if extrema == ((255, 255),) * 3:
+                raise InvalidTileError('Imagem totalmente branca', code='white_image', details=details)
+            if extrema == ((0, 0),) * 3:
+                raise InvalidTileError('Imagem totalmente preta', code='black_image', details=details)
         return content_type
+    except InvalidTileError:
+        raise
     except (OSError, SyntaxError, ValueError, UnidentifiedImageError) as exc:
-        raise InvalidTileError('Imagem inválida para inspeção offline') from exc
+        raise InvalidTileError('Imagem inválida para inspeção offline', code='corrupt_image', details=details) from exc
 
 
 def _expiry(value):

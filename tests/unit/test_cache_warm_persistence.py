@@ -59,6 +59,7 @@ def warming(monkeypatch):
     from app.tasks import cache_operations
     import importlib
     offline_campaign = importlib.import_module('app.tasks.offline_campaign')
+    source_absence_evidence = offline_campaign.source_absence_evidence
     monkeypatch.setattr(offline_campaign, 'source_absence_evidence', lambda params: None)
 
     def resolve_configuration(name, year):
@@ -102,6 +103,7 @@ def warming(monkeypatch):
     state = SimpleNamespace(
         operations=cache_operations, redis=anchor, storage=storage, clients=clients,
         png=data.getvalue(), downloads=[], maps=[], http_error=None, http_gate=None,
+        source_absence_evidence=source_absence_evidence,
     )
 
     class Response(io.BytesIO):
@@ -642,6 +644,198 @@ def test_empty_sentinel_can_be_proved_before_download(warming, monkeypatch, empt
     if empty:
         assert warm(warming, layer='s2_harmonized', validate_image=True)['status'] == 'no_data'
     else:
-        with pytest.raises(ee.EEException):
-            warm(warming, layer='s2_harmonized', validate_image=True)
+        result = warm(warming, layer='s2_harmonized', validate_image=True)
+        assert result['status'] == 'failed'
+        assert result['reason'] == 'EEException'
+        assert result['failure_phase'] == 'map_create'
+        assert 'secondary_error' not in result
     assert warming.downloads == []
+
+
+def test_offline_map_admission_is_deferred_without_calling_source(warming, monkeypatch):
+    from app.core.gee_admission import get_admission_controller
+    coordinator = get_admission_controller()
+    monkeypatch.setattr(coordinator, '_attempt', lambda *args: [0, 1000, 'concurrency'])
+    result = warm(warming, validate_image=True)
+    assert result['status'] == 'deferred'
+    assert result['reason'] == 'GoogleAdmissionError'
+    assert result['admission_reason'] == 'concurrency'
+    assert result['failure_phase'] == 'map_create'
+    assert result['retry_after'] >= 1
+    assert warming.maps == warming.downloads == []
+
+
+def test_offline_download_admission_is_deferred_after_cached_map(warming, monkeypatch):
+    from app.core.gee_admission import get_admission_controller
+    coordinator = get_admission_controller()
+    warming.redis.set('meta:' + PATH, orjson.dumps({'url': URL, 'date': datetime.now().isoformat()}))
+    monkeypatch.setattr(coordinator, '_attempt', lambda *args: [0, 2000, 'rate'])
+    result = warm(warming, validate_image=True)
+    assert result['status'] == 'deferred'
+    assert result['failure_phase'] == 'download'
+    assert result['admission_reason'] == 'rate'
+    assert warming.maps == warming.downloads == []
+
+
+def test_offline_429_with_coordinator_failure_is_not_free_deferral(warming, monkeypatch):
+    from app.core import gee_admission
+    coordinator = gee_admission.get_admission_controller()
+    original = coordinator.redis.eval
+    def unavailable_pause(script, *args):
+        if script == gee_admission._PAUSE:
+            raise redis.ConnectionError('unavailable')
+        return original(script, *args)
+    monkeypatch.setattr(coordinator.redis, 'eval', unavailable_pause)
+    warming.http_error = HTTPError(URL, 429, 'quota', {'Retry-After': '30'}, io.BytesIO())
+    result = warm(warming, validate_image=True)
+    assert result['status'] == 'failed'
+    assert result['reason'] == 'EarthEngineRateLimitedError'
+    assert result['http_status'] == 429
+    assert result['admission_reason'] == 'coordinator_unavailable'
+    assert result['failure_phase'] == 'download'
+    assert len(warming.downloads) == 1
+
+
+@pytest.mark.parametrize('color', ['white', 'black'])
+def test_invalid_tile_is_preserved_when_absence_query_is_not_admitted(warming, monkeypatch, color):
+    from app.core.gee_admission import GoogleAdmissionError
+    from app.tasks import offline_campaign
+    data = io.BytesIO()
+    Image.new('RGB', (256, 256), color).save(data, format='PNG')
+    warming.png = data.getvalue()
+    def not_admitted(params):
+        raise GoogleAdmissionError(30, 'concurrency')
+    monkeypatch.setattr(offline_campaign, 'source_absence_evidence', not_admitted)
+    result = warm(warming, validate_image=True)
+    assert result['status'] == 'failed'
+    assert result['reason'] == 'invalid_tile'
+    assert result['failure_phase'] == 'image_validation'
+    assert result['admission_phase'] == 'absence_check'
+    assert result['admission_reason'] == 'concurrency'
+    assert result['diagnostics']['validation_code'] == color + '_image'
+    assert result['diagnostics']['content_sha256'] == hashlib.sha256(warming.png).hexdigest()
+    assert warming.storage.uploads == []
+    assert URL not in str(result)
+
+
+def test_persistence_confirmation_failure_is_distinct_from_download_validation(warming, monkeypatch):
+    from app.cache.sync_cache import SyncTileCache
+    monkeypatch.setattr(SyncTileCache, 'confirm_valid_image', lambda *args: False)
+    result = warm(warming, validate_image=True)
+    assert result['status'] == 'failed'
+    assert result['reason'] == 'invalid_tile'
+    assert result['failure_phase'] == 'persistence_verify'
+    assert result['diagnostics']['validation_code'] == 'persistence_unconfirmed'
+    assert len(warming.storage.uploads) == 1
+    assert result['diagnostics']['byte_length'] == len(warming.png)
+
+
+def test_offline_sdk_429_before_internal_retry_is_a_real_failure(warming, monkeypatch):
+    import requests
+    from googleapiclient.http import HttpRequest
+    from app.core import gee_admission
+    monkeypatch.setattr(gee_admission, '_sdk_transport_installed', True)
+    network_calls = []
+    def network(*args, **kwargs):
+        network_calls.append(True)
+        response = requests.Response()
+        response.status_code = 429
+        response._content = b'{}'
+        response.headers = {'Retry-After': '30'}
+        return response
+    monkeypatch.setattr(requests.Session, 'request', network)
+    request = HttpRequest(gee_admission.GoogleAdmissionTransport(), lambda response, body: body,
+                          'https://earthengine.googleapis.com/v1/projects/test/maps')
+    request._sleep = lambda seconds: None
+    def map_create(*args, **kwargs):
+        return gee_admission.call_gee(request.execute, num_retries=1, operation='map', background=True)
+    monkeypatch.setattr(warming.operations, '_warm_create_landsat_url', map_create)
+    result = warm(warming, validate_image=True)
+    assert result['status'] == 'failed'
+    assert result['reason'] == 'EarthEngineRateLimitedError'
+    assert result['failure_phase'] == 'map_create'
+    assert result['admission_reason'] == 'cooldown'
+    assert result['http_status'] == 429
+    assert len(network_calls) == 1
+    assert warming.downloads == []
+
+
+def test_non_offline_admission_preserves_continue_on_error_after_retry_budget(warming, monkeypatch):
+    from app.core.gee_admission import get_admission_controller
+    coordinator = get_admission_controller()
+    monkeypatch.setattr(coordinator, '_attempt', lambda *args: [0, 1000, 'concurrency'])
+    task = warming.operations.cache_warm_tile
+    task.push_request(retries=task.max_retries, called_directly=True)
+    try:
+        result = warm(warming, continue_on_error=True)
+    finally:
+        task.pop_request()
+    assert result['status'] == 'failed'
+    assert result['reason'] == 'cache_warm_failed'
+    assert result['error_type'] == 'GoogleAdmissionError'
+    assert warming.maps == warming.downloads == []
+
+
+@pytest.mark.parametrize(('exception_name', 'error_type'), [
+    ('Timeout', 'TimeoutError'), ('ConnectionError', 'ConnectionError'),
+    ('ChunkedEncodingError', 'ConnectionError'), ('SSLError', 'ConnectionError'),
+])
+def test_offline_sdk_transport_failure_before_admission_rejection_is_not_deferred(
+        warming, monkeypatch, exception_name, error_type):
+    import requests
+    from googleapiclient.http import HttpRequest
+    from app.core import gee_admission
+    coordinator = gee_admission.get_admission_controller()
+    monkeypatch.setattr(gee_admission, '_sdk_transport_installed', True)
+    calls = []
+    def network(*args, **kwargs):
+        calls.append(True)
+        monkeypatch.setattr(coordinator, '_attempt', lambda *args: [0, 1000, 'rate'])
+        raise getattr(requests.exceptions, exception_name)('simulated source failure')
+    monkeypatch.setattr(requests.Session, 'request', network)
+    request = HttpRequest(gee_admission.GoogleAdmissionTransport(), lambda response, body: body,
+                          'https://earthengine.googleapis.com/v1/projects/test/maps')
+    request._sleep = lambda seconds: None
+    def map_create(*args, **kwargs):
+        return gee_admission.call_gee(request.execute, num_retries=1, operation='map', background=True)
+    monkeypatch.setattr(warming.operations, '_warm_create_landsat_url', map_create)
+    result = warm(warming, validate_image=True)
+    assert result['status'] == 'failed'
+    assert result['reason'] == error_type
+    assert result['transport_error'] == error_type
+    assert result['http_status'] is None
+    assert result['failure_phase'] == 'map_create'
+    assert result['admission_reason'] == 'rate'
+    assert result['retry_after'] == 1
+    independent = warm(warming, validate_image=True)
+    assert independent['status'] == 'deferred'
+    assert independent['http_status'] is None
+    assert independent.get('transport_error') is None
+    assert len(calls) == 1
+    assert warming.downloads == []
+
+
+def test_black_tile_with_available_scenes_remains_invalid_without_absence_marker(warming, monkeypatch):
+    import ee
+    from unittest.mock import MagicMock
+    from app.tasks import offline_campaign
+    collection = MagicMock()
+    collection.filterDate.return_value = collection
+    collection.filterBounds.return_value = collection
+    collection.filter.return_value = collection
+    collection.size.return_value.getInfo.return_value = 31
+    monkeypatch.setattr(ee, 'ImageCollection', lambda name: collection)
+    monkeypatch.setattr(offline_campaign, 'source_absence_evidence', warming.source_absence_evidence)
+    monkeypatch.setattr(warming.operations, '_warm_create_landsat_url', lambda *args, **kwargs: URL)
+    data = io.BytesIO()
+    Image.new('RGB', (256, 256), 'black').save(data, format='PNG')
+    warming.png = data.getvalue()
+    result = warm(warming, validate_image=True)
+    assert result['status'] == 'failed'
+    assert result['reason'] == 'invalid_tile'
+    assert result['failure_phase'] == 'image_validation'
+    assert result['diagnostics']['validation_code'] == 'black_image'
+    collection.size.return_value.getInfo.assert_called_once_with()
+    assert warming.redis.get('absence:' + KEY) is None
+    assert warming.redis.hgetall('tile:' + KEY) == {}
+    assert warming.storage.uploads == []

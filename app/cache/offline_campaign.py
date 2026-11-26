@@ -239,15 +239,31 @@ class OfflineCampaignStore:
             return False
         successful = result.get('status') in {'cached', 'already_cached'}
         reason = result.get('reason', 'source_unavailable')
+        deferred = (result.get('status') == 'deferred' and reason == 'GoogleAdmissionError'
+                    and result.get('failure_phase') in {'map_create', 'download'}
+                    and result.get('admission_reason') in {
+                        'concurrency', 'rate', 'cooldown', 'local_queue', 'local_capacity',
+                        'coordinator_unavailable', 'startup_timeout', 'saturated'}
+                    and result.get('http_status') is None and not result.get('transport_error'))
         expiry = result.get('expires_at')
         if successful and (type(expiry) not in (int, float) or not math.isfinite(expiry) or expiry <= time.time()):
             successful = False
             reason = 'cache_expired'
         change = {'state': 'completed', 'reason': None, 'next_retry': None,
                   'completed_at': datetime.now(timezone.utc), 'cache_result': result.get('status'),
-                  'expires_at': expiry if successful else None}
+                  'expires_at': expiry if successful else None,
+                  'failure_phase': result.get('failure_phase'),
+                  'admission_reason': result.get('admission_reason'),
+                  'admission_phase': result.get('admission_phase'),
+                  'secondary_error': result.get('secondary_error'),
+                  'secondary_phase': result.get('secondary_phase'),
+                  'http_status': result.get('http_status'),
+                  'transport_error': result.get('transport_error'),
+                  'diagnostics': {key: value for key, value in (result.get('diagnostics') or {}).items()
+                                  if key in {'validation_code', 'byte_length', 'content_sha256',
+                                             'image_format', 'width', 'height'}}}
         if not successful:
-            failure = failure_state(reason, item['attempts'], result.get('retry_after', 0))
+            failure = failure_state(reason, 1 if deferred else item['attempts'], result.get('retry_after', 0))
             change.update(state=failure['state'], reason=reason, completed_at=None,
                           next_retry=(datetime.now(timezone.utc) + timedelta(seconds=failure['delay'])
                                       if failure['state'] == 'retry_wait' else None))
@@ -260,9 +276,12 @@ class OfflineCampaignStore:
                 and evidence.get('year') == item['params']['year']):
             change.update(state='no_data', reason='empty_collection', next_retry=None,
                           evidence=evidence, expires_at=expiry, completed_at=datetime.now(timezone.utc))
+        update = {'$set': change, '$unset': {'worker_token': ''}}
+        if deferred:
+            update['$inc'] = {'attempts': -1, 'admission_deferrals': 1}
         return bool(self.items.update_one({'_id': item['_id'], 'run_id': job['run_id'],
                                           'state': 'processing', 'worker_token': token},
-                                         {'$set': change, '$unset': {'worker_token': ''}}).modified_count)
+                                         update).modified_count)
 
     def progress_summary(self, job, cached):
         now = time.time()
