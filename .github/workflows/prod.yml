@@ -7,6 +7,16 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     outputs:
       APPLICATION_NAME: ${{ steps.create_env.outputs.APPLICATION_NAME }}
       DOCKER_PATH: ${{ steps.create_env.outputs.DOCKER_PATH }}
@@ -65,6 +75,19 @@ jobs:
           cache-from: type=registry,ref=lapig/${{ env.APPLICATION_NAME }}:${{ env.DOCKER_PATH }}_latest
           cache-to: type=inline
           no-cache: false
+
+      - name: Verify Redis transport in production image
+        run: |
+          docker run --rm --network host --entrypoint python \
+            lapig/${{ env.APPLICATION_NAME }}:${{ env.DOCKER_PATH }}_${{ env.LAST_COMMIT_HASH }} \
+            -c '
+          from kombu import Connection
+          with Connection("redis://127.0.0.1:6379/15", connect_timeout=5) as connection:
+              connection.ensure_connection(max_retries=0)
+              channel = connection.channel()
+              assert channel.client.ping()
+              channel.close()
+          '
 
   deploy:
     needs: build

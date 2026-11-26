@@ -95,6 +95,7 @@ redis[hiredis]==5.0.1
 slowapi==0.1.9
 nest-asyncio==1.5.9
 celery[redis]==5.4.0
+kombu==5.4.2
 psutil==5.9.8
 pymongo==4.8.0
 motor==3.5.1
