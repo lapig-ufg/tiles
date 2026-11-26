@@ -1,4 +1,4 @@
-import {Component, OnDestroy, OnInit} from '@angular/core';
+import {AfterViewInit, Component, ElementRef, OnDestroy, OnInit, QueryList, ViewChildren} from '@angular/core';
 import Map from 'ol/Map';
 import View from 'ol/View';
 import TileLayer from 'ol/layer/Tile';
@@ -7,7 +7,6 @@ import {fromLonLat, toLonLat, transform} from 'ol/proj';
 import {defaults as defaultInteractions} from 'ol/interaction';
 import Pointer from 'ol/interaction/Pointer';
 import {MonthMapItem, PeriodMapItem} from "../../interfaces/map.interface";
-import {LayerService} from "../services/layer.service";
 import {PointService} from "../services/point.service";
 import {Feature} from "ol";
 import {Point} from "ol/geom";
@@ -19,6 +18,17 @@ import {Observable, Subject} from "rxjs";
 import {takeUntil} from "rxjs/operators";
 import {EventsKey} from "ol/events";
 import {unByKey} from "ol/Observable";
+
+import {TileRequestQueue} from '../tile-request-queue';
+import {VisibleMapScheduler} from '../visible-map-scheduler';
+
+interface MapDefinition {
+    id: string;
+    period: string;
+    year: number;
+    visparam: string;
+    month?: string;
+}
 
 const currentYear = new Date().getFullYear();
 const currentMonth = new Date().getMonth() + 1;
@@ -40,13 +50,23 @@ const CAPABILITIES = {
     templateUrl: './map-grid-landsat.component.html',
     styleUrls: ['./map-grid-landsat.component.scss']
 })
-export class MapGridLandsatComponent implements OnInit, OnDestroy {
+export class MapGridLandsatComponent implements OnInit, AfterViewInit, OnDestroy {
     public landsatMaps: (PeriodMapItem | MonthMapItem)[] = [];
     private centerCoordinates = fromLonLat([-57.149819, -21.329828]);
-    private mapsInstances: { id: string, map: Map }[] = [];
+    private mapsInstances: { id: string, map: Map, source: XYZ }[] = [];
+    private readonly tileRequests = new TileRequestQueue();
     private markerLayersByMapId: { [mapId: string]: VectorLayer<any> } = {};
     private viewListenerKeys: { mapId: string, keys: EventsKey[] }[] = [];
-    private pendingTimers: ReturnType<typeof setTimeout>[] = [];
+    @ViewChildren('mapContainer') private mapContainers!: QueryList<ElementRef<HTMLElement>>;
+    private mapDefinitions = new globalThis.Map<string, MapDefinition>();
+    private zoom = 13;
+    private readonly mapVisibility = new VisibleMapScheduler(
+        target => {
+            const definition = this.mapDefinitions.get(target.id);
+            if (definition) this.createMap(definition, target);
+        },
+        id => this.hideMap(id),
+    );
     private destroy$ = new Subject<void>();
     private _syncing = false;
     public pointCreationMode = false;
@@ -70,36 +90,47 @@ export class MapGridLandsatComponent implements OnInit, OnDestroy {
 
     ngOnInit(): void {
         this.initializeMaps();
-        this.pointService.setPoint({lat: -21.329828, lon: -57.149819});
         this.pointService.point$
             .pipe(takeUntil(this.destroy$))
-            .subscribe({
-                next: point => {
-                    if (point.lat && point.lon) {
-                        this.lat = point.lat;
-                        this.lon = point.lon;
-                        this.updateCenterCoordinates([point.lon, point.lat]);
-                    }
+            .subscribe(point => {
+                if (Number.isFinite(point.lat) && Number.isFinite(point.lon)) {
+                    this.updateCenterCoordinates([point.lon!, point.lat!]);
                 }
             });
+        this.pointService.setPoint({lat: -21.329828, lon: -57.149819});
         const landsatCapabilities = CAPABILITIES.collections.find(c => c.name === 'landsat');
         if (landsatCapabilities) {
-            this.landsatYears = landsatCapabilities.year;
+            this.landsatYears = [...landsatCapabilities.year];
         }
         this.landsatYears.unshift('Todos');
+    }
+
+    ngAfterViewInit(): void {
+        this.mapContainers.changes.pipe(takeUntil(this.destroy$)).subscribe(() => this.observeMapContainers());
+        this.observeMapContainers();
+    }
+
+    private observeMapContainers(): void {
+        this.mapVisibility.observe(this.mapContainers.map(ref => ref.nativeElement));
+    }
+
+    private hideMap(mapId: string): void {
+        const instance = this.mapsInstances.find(inst => inst.id === mapId);
+        if (instance) {
+            this.disposeMap(instance);
+            this.mapsInstances = this.mapsInstances.filter(inst => inst !== instance);
+        }
     }
 
     ngOnDestroy(): void {
         this.destroy$.next();
         this.destroy$.complete();
-        for (const timer of this.pendingTimers) {
-            clearTimeout(timer);
-        }
-        this.pendingTimers = [];
+        this.mapVisibility.destroy();
         this.disposeAllMaps();
     }
 
-    private disposeMap(inst: { id: string, map: Map }): void {
+    private disposeMap(inst: { id: string, map: Map, source: XYZ }): void {
+        this.tileRequests.cancel(inst.source);
         const entry = this.viewListenerKeys.find(e => e.mapId === inst.id);
         if (entry) {
             for (const key of entry.keys) {
@@ -113,6 +144,9 @@ export class MapGridLandsatComponent implements OnInit, OnDestroy {
             delete this.markerLayersByMapId[inst.id];
         }
         inst.map.setTarget(undefined);
+        inst.map.dispose();
+        inst.source.clear();
+        inst.source.dispose();
     }
 
     private disposeAllMaps(): void {
@@ -164,14 +198,14 @@ export class MapGridLandsatComponent implements OnInit, OnDestroy {
         if (capabilities) {
             for (let year of capabilities.year) {
                 if (this.selectedYearType === 'PRODES-YEAR') {
-                     if (this.selectedLandsatYear != 'Todos' && year !== this.selectedLandsatYear) {
+                     if (this.selectedLandsatYear != 'Todos' && year !== Number(this.selectedLandsatYear)) {
                         continue;
                     }
                     const startDate = new Date(year - 1, 8, 1); // September 1 of previous year
                     const endDate = new Date(year, 7, 31); // August 31 of the current year
                     this.loadProdesYearMaps(type, year, visparam, startDate, endDate, selectedPeriod);
                 } else {
-                    if (this.selectedLandsatYear != 'Todos' && year !== this.selectedLandsatYear) {
+                    if (this.selectedLandsatYear != 'Todos' && year !== Number(this.selectedLandsatYear)) {
                         continue;
                     }
                     this.loadTraditionalYearMaps(type, year, visparam, selectedPeriod);
@@ -238,43 +272,39 @@ private loadProdesYearMaps(type: 'landsat', year: number, visparam: string, star
         }
     }
 
-    private addMap(type: 'landsat', mapId: string, periodOrMonth: string, year: number, visparam: string, month?: string): void {
-        const url = `https://tm{1-5}.lapig.iesa.ufg.br/api/layers/landsat/{x}/{y}/{z}?period=${periodOrMonth}&year=${year}&visparam=${visparam}${periodOrMonth === 'MONTH' ? `&month=${month}` : ''}`;
-        const timer = setTimeout(() => {
-            this.pendingTimers = this.pendingTimers.filter(t => t !== timer);
-            const map = new Map({
-                target: mapId,
-                layers: [
-                    new TileLayer({
-                        source: new XYZ({
-                            url,
-                            attributions: `${periodOrMonth === 'MONTH' ? `Month ${month}` : periodOrMonth} - ${year}`,
-                            attributionsCollapsible: false,
-                        }),
-                    }),
-                ],
-                view: new View({
-                    center: this.centerCoordinates,
-                    zoom: 13
-                }),
-                interactions: defaultInteractions().extend([
-                    new Pointer({
-                        handleDownEvent: (event) => {
-                            if (!this.pointCreationMode) return false;
-                            this.pointCreationMode = false;
-                            const coordinates = toLonLat(event.coordinate) as [number, number];
-                            this.updateCenterCoordinates(coordinates);
-                            return true;
-                        }
-                    }),
-                ]),
-            });
-            const projectedCoordinate = transform(this.centerCoordinates, 'EPSG:3857', 'EPSG:4326');
-            this.addMarker(projectedCoordinate[1], projectedCoordinate[0], map, mapId);
-            this.mapsInstances.push({id: mapId, map});
-            this.addViewSyncListener(mapId, map);
-        }, 0);
-        this.pendingTimers.push(timer);
+    private addMap(type: 'landsat', mapId: string, period: string, year: number, visparam: string, month?: string): void {
+        this.mapDefinitions.set(mapId, {id: mapId, period, year, visparam, month});
+    }
+
+    private createMap(definition: MapDefinition, target: HTMLElement): void {
+        const {id: mapId, period, year, visparam, month} = definition;
+        const url = `https://tm{1-5}.lapig.iesa.ufg.br/api/layers/landsat/{x}/{y}/{z}?period=${period}&year=${year}&visparam=${visparam}${period === 'MONTH' ? `&month=${month}` : ''}`;
+        const source = new XYZ({
+            url,
+            tileLoadFunction: (tile, src) => this.tileRequests.load(source, tile, src),
+            attributions: `${period === 'MONTH' ? `Month ${month}` : period} - ${year}`,
+            attributionsCollapsible: false,
+        });
+        const map = new Map({
+            target,
+            maxTilesLoading: 4,
+            layers: [new TileLayer({source})],
+            view: new View({center: this.centerCoordinates.slice(), zoom: this.zoom}),
+            interactions: defaultInteractions().extend([
+                new Pointer({
+                    handleDownEvent: event => {
+                        if (!this.pointCreationMode) return false;
+                        this.pointCreationMode = false;
+                        const [lon, lat] = toLonLat(event.coordinate);
+                        this.pointService.setPoint({lat, lon});
+                        return true;
+                    }
+                })
+            ])
+        });
+        this.addMarker(this.lat ?? -21.329828, this.lon ?? -57.149819, map, mapId);
+        this.mapsInstances.push({id: mapId, map, source});
+        this.addViewSyncListener(mapId, map);
     }
 
     private addViewSyncListener(mapId: string, sourceMap: Map): void {
@@ -287,28 +317,37 @@ private loadProdesYearMaps(type: 'landsat', year: number, visparam: string, star
     private syncViews(sourceMap: Map): void {
         if (this._syncing) return;
         this._syncing = true;
-        const sourceView = sourceMap.getView();
-        const center = sourceView.getCenter();
-        const zoom = sourceView.getZoom();
-        for (const inst of this.mapsInstances) {
-            if (inst.map === sourceMap) continue;
-            const view = inst.map.getView();
-            if (center) view.setCenter(center);
-            if (zoom !== undefined) view.setZoom(zoom);
+        try {
+            const sourceView = sourceMap.getView();
+            const center = sourceView.getCenter();
+            const zoom = sourceView.getZoom();
+            if (center) this.centerCoordinates = center.slice();
+            if (zoom !== undefined) this.zoom = zoom;
+            for (const inst of this.mapsInstances) {
+                if (inst.map === sourceMap) continue;
+                const view = inst.map.getView();
+                if (center) view.setCenter(center.slice());
+                if (zoom !== undefined) view.setZoom(zoom);
+            }
+        } finally {
+            this._syncing = false;
         }
-        this._syncing = false;
     }
 
     private updateCenterCoordinates(coordinates: [number, number]): void {
+        const center = fromLonLat(coordinates);
+        if (this.lon === coordinates[0] && this.lat === coordinates[1] &&
+            center.every((value, index) => value === this.centerCoordinates[index])) return;
         this.lon = coordinates[0];
         this.lat = coordinates[1];
-        this.centerCoordinates = fromLonLat(coordinates);
-        this.pointService.setPoint({ lat: this.lat, lon: this.lon });
+        this.centerCoordinates = center;
         this.updateMaps();
     }
 
     private updateMaps(): void {
         for (let mapInstance of this.mapsInstances) {
+            this.tileRequests.cancel(mapInstance.source);
+            mapInstance.source.refresh();
             const view = mapInstance.map.getView();
             view.setCenter(this.centerCoordinates);
             const projectedCoordinate = transform(this.centerCoordinates, 'EPSG:3857', 'EPSG:4326');
@@ -317,17 +356,12 @@ private loadProdesYearMaps(type: 'landsat', year: number, visparam: string, star
     }
 
     public updateLandsatMaps(): void {
-        for (const timer of this.pendingTimers) {
-            clearTimeout(timer);
-        }
-        this.pendingTimers = [];
-        const toDispose = this.mapsInstances.filter(m => m.id.startsWith('landsat-map'));
-        for (const inst of toDispose) {
-            this.disposeMap(inst);
-        }
-        this.mapsInstances = this.mapsInstances.filter(m => !m.id.startsWith('landsat-map'));
+        this.mapVisibility.reset();
+        this.disposeAllMaps();
+        this.mapDefinitions.clear();
         this.createMaps('landsat', this.selectedLandsatPeriod, this.selectedLandsatVisParam);
     }
+
     public getObjectKeys(object: any): string[] {
     return Object.keys(object);
   }

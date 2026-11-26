@@ -1,4 +1,4 @@
-<h5 *ngIf="lat && lon" class="text-center m-5">Latitude: {{ lat | number }}, Longitude: {{ lon | number }}</h5>
+<h5 *ngIf="lat !== null && lon !== null" class="text-center m-5">Latitude: {{ lat | number }}, Longitude: {{ lon | number }}</h5>
 <ng-container class="w-5" *ngIf="pointInfo$ | async as pointInfo">
     <p-panel header="Point Info" [toggleable]="true" [collapsed]="true">
         <div class="card ">
@@ -74,8 +74,8 @@
 </div>
 <div class="map-grid mt-3" [class.cursor-crosshair]="pointCreationMode">
     <div *ngFor="let map of landsatMaps" class="map-item">
-        <div [id]="map.id" class="map-container"></div>
+        <div #mapContainer [id]="map.id" class="map-container"></div>
     </div>
 </div>
-<app-landsat-timeseries *ngIf="lat && lon" [lat]="lat" [lon]="lon"></app-landsat-timeseries>
-<app-landsat-ndwi-timeseries *ngIf="lat && lon" [lat]="lat" [lon]="lon"></app-landsat-ndwi-timeseries>
+<app-landsat-timeseries *ngIf="lat !== null && lon !== null" [lat]="lat" [lon]="lon"></app-landsat-timeseries>
+<app-landsat-ndwi-timeseries *ngIf="lat !== null && lon !== null" [lat]="lat" [lon]="lon"></app-landsat-ndwi-timeseries>
