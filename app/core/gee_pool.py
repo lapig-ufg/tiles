@@ -27,7 +27,7 @@ import redis
 from google.oauth2 import service_account
 
 from app.core.config import settings, logger, REDIS_URL
-from app.core.gee_admission import initialize_gee_transport
+from app.core.gee_admission import initialize_gee_transport, startup_remaining_seconds
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +178,9 @@ class ServiceAccountPool:
         """
         exclude = exclude or set()
         now = time.time()
-        acquire_timeout = float(settings.get("GEE_SA_ACQUIRE_TIMEOUT_SECONDS", 2))
+        acquire_timeout = startup_remaining_seconds()
+        if acquire_timeout is None:
+            acquire_timeout = float(settings.get("GEE_SA_ACQUIRE_TIMEOUT_SECONDS", 2))
 
         # Buscar SAs ordenadas por uso (menor primeiro) com desempate aleatório
         # entre scores iguais — evita viés lexicográfico do zrangebyscore que
@@ -477,20 +479,19 @@ class WorkerGEEManager:
 
         with self._init_lock:
             self._current_sa = self._pool.acquire(worker_id)
+            # A espera pela admissão pode superar o TTL da atribuição da credencial.
+            self._heartbeat_stop.clear()
+            self._heartbeat_thread = threading.Thread(
+                target=self._heartbeat_loop,
+                daemon=True,
+                name=f"gee-heartbeat-{worker_id}",
+            )
+            self._heartbeat_thread.start()
             initialize_gee_transport(self._current_sa.credentials)
             logger.info(
                 f"GEE inicializado para worker {worker_id} "
                 f"com SA {self._current_sa.name}"
             )
-
-        # Iniciar heartbeat
-        self._heartbeat_stop.clear()
-        self._heartbeat_thread = threading.Thread(
-            target=self._heartbeat_loop,
-            daemon=True,
-            name=f"gee-heartbeat-{worker_id}",
-        )
-        self._heartbeat_thread.start()
 
     def rotate_on_429(self, trigger: str = "rest_api_429") -> None:
         """Rotaciona para uma nova SA após erro 429.

@@ -9,7 +9,7 @@ from celery import Celery
 from celery.signals import worker_process_init, worker_process_shutdown
 from kombu import Queue, Exchange
 
-from app.core.config import settings
+from app.core.config import logger, settings
 
 
 # ---------------------------------------------------------------------------
@@ -23,7 +23,12 @@ def _init_gee_for_celery_worker(**kwargs):
     from app.tasks._loop import run_async
 
     worker_id = f"{socket.gethostname()}-celery-{os.getpid()}"
-    initialize_earth_engine(worker_id)
+    try:
+        initialize_earth_engine(worker_id)
+    except Exception as exc:
+        # O dispatcher de sinais ignora Exception e deixaria o processo aceitar tarefas sem GEE.
+        logger.error(f"Inicialização do worker interrompida: {exc}")
+        raise SystemExit(1) from exc
 
     # Inicializar MongoDB uma vez por worker usando o loop persistente
     try:
@@ -162,6 +167,8 @@ celery_app.conf.update(
     },
     
     # Worker configuration
+    # A partida inclui admissão distribuída e descoberta dos algoritmos do Earth Engine.
+    worker_proc_alive_timeout=float(settings.get("GEE_STARTUP_TIMEOUT_SECONDS", 120)) + 60,
     worker_concurrency=8,  # Number of worker processes
     worker_pool='prefork',  # Best for CPU-bound tasks
     worker_max_memory_per_child=512000,  # 512MB max memory per worker

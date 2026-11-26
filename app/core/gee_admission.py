@@ -186,9 +186,12 @@ class RedisAdmission:
         token = uuid.uuid4().hex
         labels = _labels(operation, background)
         started = time.monotonic()
-        deadline = started + self.limits.wait_seconds
+        deadline = _startup_deadline.get()
+        if deadline is None:
+            deadline = started + self.limits.wait_seconds
         try:
             while True:
+                startup_remaining_seconds()
                 result = self._attempt(keys, token, labels, background)
                 if isinstance(result, GoogleLease):
                     return result
@@ -379,6 +382,33 @@ def call_gee(function, *args, project=None, operation='map', background=False, *
         return function(*args, **kwargs)
 
 
+_startup_deadline = ContextVar('gee_startup_deadline', default=None)
+
+
+def startup_remaining_seconds():
+    deadline = _startup_deadline.get()
+    if deadline is None:
+        return None
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise GoogleAdmissionError(1, 'startup_timeout')
+    return remaining
+
+
+@contextmanager
+def gee_startup():
+    timeout = float(settings.get('GEE_STARTUP_TIMEOUT_SECONDS', 120))
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError('GEE_STARTUP_TIMEOUT_SECONDS deve ser positivo e finito')
+    deadline_token = _startup_deadline.set(time.monotonic() + timeout)
+    operation_token = _sdk_operation.set(('sdk', True))
+    try:
+        yield
+    finally:
+        _sdk_operation.reset(operation_token)
+        _startup_deadline.reset(deadline_token)
+
+
 _sdk_transport_installed = False
 _sdk_operation = ContextVar('gee_operation', default=('sdk', False))
 _EE_HOSTS = {'earthengine.googleapis.com', 'earthengine-highvolume.googleapis.com',
@@ -422,12 +452,14 @@ class GoogleAdmissionTransport(httplib2.Http):
 
     def _request_once(self, uri, method, body, headers, **kwargs):
         # A admissão deve observar cada envio; retries e redirects do transporte não são permitidos.
+        remaining = startup_remaining_seconds()
+        timeout = min(self.timeout, remaining) if remaining is not None else self.timeout
         with requests.Session() as session:
             adapter = requests.adapters.HTTPAdapter(max_retries=0)
             session.mount('http://', adapter)
             session.mount('https://', adapter)
             try:
-                with session.request(method, uri, data=body, headers=headers, timeout=self.timeout,
+                with session.request(method, uri, data=body, headers=headers, timeout=timeout,
                                      allow_redirects=False, **kwargs) as response:
                     response_headers = dict(response.headers)
                     response_headers['status'] = response.status_code

@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import os
 import socket
+import threading
 
 from app.core.config import settings, logger
 
 
-_manager = None  # WorkerGEEManager | None — lazy import para evitar circular
+_manager = None
+_manager_lock = threading.RLock()
 
 
 def initialize_earth_engine(worker_id: str | None = None) -> None:
@@ -28,28 +30,37 @@ def initialize_earth_engine(worker_id: str | None = None) -> None:
     """
     global _manager
 
-    if _manager is not None:
-        return
+    with _manager_lock:
+        if _manager is not None:
+            return
 
-    if settings.get("SKIP_GEE_INIT", False):
-        logger.warning("Inicialização do GEE ignorada (SKIP_GEE_INIT=true)")
-        return
+        if settings.get("SKIP_GEE_INIT", False):
+            logger.warning("Inicialização do GEE ignorada (SKIP_GEE_INIT=true)")
+            return
 
-    if not worker_id:
-        worker_id = f"{socket.gethostname()}-{os.getpid()}"
+        if not worker_id:
+            worker_id = f"{socket.gethostname()}-{os.getpid()}"
 
-    try:
-        from app.core.gee_pool import ServiceAccountPool, WorkerGEEManager
+        manager = None
+        try:
+            from app.core.gee_admission import gee_startup
+            from app.core.gee_pool import ServiceAccountPool, WorkerGEEManager
 
-        pool = ServiceAccountPool.get_instance()
-        _manager = WorkerGEEManager(pool)
-        _manager.initialize(worker_id)
-
-    except Exception as exc:
-        logger.error(f"Falha ao inicializar GEE via pool: {exc}")
-        if settings.get("TILES_ENV") != "development":
-            raise
-        logger.warning("Executando em modo desenvolvimento sem GEE")
+            with gee_startup():
+                pool = ServiceAccountPool.get_instance()
+                manager = WorkerGEEManager(pool)
+                manager.initialize(worker_id)
+            _manager = manager
+        except Exception as exc:
+            if manager is not None:
+                try:
+                    manager.shutdown()
+                except Exception as cleanup_error:
+                    logger.warning(f"Falha ao liberar inicialização do GEE: {cleanup_error}")
+            logger.error(f"Falha ao inicializar GEE via pool: {exc}")
+            if settings.get("TILES_ENV") != "development":
+                raise
+            logger.warning("Executando em modo desenvolvimento sem GEE")
 
 
 def get_gee_manager():
@@ -60,12 +71,13 @@ def get_gee_manager():
 def shutdown_earth_engine() -> None:
     """Libera a SA do worker atual e para o heartbeat."""
     global _manager
-    if _manager is not None:
-        try:
-            _manager.shutdown()
-        except Exception as exc:
-            logger.warning(f"Erro ao encerrar GEE manager: {exc}")
-        _manager = None
+    with _manager_lock:
+        if _manager is not None:
+            try:
+                _manager.shutdown()
+            except Exception as exc:
+                logger.warning(f"Erro ao encerrar GEE manager: {exc}")
+            _manager = None
 
 
 # Singleton pattern para contextos async
