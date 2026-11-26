@@ -1,12 +1,14 @@
+import { BdcComparisonComponent } from './bdc-comparison.component';
 import { Component, OnDestroy, OnInit, ViewChild } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { Subscription } from 'rxjs';
 import { BdcLabApiService } from './bdc-lab-api.service';
 import { BdcLabMapComponent } from './bdc-lab-map.component';
-import { Bbox, BdcCollection, BdcItem, BdcProfile, ImageFormat, ItemDetail, RenderSelection, SearchFilters, TileStats, emptyStats, safeBdcUrl } from './bdc-lab.models';
+import { Bbox, PointQualityResult, BdcCollection, BdcItem, BdcProfile, ImageFormat, ItemDetail, RenderSelection, SearchFilters, TileStats, emptyStats, safeBdcUrl } from './bdc-lab.models';
 
 @Component({ selector: 'app-bdc-lab', templateUrl: './bdc-lab.component.html', styleUrls: ['./bdc-lab.component.scss'] })
 export class BdcLabComponent implements OnInit, OnDestroy {
+    @ViewChild(BdcComparisonComponent) pairedMaps?: BdcComparisonComponent;
     @ViewChild(BdcLabMapComponent) map?: BdcLabMapComponent;
     collections: BdcCollection[] = [];
     collectionId = 'landsat-2';
@@ -34,6 +36,65 @@ export class BdcLabComponent implements OnInit, OnDestroy {
     nextPage: number | null = null;
     matched: number | null = null;
     stats: TileStats = emptyStats();
+    pointMode = false;
+    pointLon = -49.4;
+    pointLat = -16.7;
+    radius = 1000;
+    criterion = 'cloud';
+    comparison: PointQualityResult | null = null;
+    get busyMessage(): string {
+        if (this.catalogLoading) return 'Carregando o catálogo do INPE…';
+        if (this.loading) return this.pointMode ? 'Analisando as imagens do período no servidor…' : 'Buscando imagens no catálogo…';
+        if (this.detailLoading) return 'Carregando a aquisição selecionada…';
+        return '';
+    }
+    pointMarked(point: [number, number]): void {
+        this.pointMode = true; this.pointLon = point[0]; this.pointLat = point[1]; this.filtersChanged();
+    }
+    get supportsPoint(): boolean { return ['landsat-2', 'S2_L2A-1'].includes(this.collectionId); }
+    get pointValidation(): string {
+        return [this.pointLon, this.pointLat, this.radius].every(v => typeof v === 'number' && Number.isFinite(v)) &&
+            Math.abs(this.pointLon) <= 180 && Math.abs(this.pointLat) <= 80 && this.radius >= 100 && this.radius <= 5000 ? '' : 'Informe coordenadas válidas e raio entre 100 e 5.000 metros.';
+    }
+    useMapCenter(): void {
+        const box = (this.map ?? this.pairedMaps?.map)?.currentBbox();
+        if (box) { this.pointLon = (box[0] + box[2]) / 2; this.pointLat = (box[1] + box[3]) / 2; this.filtersChanged(); }
+    }
+    repeatComparison(parameters: {start: string; end: string; radius: number}): void {
+        this.start = parameters.start; this.end = parameters.end; this.radius = parameters.radius;
+        this.comparePoint(true);
+    }
+    comparePoint(preserveComparison = false): void {
+        if (this.validation || this.pointValidation || !this.supportsPoint || !this.online) return;
+        if (this.loading) return;
+        if (preserveComparison) {
+            this.generation++; this.searchRequest?.unsubscribe(); this.detailRequest?.unsubscribe();
+            this.detailLoading = false; this.error = '';
+        } else this.invalidate();
+        this.loading = true; this.items = []; this.searched = true; this.nextPage = null;
+        const generation = this.generation;
+        this.searchRequest = this.api.bestImages(this.collectionId, this.pointLon, this.pointLat, this.radius, this.start, this.end, this.criterion).subscribe({
+            next: result => {
+                if (generation !== this.generation) return;
+                this.comparison = result; this.loading = false;
+                this.items = result.rows.map(row => row.item);
+                const best = result.rows.find(row => row.id === result.best_local_id);
+                this.map?.focusPoint(this.pointLon, this.pointLat);
+                if (best) this.select(best.item, preserveComparison);
+            },
+            error: error => { if (generation === this.generation) { this.loading = false; this.error = this.message(error, 'Não foi possível concluir a comparação. Reduza o período e tente novamente.'); } },
+        });
+    }
+    showCompared(id: string | null): void {
+        const row = this.comparison?.rows.find(row => row.id === id);
+        if (row) this.select(row.item);
+    }
+    localDescription(item: BdcItem): string {
+        const row = this.comparison?.rows.find(row => row.id === item.id);
+        if (!row) return '';
+        if (!row.eligible) return row.reason || 'Qualidade local indisponível';
+        return `No buffer: ${row.cloud_pct?.toFixed(1)}% de nuvens; ${row.shadow_pct?.toFixed(1)}% de sombras`;
+    }
     private catalogRequest?: Subscription;
     private searchRequest?: Subscription;
     private detailRequest?: Subscription;
@@ -58,7 +119,7 @@ export class BdcLabComponent implements OnInit, OnDestroy {
         if (!this.collection) return 'Selecione uma coleção.';
         if (!this.start || !this.end || this.start > this.end) return 'Informe um intervalo de datas válido.';
         if ((Date.parse(this.end) - Date.parse(this.start)) / 86400000 > 366) return 'O intervalo máximo é de 366 dias.';
-        if ((this.bbox[2] - this.bbox[0]) * (this.bbox[3] - this.bbox[1]) > 100) return 'Aproxime o mapa para pesquisar uma área menor.';
+        if (!this.pointMode && (this.bbox[2] - this.bbox[0]) * (this.bbox[3] - this.bbox[1]) > 100) return 'Aproxime o mapa para pesquisar uma área menor.';
         return '';
     }
     loadCatalog(): void {
@@ -73,11 +134,11 @@ export class BdcLabComponent implements OnInit, OnDestroy {
     }
     chooseCollection(): void {
         this.invalidate(); this.items = []; this.searched = false; this.nextPage = null; this.lastFilters = null;
-        this.maxCloud = 100;
+        this.maxCloud = 100; if (!this.supportsPoint) this.pointMode = false;
     }
     filtersChanged(): void { this.invalidate(); this.items = []; this.searched = false; this.nextPage = null; this.lastFilters = null; }
     invalidate(): void {
-        this.generation++; this.searchRequest?.unsubscribe(); this.detailRequest?.unsubscribe();
+        this.comparison = null; this.generation++; this.searchRequest?.unsubscribe(); this.detailRequest?.unsubscribe();
         this.loading = false; this.detailLoading = false; this.detail = null; this.selection = null; this.error = ''; this.stats = emptyStats();
     }
     search(page = 1): void {
@@ -95,13 +156,13 @@ export class BdcLabComponent implements OnInit, OnDestroy {
             error: error => { if (generation === this.generation) { this.loading = false; this.error = this.message(error, 'Não foi possível pesquisar imagens. Ajuste a área ou tente novamente mais tarde.'); } },
         });
     }
-    select(item: BdcItem): void {
+    select(item: BdcItem, preserveProfile = false): void {
         this.detailRequest?.unsubscribe(); this.detailLoading = true; this.selection = null; this.detail = null; this.error = '';
         const generation = ++this.generation;
         this.detailRequest = this.api.detail(this.collectionId, item.id).subscribe({
             next: detail => {
                 if (generation !== this.generation) return;
-                this.detail = detail; this.detailLoading = false; this.profileId = detail.profiles[0]?.id ?? '';
+                this.detail = detail; this.detailLoading = false; this.profileId = preserveProfile && detail.profiles.some(profile => profile.id === this.profileId) ? this.profileId : detail.profiles[0]?.id ?? '';
                 this.updateRender();
             },
             error: error => { if (generation === this.generation) { this.detailLoading = false; this.error = this.message(error, 'Não foi possível abrir esta aquisição.'); } },

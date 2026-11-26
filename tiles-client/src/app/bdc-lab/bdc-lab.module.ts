@@ -1,3 +1,5 @@
+import { BdcComparisonComponent } from './bdc-comparison.component';
+import { BdcLoadingComponent } from './bdc-loading.component';
 import { BdcHelpComponent } from './bdc-help.component';
 import { DialogModule } from 'primeng/dialog';
 import { BdcEvidenceComponent } from './bdc-evidence.component';
@@ -13,9 +15,9 @@ import { BdcLabMapComponent } from './bdc-lab-map.component';
 import { BdcLabApiService } from './bdc-lab-api.service';
 
 @NgModule({
-    imports: [CommonModule, FormsModule, HttpClientModule, DialogModule, ButtonModule, TooltipModule,
+    imports: [BdcLoadingComponent, CommonModule, FormsModule, HttpClientModule, DialogModule, ButtonModule, TooltipModule,
         RouterModule.forChild([{ path: 'evidencias', component: BdcEvidenceComponent }, { path: '', component: BdcLabComponent }])],
-    declarations: [BdcHelpComponent, BdcEvidenceComponent, BdcLabComponent, BdcLabMapComponent],
+    declarations: [BdcComparisonComponent, BdcHelpComponent, BdcEvidenceComponent, BdcLabComponent, BdcLabMapComponent],
     providers: [BdcLabApiService],
 })
 export class BdcLabModule {}

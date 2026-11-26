@@ -119,6 +119,12 @@ class BdcService:
             returned=len(features),
         )
 
+    def best_images(self, collection, lon, lat, radius, start, end, criterion="cloud"):
+        from .local_quality import compare
+
+        with self.remote() as remote:
+            return compare(remote, collection, lon, lat, radius, start, end, criterion)
+
     def item(self, collection_id, item_id):
         identifier(collection_id)
         identifier(item_id)

@@ -2,7 +2,7 @@ import { of, Subject, throwError } from 'rxjs';
 import { HttpErrorResponse } from '@angular/common/http';
 import { BdcLabComponent } from './bdc-lab.component';
 import { BdcLabApiService } from './bdc-lab-api.service';
-import { BdcCollection, BdcItem, ItemDetail, SearchResult } from './bdc-lab.models';
+import { BdcCollection, BdcItem, PointQualityResult, ItemDetail, SearchResult } from './bdc-lab.models';
 
 describe('BdcLabComponent', () => {
     let api: jasmine.SpyObj<BdcLabApiService>;
@@ -10,7 +10,7 @@ describe('BdcLabComponent', () => {
     const collection = { id: 'landsat-2', title: 'Landsat', family: 'Landsat', providers: [], extent: {}, formats: [], bands: [], summaries: {}, description: '', license: '', has_cog: true, public: true } as BdcCollection;
     const item = { id: 'scene', collection: 'landsat-2', properties: {}, assets: {}, bbox: [-50,-17,-49,-16] } as BdcItem;
     beforeEach(() => {
-        api = jasmine.createSpyObj('BdcLabApiService', ['collections','search','detail']);
+        api = jasmine.createSpyObj('BdcLabApiService', ['collections','search','detail','bestImages']);
         api.collections.and.returnValue(of({ collections: [collection], paused: false }));
         component = new BdcLabComponent(api); component.ngOnInit();
     });
@@ -54,4 +54,46 @@ describe('BdcLabComponent', () => {
         const pending = new Subject<SearchResult>(); api.search.and.returnValue(pending); component.search(); component.ngOnDestroy();
         expect(pending.observed).toBeFalse();
     });
+    it('seleciona a melhor aquisição local e preserva a comparação ao abrir o detalhe', () => {
+        const result = { best_local_id: item.id, best_global_id: 'other', rows: [{ id: item.id, item, eligible: true, scene_cloud_pct: 90, cloud_pct: 0 }], evaluated: 1, eligible: 1, seconds: 1 } as PointQualityResult;
+        api.bestImages.and.returnValue(of(result));
+        api.detail.and.returnValue(of({ item, collection, profiles: [] }));
+        component.pointMode = true; component.maxCloud = 5; component.comparePoint();
+        expect(api.bestImages.calls.mostRecent().args).toEqual(['landsat-2', -49.4, -16.7, 1000, '2024-08-01', '2024-08-31', 'cloud']);
+        expect(component.comparison).toBe(result); expect(component.detail?.item.id).toBe(item.id);
+    });
+    it('descarta comparação tardia quando o buffer muda', () => {
+        const pending = new Subject<PointQualityResult>(); api.bestImages.and.returnValue(pending);
+        component.pointMode = true; component.comparePoint(); component.radius = 2000; component.filtersChanged();
+        expect(pending.observed).toBeFalse(); expect(component.comparison).toBeNull(); expect(component.loading).toBeFalse();
+    });
+    it('recusa coordenadas vazias e coleções sem máscara compatível', () => {
+        component.pointLat = NaN; component.comparePoint(); expect(api.bestImages).not.toHaveBeenCalled();
+        component.pointLat = -16.7; component.collectionId = 'other'; component.comparePoint(); expect(api.bestImages).not.toHaveBeenCalled();
+    });
+
+    it('marca o ponto do mapa e cancela a comparação anterior', () => {
+        const pending = new Subject<PointQualityResult>(); api.bestImages.and.returnValue(pending);
+        component.comparePoint(); component.pointMarked([-54.9, -3.1]);
+        expect(component.pointMode).toBeTrue(); expect(component.pointLon).toBe(-54.9);
+        expect(component.pointLat).toBe(-3.1); expect(pending.observed).toBeFalse();
+        expect(component.comparison).toBeNull();
+    });
+    it('informa a fase de análise e encerra o indicador após erro', () => {
+        const pending = new Subject<PointQualityResult>(); api.bestImages.and.returnValue(pending);
+        component.pointMode = true; component.comparePoint(); expect(component.busyMessage).toContain('Analisando');
+        pending.error(new HttpErrorResponse({status: 502}));
+        expect(component.busyMessage).toBe('');
+    });
+
+    it('mantém a comparação enquanto busca novos parâmetros e após uma falha', () => {
+        const previous = {best_local_id:'local',best_global_id:'global',rows:[]} as unknown as PointQualityResult;
+        component.comparison=previous; component.pointMode=true;
+        const pending = new Subject<PointQualityResult>(); api.bestImages.and.returnValue(pending);
+        component.repeatComparison({start:'2024-01-01',end:'2024-01-31',radius:2000});
+        expect(component.comparison).toBe(previous); expect(component.loading).toBeTrue();
+        expect(api.bestImages.calls.mostRecent().args[3]).toBe(2000);
+        pending.error(new HttpErrorResponse({status:502})); expect(component.comparison).toBe(previous); expect(component.loading).toBeFalse();
+    });
+
 });

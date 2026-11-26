@@ -1,8 +1,11 @@
-import { AfterViewInit, Component, ElementRef, EventEmitter, Input, NgZone, OnChanges, OnDestroy, Output, ViewChild } from '@angular/core';
+import { AfterViewInit, Component, ElementRef, EventEmitter, Input, NgZone, OnChanges, OnDestroy, Output, SimpleChanges, ViewChild } from '@angular/core';
 import { HttpErrorResponse } from '@angular/common/http';
 import { EMPTY, Subject, Subscription, catchError, concatMap, takeUntil, tap } from 'rxjs';
 import OlMap from 'ol/Map';
 import View from 'ol/View';
+import Feature from 'ol/Feature';
+import Point from 'ol/geom/Point';
+import { circular } from 'ol/geom/Polygon';
 import ImageTile from 'ol/ImageTile';
 import TileState from 'ol/TileState';
 import TileLayer from 'ol/layer/Tile';
@@ -12,25 +15,31 @@ import XYZ from 'ol/source/XYZ';
 import OSM from 'ol/source/OSM';
 import Attribution from 'ol/control/Attribution';
 import GeoJSON from 'ol/format/GeoJSON';
-import { fromLonLat, transformExtent } from 'ol/proj';
-import { Fill, Stroke, Style } from 'ol/style';
+import { fromLonLat, toLonLat, transformExtent } from 'ol/proj';
+import { Circle as CircleStyle, Fill, Stroke, Style } from 'ol/style';
 import { BdcLabApiService } from './bdc-lab-api.service';
 import { Bbox, BdcItem, RenderSelection, TileStats, emptyStats } from './bdc-lab.models';
 
 @Component({
     selector: 'app-bdc-lab-map',
     template: `
-        <div class="map-shell">
-            <div #mapHost class="map-host" role="region" aria-label="Mapa de imagens BDC"></div>
+        <div class="point-toolbar" *ngIf="allowPointPicking && !expanded">
+            <button type="button" (click)="togglePointPicking()" [disabled]="!!busyMessage" [attr.aria-pressed]="pickingPoint">{{ pickingPoint ? 'Cancelar marcação' : 'Marcar ponto no mapa' }}</button>
+            <span role="status">{{ pickingPoint ? 'Clique no mapa para definir o ponto de análise.' : 'Marque um ponto e use Comparar melhores imagens para analisar o período.' }}</span>
+        </div>
+        <div class="map-shell" [class.expanded-map]="expanded" [attr.aria-busy]="!!busyMessage || pendingTiles > 0">
+            <div #mapHost class="map-host" [style.cursor]="pickingPoint ? 'crosshair' : ''" role="region" aria-label="Mapa de imagens BDC"></div>
             <div class="map-badge"><i class="pi pi-map-marker" aria-hidden="true"></i> {{ selection ? 'Imagem BDC' : 'Área de interesse' }} <span>z{{ zoom }}</span></div>
-            <div class="map-empty" *ngIf="!selection"><i class="pi pi-images" aria-hidden="true"></i><strong>Explore o acervo brasileiro</strong><span>Pesquise uma área e selecione uma aquisição para visualizar suas bandas.</span></div>
+            <div class="map-empty" *ngIf="!selection && !pointVisible && !pickingPoint && !busyMessage"><i class="pi pi-images" aria-hidden="true"></i><strong>Explore o acervo brasileiro</strong><span>Pesquise uma área e selecione uma aquisição para visualizar suas bandas.</span></div>
+            <app-bdc-loading class="map-loading" *ngIf="!busyMessage && pendingTiles > 0" caption="Visualização da aquisição"
+                title="Carregando imagens no mapa" description="A imagem aparecerá à medida que os trechos forem recebidos."></app-bdc-loading>
             <div class="map-tools">
                 <button pButton class="p-button-sm p-button-outlined" icon="pi pi-search-plus" aria-label="Aproximar mapa" (click)="changeZoom(1)"></button>
                 <button pButton class="p-button-sm p-button-outlined" icon="pi pi-search-minus" aria-label="Afastar mapa" (click)="changeZoom(-1)"></button>
-                <button pButton class="p-button-sm p-button-outlined" icon="pi pi-expand" aria-label="Ajustar à imagem" [disabled]="!selection" (click)="fitSelected()"></button>
+                <button pButton class="p-button-sm p-button-outlined" icon="pi pi-arrows-alt" aria-label="Ajustar à imagem" [disabled]="!selection" (click)="fitSelected()"></button>
             </div>
         </div>
-        <div class="map-actions">
+        <div class="map-actions" *ngIf="!expanded">
             <span><i class="pi pi-info-circle" aria-hidden="true"></i> {{ selection?.format === 'jpeg' ? 'JPEG: áreas sem dados usam o fundo escolhido.' : 'PNG: áreas sem dados permanecem transparentes.' }}</span>
             <div>
                 <button pButton class="p-button-sm p-button-outlined" icon="pi pi-bolt" [label]="warming ? 'Preparando…' : 'Preparar 3 × 3'" [disabled]="!selection || warming || paused" (click)="warm()"></button>
@@ -40,6 +49,9 @@ import { Bbox, BdcItem, RenderSelection, TileStats, emptyStats } from './bdc-lab
         <p class="map-message" role="status" *ngIf="notice">{{ notice }}</p>
     `,
     styles: [`
+        .point-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}.point-toolbar button{padding:12px;border:1px solid var(--primary-color);border-radius:6px;background:var(--surface-card);color:var(--text-color);cursor:pointer}.point-toolbar button[aria-pressed=true]{background:var(--primary-color);color:var(--primary-color-text)}.point-toolbar span{font-size:13px;color:var(--text-color-secondary)}
+        .map-loading{position:absolute;bottom:36px;right:16px;width:min(380px,calc(100% - 32px));pointer-events:none;z-index:12}
+        .expanded-map{height:100%;min-height:280px}.expanded-map .map-host{height:100%;min-height:280px}
         :host{display:block;min-width:0}.map-shell{position:relative;border-radius:12px;overflow:hidden;border:1px solid var(--surface-border);background:var(--surface-ground)}
         .map-host{height:490px;width:100%}.map-badge{position:absolute;top:16px;left:16px;display:flex;gap:10px;align-items:center;background:var(--surface-card);color:var(--text-color);padding:10px 14px;border-radius:7px;box-shadow:0 2px 8px #0002;font-weight:600}.map-badge span{color:var(--text-color-secondary);font-weight:400}
         .map-empty{position:absolute;top:35%;left:50%;transform:translateX(-50%);display:grid;gap:12px;text-align:center;background:var(--surface-card);padding:24px;max-width:330px;width:85%;border-radius:12px;pointer-events:none;box-shadow:0 3px 20px #0001}.map-empty i{font-size:28px;color:var(--primary-color)}.map-empty span{color:var(--text-color-secondary);line-height:1.5}
@@ -48,7 +60,34 @@ import { Bbox, BdcItem, RenderSelection, TileStats, emptyStats } from './bdc-lab
     `],
 })
 export class BdcLabMapComponent implements AfterViewInit, OnChanges, OnDestroy {
+    @Input() expanded = false;
+    @Input() sharedView?: View;
     @Input() selection: RenderSelection | null = null;
+    @Input() allowPointPicking = false;
+    @Input() pointVisible = false;
+    @Input() pointLon = -49.4;
+    @Input() pointLat = -16.7;
+    @Input() radius = 1000;
+    @Input() busyMessage = '';
+    @Output() pointMarked = new EventEmitter<[number, number]>();
+    pickingPoint = false;
+    pendingTiles = 0;
+    private pointSource = new VectorSource();
+    togglePointPicking(): void { if (!this.busyMessage) this.pickingPoint = !this.pickingPoint; }
+    markCoordinate(coordinate: number[]): void {
+        if (!this.pickingPoint || !this.allowPointPicking || this.busyMessage) return;
+        const [lon, lat] = toLonLat(coordinate);
+        if (!Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lon) > 180 || Math.abs(lat) > 80) return;
+        this.pickingPoint = false;
+        this.pointMarked.emit([Number(lon.toFixed(6)), Number(lat.toFixed(6))]);
+    }
+    private updatePoint(): void {
+        this.pointSource.clear(); this.qualityArea.clear();
+        if (!this.pointVisible || ![this.pointLon, this.pointLat, this.radius].every(v => typeof v === 'number' && Number.isFinite(v)) || Math.abs(this.pointLat) > 80 || Math.abs(this.pointLon) > 180 || this.radius < 100 || this.radius > 5000) return;
+        this.pointSource.addFeature(new Feature(new Point(fromLonLat([this.pointLon, this.pointLat]))));
+        if (this.qualityGeometry) this.qualityArea.addFeatures(new GeoJSON().readFeatures({ type: 'Feature', properties: {}, geometry: this.qualityGeometry }, { featureProjection: 'EPSG:3857' }));
+        else this.qualityArea.addFeature(new Feature(circular([this.pointLon, this.pointLat], this.radius, 128).transform('EPSG:4326', 'EPSG:3857')));
+    }
     @Output() statsChange = new EventEmitter<TileStats>();
     @ViewChild('mapHost', { static: true }) mapHost!: ElementRef<HTMLDivElement>;
     zoom = 10;
@@ -57,6 +96,9 @@ export class BdcLabMapComponent implements AfterViewInit, OnChanges, OnDestroy {
     downloading = false;
     notice = '';
     private map?: OlMap;
+    @Input() qualityGeometry: GeoJSON.Geometry | null = null;
+    private qualityArea = new VectorSource();
+    focusPoint(lon: number, lat: number): void { this.map?.getView().setCenter(fromLonLat([lon, lat])); this.map?.getView().setZoom(14); }
     private imagery = new TileLayer<XYZ>();
     private footprint = new VectorSource();
     private jobs = new Subject<{ tile: ImageTile; url: string; generation: number }>();
@@ -72,24 +114,33 @@ export class BdcLabMapComponent implements AfterViewInit, OnChanges, OnDestroy {
     ngAfterViewInit(): void {
         this.zone.runOutsideAngular(() => {
             this.map = new OlMap({ target: this.mapHost.nativeElement, maxTilesLoading: 1,
-                layers: [new TileLayer({ source: new OSM() }), this.imagery, new VectorLayer({ source: this.footprint,
+                layers: [new VectorLayer({ source: this.pointSource, zIndex: 20, style: new Style({ image: new CircleStyle({ radius: 7, fill: new Fill({ color: '#ef4444' }), stroke: new Stroke({ color: '#fff', width: 2 }) }) }) }), new TileLayer({ source: new OSM() }), this.imagery, new VectorLayer({ source: this.qualityArea, zIndex: 10,
+                    style: new Style({ stroke: new Stroke({ color: '#eab308', width: 3 }), fill: new Fill({ color: 'rgba(234,179,8,0.06)' }) }) }), new VectorLayer({ source: this.footprint,
                     style: new Style({ stroke: new Stroke({ color: '#2563eb', width: 2 }), fill: new Fill({ color: 'rgba(37,99,235,0.025)' }) }) })],
-                view: new View({ center: fromLonLat([-49.4, -16.7]), zoom: 10, minZoom: 6, maxZoom: 18 }), controls: [new Attribution({ collapsible: false })], });
+                view: this.sharedView ?? new View({ center: fromLonLat([-49.4, -16.7]), zoom: 10, minZoom: 6, maxZoom: 18 }), controls: [new Attribution({ collapsible: false })], });
+            this.map.on('singleclick', event => this.zone.run(() => this.markCoordinate(event.coordinate)));
             this.map.on('moveend', () => this.zone.run(() => { this.zoom = Math.round(this.map?.getView().getZoom() ?? 10); }));
             this.resize = new ResizeObserver(() => this.map?.updateSize());
             this.resize.observe(this.mapHost.nativeElement);
         });
-        this.applySelection();
+        this.applySelection(); this.updatePoint();
     }
-    ngOnChanges(): void { if (this.map) this.applySelection(); }
+    ngOnChanges(changes: SimpleChanges): void {
+        if (!this.allowPointPicking || this.busyMessage) this.pickingPoint = false;
+        if (!this.map) return;
+        if (changes['sharedView'] && this.sharedView) this.map.setView(this.sharedView);
+        if (changes['selection']) this.applySelection();
+        if (['qualityGeometry', 'pointVisible', 'pointLon', 'pointLat', 'radius'].some(key => changes[key])) this.updatePoint();
+    }
     ngOnDestroy(): void {
         this.reset.next(); this.reset.complete(); this.queueSubscription?.unsubscribe(); this.jobs.complete(); this.subscriptions.unsubscribe();
         this.resize?.disconnect(); this.imagery.getSource()?.dispose(); this.map?.setTarget(undefined); this.map?.dispose(); this.releaseUrls();
     }
     private applySelection(): void {
         this.generation++; this.reset.next(); this.queueSubscription?.unsubscribe(); this.subscriptions.unsubscribe(); this.subscriptions = new Subscription();
-        this.releaseUrls(); this.stats = emptyStats(); this.statsChange.emit(this.stats); this.paused = false; this.warming = false; this.downloading = false; this.notice = '';
+        this.pendingTiles = 0; this.releaseUrls(); this.stats = emptyStats(); this.statsChange.emit(this.stats); this.paused = false; this.warming = false; this.downloading = false; this.notice = '';
         this.imagery.getSource()?.dispose(); this.imagery.setSource(null); this.footprint.clear();
+        this.updatePoint();
         const selection = this.selection;
         if (!selection) return;
         this.footprint.addFeatures(new GeoJSON().readFeatures({ type: 'Feature', properties: {}, geometry: selection.item.geometry }, { featureProjection: 'EPSG:3857' }));
@@ -116,11 +167,14 @@ export class BdcLabMapComponent implements AfterViewInit, OnChanges, OnDestroy {
             }));
         })).subscribe();
         const generation = this.generation;
-        this.imagery.setSource(new XYZ({ minZoom: 6, maxZoom: 18, tileSize: 256, wrapX: false, transition: 0,
+        const source = new XYZ({ minZoom: 6, maxZoom: 18, tileSize: 256, wrapX: false, transition: 0,
             attributions: 'Imagens: INPE / Brazil Data Cube',
             tileUrlFunction: coordinate => coordinate ? this.api.tileUrl(selection, coordinate[1], coordinate[2], coordinate[0]) : undefined,
             tileLoadFunction: (tile, url) => this.jobs.next({ tile: tile as ImageTile, url, generation }),
-        }));
+        });
+        source.on('tileloadstart', () => this.zone.run(() => { if (generation === this.generation) this.pendingTiles++; }));
+        source.on(['tileloadend', 'tileloaderror'], () => this.zone.run(() => { if (generation === this.generation) this.pendingTiles = Math.max(0, this.pendingTiles - 1); }));
+        this.imagery.setSource(source);
     }
     currentBbox(): Bbox | null {
         return this.map ? transformExtent(this.map.getView().calculateExtent(this.map.getSize()), 'EPSG:3857', 'EPSG:4326') as Bbox : null;

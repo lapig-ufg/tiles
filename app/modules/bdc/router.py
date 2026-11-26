@@ -101,6 +101,18 @@ def create_router(service=None):
 
         return run(execute)
 
+    @app.get("/best-images")
+    def best_images(
+        collection: Literal["landsat-2", "S2_L2A-1"],
+        start: str,
+        end: str,
+        lon: float = Query(..., ge=-180, le=180),
+        lat: float = Query(..., ge=-80, le=80),
+        radius_m: float = Query(1000, ge=100, le=5000),
+        criterion: Literal["cloud", "unusable"] = "cloud",
+    ):
+        return run(lambda: service.best_images(collection, lon, lat, radius_m, start, end, criterion))
+
     @app.get("/items/{collection}/{item}")
     def item(collection: str, item: str):
         return run(lambda: service.detail(collection, item))

@@ -39,3 +39,15 @@ export function safeBdcUrl(value: string | undefined): string | null {
 export function emptyStats(): TileStats {
     return { completed: 0, hits: 0, transferred: 0, ranges: 0, serverMs: 0, errors: 0 };
 }
+
+export interface PointQualityRow {
+    id: string; item: BdcItem; eligible: boolean; scene_cloud_pct: number | null;
+    cloud_pct?: number | null; shadow_pct?: number | null; unusable_pct?: number | null;
+    valid_pct?: number; reason?: string;
+}
+export interface PointQualityResult {
+    start?: string; end?: string;
+    lon: number; lat: number; radius_m: number;
+    best_local_id: string | null; best_global_id: string | null; evaluated: number;
+    eligible: number; seconds: number; rows: PointQualityRow[]; geometry: GeoJSON.Geometry;
+}
