@@ -1,0 +1,3 @@
+{
+  "/api/bdc": {"target": "http://127.0.0.1:8766", "secure": false, "changeOrigin": false}
+}

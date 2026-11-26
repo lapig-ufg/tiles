@@ -8,7 +8,8 @@
         "build:ghpages": "ng build --configuration ghpages",
         "watch": "ng build --watch --configuration development",
         "test": "ng test",
-        "lint": "ng lint"
+        "lint": "ng lint",
+        "start:bdc-lab": "ng serve --proxy-config proxy.bdc-lab.conf.json"
     },
     "private": true,
     "dependencies": {
