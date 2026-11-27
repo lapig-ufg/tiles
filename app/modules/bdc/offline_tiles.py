@@ -14,6 +14,7 @@ from app.cache.sync_cache import SyncTileCache, InvalidTileError, validate_offli
 from .admission import admission
 from .catalog import tile_region
 from .profiles import LABELS
+from .read_pool import read_pool
 from .transport import digest
 from .visualization import PALETTE, VIS
 
@@ -47,19 +48,16 @@ def _validate_png(data):
 
 
 def _read(cache, key):
-    stored = cache.read_valid_image(key)
-    if stored is not None:
-        try:
-            _validate_png(stored[0])
-        except InvalidTileError:
-            return None
+    stored = cache.read_valid_object(key)
+    if stored is not None and not stored[0].startswith(b'\x89PNG\r\n\x1a\n'):
+        return None
     return stored
 
 
 def read_tile(collection, item, profile, z, x, y):
     key = tile_key(collection, item, profile, z, x, y)
     try:
-        with SyncTileCache() as cache:
+        with read_pool.borrow(SyncTileCache) as cache:
             return _read(cache, key)
     except Exception:
         logger.warning('Cache compartilhado BDC indisponível')

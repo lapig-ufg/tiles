@@ -34,6 +34,8 @@ class Storage:
         self.uploads += 1
 
     def get_object(self, Bucket, Key):
+        if Key not in self.metadata:
+            raise ClientError({'Error': {'Code': '404'}}, 'GetObject')
         return dict(Body=self.path(Key).open('rb'), Metadata=self.metadata[Key])
 
 

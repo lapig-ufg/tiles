@@ -184,6 +184,9 @@ class SyncTileCache:
     def read_valid_image(self, key):
         if not self.has_png(key):
             return None
+        return self.read_valid_object(key)
+
+    def read_valid_object(self, key):
         try:
             obj = self.s3.get_object(Bucket=self.bucket, Key=_s3_key(key))
         except ClientError as exc:
@@ -192,6 +195,11 @@ class SyncTileCache:
             raise
         body = obj['Body']
         try:
+            if obj.get('ContentType', 'image/png') not in {'image/png', 'image/jpeg'}:
+                return None
+            length = obj.get('ContentLength')
+            if length is not None and not 0 < int(length) <= self.max_tile_bytes:
+                return None
             data = body.read(self.max_tile_bytes + 1)
         finally:
             body.close()
@@ -202,6 +210,8 @@ class SyncTileCache:
             expiry = _expiry(obj.get('Metadata', {}).get('expires_at'))
             index = self.redis.hgetall('tile:' + key)
             index_expiry = _expiry(index.get(b'expires_at'))
+            if b'expires_at' in index and (index_expiry is None or index_expiry <= time.time()):
+                return None
             if 'expires_at' not in obj.get('Metadata', {}) and index.get(b's3_synced') == b'1':
                 remaining = self.redis.pttl('tile:' + key)
                 if remaining > 0:
