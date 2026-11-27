@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import math
 import os
 import threading
@@ -43,7 +44,11 @@ for i = 1, #KEYS, 5 do
     redis.call('ZREMRANGEBYSCORE', KEYS[i+2], '-inf', now)
     redis.call('ZREMRANGEBYSCORE', KEYS[i+3], '-inf', now-1000)
     local pause = redis.call('PTTL', KEYS[i+4])
-    if pause > 0 then return {0, pause, 'cooldown'} end
+    if pause > 0 then
+        local reason = redis.call('GET', KEYS[i+4])
+        if reason ~= 'project_restricted' then reason = 'cooldown' end
+        return {0, pause, reason}
+    end
     if redis.call('ZCARD', KEYS[i]) >= concurrency or
        (background and redis.call('ZCARD', KEYS[i+2]) >= bg_concurrency) then
         return {0, 50, 'concurrency'}
@@ -104,7 +109,7 @@ return 1
 _PAUSE = """
 local duration = tonumber(ARGV[1])
 if redis.call('PTTL', KEYS[1]) < duration then
-    redis.call('SET', KEYS[1], '1', 'PX', duration)
+    redis.call('SET', KEYS[1], ARGV[2] or 'cooldown', 'PX', duration)
 end
 return 1
 """
@@ -129,6 +134,7 @@ class AdmissionLimits:
     background_wait_seconds: float = 2
     lease_seconds: float = 60
     cooldown_seconds: float = 5
+    restricted_cooldown_seconds: float = 900
 
     def __post_init__(self):
         for name in ('max_concurrent', 'rate_per_second', 'interactive_reserve',
@@ -140,7 +146,8 @@ class AdmissionLimits:
             raise ValueError('Reserva interativa incompatível com a concorrência')
         if not 0 <= self.interactive_rate_reserve < self.rate_per_second:
             raise ValueError('Reserva interativa incompatível com a taxa')
-        for name in ('wait_seconds', 'background_wait_seconds', 'lease_seconds', 'cooldown_seconds'):
+        for name in ('wait_seconds', 'background_wait_seconds', 'lease_seconds', 'cooldown_seconds',
+                     'restricted_cooldown_seconds'):
             value = getattr(self, name)
             if not math.isfinite(value) or value < 0 or (name not in ('wait_seconds', 'background_wait_seconds') and value == 0):
                 raise ValueError(f'{name} inválido')
@@ -289,23 +296,36 @@ class GoogleLease:
             except redis.RedisError:
                 logger.warning('Renovação de concessão ao Earth Engine indisponível')
 
-    def response(self, status: int, retry_after=None):
+    def response(self, status: int, retry_after=None, *, content=None):
         self.status = '429' if status == 429 else f'{status // 100}xx'
         failure = _sdk_failure.get()
         if failure is not None and status >= 400:
             failure['http_status'] = status
         if status == 429:
             delay = _retry_after(retry_after, self.controller.limits.cooldown_seconds)
+            restricted = False
+            if isinstance(content, (bytes, str)) and len(content) <= 16384:
+                try:
+                    payload = json.loads(content)
+                    message = payload.get('error', {}).get('message', '')
+                    restricted = isinstance(message, str) and 'project is in restricted mode' in message.lower()
+                except (ValueError, AttributeError, TypeError):
+                    pass
+            reason = 'project_restricted' if restricted else 'cooldown'
+            if restricted:
+                delay = max(delay, self.controller.limits.restricted_cooldown_seconds)
             self.retry_after = delay
             if failure is not None:
                 failure['retry_until'] = time.monotonic() + delay
             try:
-                self.controller.redis.eval(_PAUSE, 1, self.keys[-1], math.ceil(delay * 1000))
+                self.controller.redis.eval(_PAUSE, 1, self.keys[-1], math.ceil(delay * 1000), reason)
             except redis.RedisError as exc:
                 raise GoogleAdmissionError(delay, 'coordinator_unavailable', http_status=status) from exc
+            if restricted:
+                raise GoogleAdmissionError(delay, reason, http_status=status)
 
-    async def aresponse(self, status: int, retry_after=None):
-        await _finish_thread(self.response, status, retry_after)
+    async def aresponse(self, status: int, retry_after=None, *, content=None):
+        await _finish_thread(self.response, status, retry_after, content=content)
 
     def release(self):
         with self._release_lock:
@@ -480,7 +500,7 @@ class GoogleAdmissionTransport(httplib2.Http):
                 if failure is not None:
                     failure['transport_error'] = type(exc).__name__
                 raise
-            lease.response(response.status, response.get('retry-after'))
+            lease.response(response.status, response.get('retry-after'), content=content)
             return response, content
 
     def _request_once(self, uri, method, body, headers, **kwargs):
@@ -507,5 +527,7 @@ def initialize_gee_transport(credentials):
     import ee
 
     global _sdk_transport_installed
-    ee.Initialize(credentials, http_transport=GoogleAdmissionTransport())
+    project = (settings.get('GEE_CLOUD_PROJECT') or getattr(credentials, 'quota_project_id', None)
+               or getattr(credentials, 'project_id', None))
+    ee.Initialize(credentials, project=project, http_transport=GoogleAdmissionTransport())
     _sdk_transport_installed = True

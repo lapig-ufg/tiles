@@ -607,7 +607,8 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                     except HTTPError as exc:
                         http_status = exc.code
                         try:
-                            admission.response(exc.code, exc.headers.get('Retry-After'))
+                            admission.response(exc.code, exc.headers.get('Retry-After'),
+                                               content=exc.read(16384) if exc.code == 429 else None)
                         finally:
                             exc.close()
                         if exc.code == 429:
@@ -655,6 +656,11 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
         logger.warning('Falha no pré-cache de tile: {}', type(exc).__name__)
         if validate_image:
             if isinstance(exc, GoogleAdmissionError):
+                if exc.reason == 'project_restricted' and not source_failure:
+                    return {'status': 'deferred', 'reason': 'GoogleAdmissionError',
+                            'tile': file_cache, 'failure_phase': phase,
+                            'admission_reason': exc.reason, 'retry_after': exc.retry_after,
+                            'http_status': exc.http_status}
                 http_status = exc.http_status or http_status
                 result = {'status': 'failed' if source_failure or http_status or exc.transport_error else 'deferred',
                           'reason': ('EarthEngineRateLimitedError' if http_status == 429

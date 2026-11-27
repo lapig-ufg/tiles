@@ -40,7 +40,8 @@ def create_map_with_credential(image, vis: dict, credential: dict, *, background
             timeout=60,
             allow_redirects=False,
         )
-        lease.response(resp.status_code, resp.headers.get('Retry-After'))
+        lease.response(resp.status_code, resp.headers.get('Retry-After'),
+                       content=resp.text[:16384] if resp.status_code == 429 else None)
     if resp.status_code == 429:
         raise EarthEngineRateLimitedError('Limite de registro de mapas excedido',
                                           retry_after=lease.retry_after)

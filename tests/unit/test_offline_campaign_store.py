@@ -61,6 +61,23 @@ def test_error_exhaustion_is_not_absence_of_data_or_completion(store):
     assert retry['delay'] >= 300
 
 
+def test_restricted_project_remains_pending_without_exhausting_item(store):
+    job, token = prepare(store)
+    item = store.next_item(job, token)
+    store.items.update_one({'_id': item['_id']}, {'$set': {'attempts': 5}})
+    item['attempts'] = 5
+    store.complete_item(job, token, item, {
+        'status': 'deferred', 'reason': 'GoogleAdmissionError',
+        'admission_reason': 'project_restricted', 'http_status': 429,
+        'failure_phase': 'map_create', 'retry_after': 900,
+    })
+    saved = store.items.find_one({'_id': item['_id']})
+    assert saved['state'] == 'retry_wait'
+    assert saved['attempts'] == 4
+    assert saved['expires_at'] is None
+    assert saved['next_retry'] > datetime.utcnow() + timedelta(seconds=890)
+
+
 def test_black_image_is_blocked_without_changing_other_failure_policies():
     from app.cache.offline_campaign import failure_state
     assert failure_state('invalid_tile', 1, validation_code='black_image') == {'state': 'blocked', 'delay': 0}

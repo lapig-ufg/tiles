@@ -261,6 +261,10 @@ class OfflineCampaignStore:
                         'concurrency', 'rate', 'cooldown', 'local_queue', 'local_capacity',
                         'coordinator_unavailable', 'startup_timeout', 'saturated'}
                     and result.get('http_status') is None and not result.get('transport_error'))
+        if (item['params'].get('source') != 'bdc' and result.get('status') == 'deferred'
+                and reason == 'GoogleAdmissionError'
+                and result.get('admission_reason') == 'project_restricted'):
+            deferred = True
         if item['params'].get('source') == 'bdc' and result.get('status') == 'deferred':
             deferred = reason in {'bdc_selection_pending', 'bdc_origin_busy', 'bdc_origin_paused'}
         expiry = result.get('expires_at')

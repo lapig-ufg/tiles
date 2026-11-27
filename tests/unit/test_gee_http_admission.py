@@ -75,6 +75,27 @@ async def test_http_429_prevents_other_consumer_before_network(coordinator, unus
 
 
 @pytest.mark.asyncio
+async def test_restricted_http_response_stops_retries_and_keeps_project_scope(coordinator, unused_tcp_port):
+    from app.core.gee_admission import GoogleAdmissionError
+    from app.utils.http import http_get_bytes
+    calls = []
+
+    async def handle(request):
+        calls.append(request.path)
+        if request.path == '/restricted':
+            return web.json_response({'error': {'message': 'Your project is in Restricted Mode.'}}, status=429)
+        return web.Response(body=b'PNG')
+
+    async with endpoint(handle, unused_tcp_port) as base:
+        for _ in range(2):
+            with pytest.raises(GoogleAdmissionError) as error:
+                await http_get_bytes(base + '/restricted', project='restricted')
+            assert error.value.reason == 'project_restricted'
+        assert await http_get_bytes(base + '/healthy', project='healthy') == b'PNG'
+    assert calls == ['/restricted', '/healthy']
+
+
+@pytest.mark.asyncio
 async def test_http_cancel_closes_network_before_freeing_capacity(coordinator, unused_tcp_port):
     from app.utils.http import http_get_bytes
 

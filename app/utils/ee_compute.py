@@ -90,7 +90,7 @@ def _resolve_project(credentials) -> str:
     if configured:
         return configured
 
-    project_id = getattr(credentials, "project_id", None)
+    project_id = getattr(credentials, "quota_project_id", None) or getattr(credentials, "project_id", None)
     if project_id:
         return project_id
 
@@ -159,7 +159,8 @@ async def compute_value(
         try:
             async with async_google_request(project=proj, operation='compute') as lease:
                 async with session.post(url, json=body, headers=headers, allow_redirects=False) as response:
-                    await lease.aresponse(response.status, response.headers.get('Retry-After'))
+                    await lease.aresponse(response.status, response.headers.get('Retry-After'),
+                                          content=await response.content.read(16384) if response.status == 429 else None)
                     if response.status == 200:
                         return (await response.json()).get('result')
                     if response.status == 401:

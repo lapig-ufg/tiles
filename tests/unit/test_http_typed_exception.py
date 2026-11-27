@@ -17,6 +17,7 @@ def _fake_aiohttp_session(status: int):
     resp = MagicMock()
     resp.status = status
     resp.read = AsyncMock(return_value=b"")
+    resp.content.read = AsyncMock(return_value=b"")
     resp.reason = "Too Many Requests"
     resp.__aenter__ = AsyncMock(return_value=resp)
     resp.__aexit__ = AsyncMock(return_value=None)

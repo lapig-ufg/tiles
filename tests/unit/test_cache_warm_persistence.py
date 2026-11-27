@@ -696,6 +696,26 @@ def test_offline_429_with_coordinator_failure_is_not_free_deferral(warming, monk
     assert len(warming.downloads) == 1
 
 
+def test_restricted_download_defers_without_discarding_valid_storage(warming):
+    from app.core.gee_admission import get_admission_controller
+    def get_object(*, Bucket, Key):
+        stored = warming.storage.objects[Key]
+        return {**stored, 'Body': io.BytesIO(stored['Body'])}
+    warming.storage.get_object = get_object
+    first = warm(warming, validate_image=True)
+    assert first['status'] == 'cached'
+    content = b'{"error":{"message":"Your project is in Restricted Mode."}}'
+    warming.http_error = HTTPError(URL, 429, 'quota', {}, io.BytesIO(content))
+    blocked = warm(warming, validate_image=True, x=456)
+    assert blocked['status'] == 'deferred'
+    assert blocked['admission_reason'] == 'project_restricted'
+    assert blocked['retry_after'] >= 900
+    downloads = len(warming.downloads)
+    assert warm(warming, validate_image=True)['status'] == 'already_cached'
+    assert len(warming.downloads) == downloads
+    assert get_admission_controller().redis.zcard('gee:{admission}:shared:active') == 0
+
+
 @pytest.mark.parametrize('color', ['white', 'black'])
 @pytest.mark.parametrize('failure', ['admission', 'timeout'])
 def test_invalid_tile_is_preserved_when_absence_query_fails(warming, monkeypatch, color, failure):

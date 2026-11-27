@@ -43,7 +43,8 @@ async def http_get_bytes(
             async with async_google_request(project=budget, background=background) as lease:
                 async with aiohttp.ClientSession(timeout=client_timeout) as session:
                     async with session.get(url, allow_redirects=False) as response:
-                        await lease.aresponse(response.status, response.headers.get('Retry-After'))
+                        await lease.aresponse(response.status, response.headers.get('Retry-After'),
+                                              content=await response.content.read(16384) if response.status == 429 else None)
                         if response.status == 200:
                             return await response.read()
                         if response.status != 429:

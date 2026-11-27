@@ -1,7 +1,9 @@
 import asyncio
 import importlib
+import json
 import threading
 import time
+from types import SimpleNamespace
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
@@ -144,6 +146,36 @@ def test_shorter_retry_after_does_not_shorten_shared_pause(admission, coordinato
     with pytest.raises(admission.GoogleAdmissionError) as error:
         coordinator.acquire(project='p')
     assert error.value.retry_after > 29
+
+
+def test_restricted_project_waits_without_affecting_other_projects(admission, coordinator):
+    first = coordinator.acquire(project='restricted')
+    concurrent = coordinator.acquire(project='restricted')
+    content = json.dumps({'error': {'message': 'Your project is in Restricted Mode.'}}).encode()
+    try:
+        with pytest.raises(admission.GoogleAdmissionError) as error:
+            first.response(429, content=content)
+        assert error.value.reason == 'project_restricted'
+        assert error.value.retry_after >= 900
+        concurrent.response(429, '1')
+    finally:
+        first.release()
+        concurrent.release()
+    other = admission.RedisAdmission(coordinator.redis, coordinator.limits)
+    with pytest.raises(admission.GoogleAdmissionError) as error:
+        other.acquire(project='restricted', background=True)
+    assert error.value.reason == 'project_restricted'
+    assert error.value.retry_after > 899
+    other.acquire(project='healthy').release()
+    coordinator.redis.delete(coordinator._keys('restricted')[-1])
+    other.acquire(project='restricted').release()
+
+
+def test_unstructured_error_does_not_mark_project_restricted(admission, coordinator):
+    lease = coordinator.acquire(project='p')
+    lease.response(403, content=b'<html>Restricted Mode</html>')
+    lease.release()
+    coordinator.acquire(project='p').release()
 
 
 @pytest.mark.parametrize('value', ['invalid', '-1', 'nan', 'inf'])
@@ -373,6 +405,19 @@ def test_installed_transport_avoids_nested_admission(admission, coordinator, mon
     assert result[1] == b'PNG'
     assert coordinator.redis.zcard('gee:{admission}:shared:rate') == 1
     assert coordinator.redis.zcard('gee:{admission}:shared:rate_bg') == 1
+
+
+@pytest.mark.parametrize('configured,quota,expected', [
+    (None, None, 'credential-project'), (None, 'quota-project', 'quota-project'),
+    ('configured-project', 'quota-project', 'configured-project'),
+])
+def test_sdk_uses_explicit_quota_project(admission, monkeypatch, configured, quota, expected):
+    import ee
+    calls = []
+    monkeypatch.setattr(admission, 'settings', {'GEE_CLOUD_PROJECT': configured})
+    monkeypatch.setattr(ee, 'Initialize', lambda credentials, **kwargs: calls.append(kwargs), raising=False)
+    admission.initialize_gee_transport(SimpleNamespace(project_id='credential-project', quota_project_id=quota))
+    assert calls[0]['project'] == expected
 
 
 def http_response(status, content, headers=None):
