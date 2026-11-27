@@ -555,8 +555,10 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                             png_lease.ensure_owned()
                             url_lease.ensure_owned()
                             dates = _build_period_dates(period, year, month)
-                            geom = ee.Geometry.BBox(bbox['w'], bbox['s'], bbox['e'], bbox['n'])
                             phase = 'map_create'
+                            from app.core.gee_auth import initialize_earth_engine
+                            initialize_earth_engine()
+                            geom = ee.Geometry.BBox(bbox['w'], bbox['s'], bbox['e'], bbox['n'])
                             try:
                                 if layer == 'landsat':
                                     layer_url = _warm_create_landsat_url(

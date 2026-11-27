@@ -181,3 +181,14 @@ def test_assignment_heartbeat_covers_sdk_initialization(monkeypatch):
         manager.initialize('test-worker')
     finally:
         manager.shutdown()
+
+
+def test_celery_keeps_local_tasks_available_when_google_admission_is_paused(monkeypatch):
+    auth = importlib.import_module('app.core.gee_auth')
+    tasks = importlib.import_module('app.tasks.celery_app')
+    admission = importlib.import_module('app.core.gee_admission')
+    loop = importlib.import_module('app.tasks._loop')
+    monkeypatch.setattr(auth, 'initialize_earth_engine', Mock(
+        side_effect=admission.GoogleAdmissionError(900, 'project_restricted')))
+    monkeypatch.setattr(loop, 'run_async', lambda coroutine: coroutine.close())
+    tasks._init_gee_for_celery_worker()

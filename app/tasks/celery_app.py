@@ -20,11 +20,14 @@ from app.core.config import logger, settings
 def _init_gee_for_celery_worker(**kwargs):
     """Cada worker Celery (prefork) adquire uma SA do pool e conecta ao MongoDB ao iniciar."""
     from app.core.gee_auth import initialize_earth_engine
+    from app.core.gee_admission import GoogleAdmissionError
     from app.tasks._loop import run_async
 
     worker_id = f"{socket.gethostname()}-celery-{os.getpid()}"
     try:
         initialize_earth_engine(worker_id)
+    except GoogleAdmissionError as exc:
+        logger.warning("Inicialização do GEE adiada por admissão: {}", exc.reason)
     except Exception as exc:
         # O dispatcher de sinais ignora Exception e deixaria o processo aceitar tarefas sem GEE.
         logger.error(f"Inicialização do worker interrompida: {exc}")

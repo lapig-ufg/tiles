@@ -21,10 +21,12 @@ def campaign_store():
 
 def source_absence_evidence(params):
     import ee
+    from app.core.gee_auth import initialize_earth_engine
     from app.core.gee_admission import call_gee
     from app.services.tile import tile2goehashBBOX
     from app.tasks.cache_operations import _build_period_dates, resolve_landsat_config_sync
 
+    initialize_earth_engine()
     _, bbox = tile2goehashBBOX(params['x'], params['y'], params['z'])
     dates = _build_period_dates(params['period'], params['year'], params['month'])
     geom = ee.Geometry.BBox(bbox['w'], bbox['s'], bbox['e'], bbox['n'])

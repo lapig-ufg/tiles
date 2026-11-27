@@ -937,3 +937,20 @@ def test_black_tile_with_available_scenes_remains_invalid_without_absence_marker
     assert warming.redis.get('absence:' + KEY) is None
     assert warming.redis.hgetall('tile:' + KEY) == {}
     assert warming.storage.uploads == []
+
+
+def test_sdk_initialization_is_deferred_and_valid_cache_remains_available(warming, monkeypatch):
+    from unittest.mock import Mock
+    from app.core import gee_auth
+    from app.core.gee_admission import GoogleAdmissionError
+    assert warm(warming, validate_image=True)['status'] == 'cached'
+    initialize = Mock(side_effect=GoogleAdmissionError(900, 'project_restricted'))
+    monkeypatch.setattr(gee_auth, 'initialize_earth_engine', initialize)
+    assert warm(warming, validate_image=True)['status'] == 'already_cached'
+    initialize.assert_not_called()
+    warming.redis.delete('meta:' + PATH)
+    result = warm(warming, validate_image=True, x=456)
+    assert result['status'] == 'deferred'
+    assert result['admission_reason'] == 'project_restricted'
+    assert result['failure_phase'] == 'map_create'
+    initialize.assert_called_once()
