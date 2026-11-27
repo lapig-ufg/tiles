@@ -52,6 +52,26 @@ def test_manifest_is_durable_and_preparation_replay_does_not_duplicate(store):
     assert store.status('test')['status'] == 'running'
 
 
+def test_gee_manifest_preparation_continues_without_google_delay(store, monkeypatch):
+    from contextlib import contextmanager
+    from unittest.mock import Mock
+    from app.tasks import offline_campaign
+    store.db.points.insert_one({'_id': 'q', 'campaign': 'test', 'lat': -15, 'lon': -48})
+    store.start('test')
+
+    @contextmanager
+    def factory():
+        yield store
+
+    dispatch = Mock()
+    task_globals = offline_campaign.run_offline_campaign.run.__globals__
+    monkeypatch.setitem(task_globals, 'campaign_store', factory)
+    monkeypatch.setitem(task_globals, 'enqueue_offline_campaign', dispatch)
+    result = offline_campaign.run_offline_campaign.run('test')
+    assert result['status'] == 'preparing'
+    assert dispatch.call_args.kwargs['countdown'] == 0
+
+
 def test_error_exhaustion_is_not_absence_of_data_or_completion(store):
     from app.cache.offline_campaign import failure_state
     assert failure_state('invalid_tile', 5)['state'] == 'blocked'

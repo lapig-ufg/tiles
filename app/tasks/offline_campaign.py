@@ -175,7 +175,7 @@ def run_offline_campaign(campaign_id):
         status = store.jobs.find_one({'_id': campaign_id})
         if status['status'] in ACTIVE:
             is_bdc = status.get('config', {}).get('source') == 'bdc'
-            ready = is_bdc and (job['status'] == 'preparing' or store.items.find_one(
+            ready = job['status'] == 'preparing' or (is_bdc and store.items.find_one(
                 {'run_id': status['run_id'], 'state': {'$in': ['pending', 'retry_wait']},
                  'next_retry': {'$lte': datetime.now(timezone.utc)}}, {'_id': 1}) is not None)
             enqueue_offline_campaign(status, countdown=0 if ready else 5)

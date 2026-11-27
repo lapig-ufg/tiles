@@ -186,7 +186,21 @@ class SyncTileCache:
             return None
         return self.read_valid_object(key)
 
-    def read_valid_object(self, key):
+    def _discard_invalid_image(self, key, lease):
+        if lease is None:
+            return
+        if lease.key != key:
+            raise ValueError('Concessão pertence a outra chave de cache')
+        lease.ensure_owned()
+        with self.redis.pipeline(transaction=True) as pipeline:
+            pipeline.hset('tile:' + key, mapping={'expires_at': '0', 'content_sha256': ''})
+            pipeline.persist('tile:' + key)
+            pipeline.execute()
+        self.s3.delete_object(Bucket=self.bucket, Key=_s3_key(key))
+        lease.ensure_owned()
+        self.redis.delete('tile:' + key)
+
+    def read_valid_object(self, key, *, invalid_lease=None):
         try:
             obj = self.s3.get_object(Bucket=self.bucket, Key=_s3_key(key))
         except ClientError as exc:
@@ -196,14 +210,17 @@ class SyncTileCache:
         body = obj['Body']
         try:
             if obj.get('ContentType', 'image/png') not in {'image/png', 'image/jpeg'}:
+                self._discard_invalid_image(key, invalid_lease)
                 return None
             length = obj.get('ContentLength')
             if length is not None and not 0 < int(length) <= self.max_tile_bytes:
+                self._discard_invalid_image(key, invalid_lease)
                 return None
             data = body.read(self.max_tile_bytes + 1)
         finally:
             body.close()
         if len(data) > self.max_tile_bytes:
+            self._discard_invalid_image(key, invalid_lease)
             return None
         try:
             validate_offline_image(data)
@@ -222,13 +239,14 @@ class SyncTileCache:
                 return None
             return data, expiry
         except InvalidTileError:
+            self._discard_invalid_image(key, invalid_lease)
             return None
 
     def has_valid_image(self, key):
         return self.read_valid_image(key) is not None
 
     def confirm_valid_image(self, key, lease):
-        image = self.read_valid_image(key)
+        image = self.read_valid_object(key, invalid_lease=lease)
         if image is None:
             return False
         data, expires_at = image

@@ -527,7 +527,8 @@ def cache_warm_tile(self, x: int, y: int, z: int, layer: str,
                     return {'status': 'already_cached', 'tile': file_cache}
                 if validate_image and not force:
                     for legacy_key in keys.legacy_pngs:
-                        previous_image = cache.read_valid_image(legacy_key)
+                        with cache.tile_lock(legacy_key) as legacy_lease:
+                            previous_image = cache.read_valid_object(legacy_key, invalid_lease=legacy_lease)
                         if previous_image is None:
                             continue
                         data, expires_at = previous_image

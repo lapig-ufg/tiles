@@ -47,6 +47,15 @@ class Storage:
         self.uploads.append(kwargs)
         self.objects[kwargs['Key']] = kwargs
 
+    def get_object(self, *, Bucket, Key):
+        if Key not in self.objects:
+            raise ClientError({'Error': {'Code': '404'}}, 'GetObject')
+        item = self.objects[Key]
+        return {**item, 'Body': io.BytesIO(item['Body'])}
+
+    def delete_object(self, *, Bucket, Key):
+        self.objects.pop(Key, None)
+
     def close(self):
         self.closed += 1
 
@@ -148,6 +157,7 @@ def test_warming_uses_same_seasonal_key_and_reuses_confirmed_png(warming):
 
 def test_strict_warming_returns_persisted_expiry_on_download_and_reuse(warming):
     def read_object(*, Bucket, Key):
+        warming.storage.head_object(Bucket=Bucket, Key=Key)
         item = warming.storage.objects[Key]
         return {**item, 'Body': io.BytesIO(item['Body'])}
     warming.storage.get_object = read_object
@@ -514,6 +524,7 @@ def test_truncated_jpeg_is_not_persisted(warming):
 
 def test_offline_warming_checks_existing_body_and_regenerates_white_tile(warming):
     def get_object(*, Bucket, Key):
+        warming.storage.head_object(Bucket=Bucket, Key=Key)
         stored = warming.storage.objects[Key]
         return {**stored, 'Body': io.BytesIO(stored['Body'])}
     warming.storage.get_object = get_object
@@ -559,6 +570,7 @@ def test_offline_promotes_valid_legacy_image_over_invalid_canonical_without_goog
     }
 
     def read_object(*, Bucket, Key):
+        warming.storage.head_object(Bucket=Bucket, Key=Key)
         item = warming.storage.objects[Key]
         return {**item, 'Body': io.BytesIO(item['Body'])}
 
@@ -578,6 +590,7 @@ def test_offline_verification_publishes_digest_for_existing_image(warming):
     }
 
     def read_object(*, Bucket, Key):
+        warming.storage.head_object(Bucket=Bucket, Key=Key)
         item = warming.storage.objects[Key]
         return {**item, 'Body': io.BytesIO(item['Body'])}
 
@@ -620,6 +633,7 @@ def test_force_generation_clears_proven_absence(warming):
                         'collection': 'LANDSAT/LC08/C02/T1_L2', 'period': 'WET', 'year': 2020,
                         'checked_at': datetime.now(timezone.utc)}, lease=lease)
     def read_object(*, Bucket, Key):
+        warming.storage.head_object(Bucket=Bucket, Key=Key)
         item = warming.storage.objects[Key]
         return {**item, 'Body': io.BytesIO(item['Body'])}
     warming.storage.get_object = read_object
@@ -699,6 +713,7 @@ def test_offline_429_with_coordinator_failure_is_not_free_deferral(warming, monk
 def test_restricted_download_defers_without_discarding_valid_storage(warming):
     from app.core.gee_admission import get_admission_controller
     def get_object(*, Bucket, Key):
+        warming.storage.head_object(Bucket=Bucket, Key=Key)
         stored = warming.storage.objects[Key]
         return {**stored, 'Body': io.BytesIO(stored['Body'])}
     warming.storage.get_object = get_object
@@ -714,6 +729,62 @@ def test_restricted_download_defers_without_discarding_valid_storage(warming):
     assert warm(warming, validate_image=True)['status'] == 'already_cached'
     assert len(warming.downloads) == downloads
     assert get_admission_controller().redis.zcard('gee:{admission}:shared:active') == 0
+
+
+@pytest.mark.parametrize('color', ['black', 'white'])
+def test_invalid_stored_image_is_removed_even_when_google_is_unavailable(warming, color):
+    from app.cache.sync_cache import _s3_key
+    data = io.BytesIO()
+    Image.new('RGB', (256, 256), color).save(data, format='PNG')
+    warming.storage.objects[_s3_key(KEY)] = {
+        'Body': data.getvalue(), 'Metadata': {'expires_at': str(time.time() + 120)},
+    }
+    warming.redis.hset('tile:' + KEY, mapping={'s3_synced': '1', 'expires_at': str(time.time() + 120)})
+    warming.http_error = HTTPError(URL, 429, 'quota', {}, io.BytesIO())
+    result = warm(warming, validate_image=True)
+    assert result['status'] != 'cached'
+    assert _s3_key(KEY) not in warming.storage.objects
+    assert not warming.redis.exists('tile:' + KEY)
+
+
+def test_cleanup_preserves_storage_on_read_failure_or_lost_lease(warming):
+    from app.cache.sync_cache import SyncTileCache, _s3_key
+    from unittest.mock import Mock
+    key = _s3_key(KEY)
+    warming.storage.objects[key] = {'Body': b'invalid', 'Metadata': {}}
+    with SyncTileCache() as cache:
+        lease = SimpleNamespace(key=KEY, ensure_owned=Mock(side_effect=RuntimeError('lost lease')))
+        with pytest.raises(RuntimeError, match='lost lease'):
+            cache.read_valid_object(KEY, invalid_lease=lease)
+        assert key in warming.storage.objects
+        warming.storage.get_object = Mock(side_effect=OSError('storage unavailable'))
+        with pytest.raises(OSError):
+            cache.read_valid_object(KEY, invalid_lease=lease)
+        assert key in warming.storage.objects
+
+
+def test_read_only_validation_does_not_remove_invalid_object(warming):
+    from app.cache.sync_cache import SyncTileCache, _s3_key
+    key = _s3_key(KEY)
+    warming.storage.objects[key] = {'Body': b'invalid', 'Metadata': {}}
+    with SyncTileCache() as cache:
+        assert cache.read_valid_object(KEY) is None
+    assert key in warming.storage.objects
+
+
+def test_failed_storage_delete_keeps_invalid_image_out_of_memory_cache(warming):
+    from app.cache.sync_cache import SyncTileCache, _s3_key
+    from unittest.mock import Mock
+    key = _s3_key(KEY)
+    warming.storage.objects[key] = {'Body': b'invalid', 'Metadata': {}}
+    warming.storage.delete_object = Mock(side_effect=OSError('storage unavailable'))
+    with SyncTileCache() as cache:
+        with cache.tile_lock(KEY) as lease:
+            with pytest.raises(OSError):
+                cache.read_valid_object(KEY, invalid_lease=lease)
+    assert key in warming.storage.objects
+    assert warming.redis.hget('tile:' + KEY, 'expires_at') == b'0'
+    assert warming.redis.ttl('tile:' + KEY) == -1
 
 
 @pytest.mark.parametrize('color', ['white', 'black'])
