@@ -446,3 +446,27 @@ def test_policy_upgrade_preserves_old_items_and_rejects_late_completion(store):
     store.complete_item(old, token, item, {'status': 'cached', 'expires_at': time.time() + 3600})
     assert store.items.find_one({'_id': item['_id']})['state'] == 'processing'
     assert store.start('test')['run_id'] == current['run_id']
+
+
+def test_point_summary_tracks_partial_complete_expired_and_absence(store):
+    job, token = prepare(store)
+    first = store.items.find_one({'run_id': job['run_id']})
+    assert store.status('test')['point_counts'] == dict(complete=0, partial=0, pending=1, no_data=0)
+    store.items.update_one({'_id': first['_id']}, {'$set': {'state': 'completed', 'expires_at': time.time() + 600}})
+    assert store.status('test')['point_counts']['partial'] == 1
+    store.items.update_many({'run_id': job['run_id']}, {'$set': {'state': 'completed', 'expires_at': time.time() + 600}})
+    assert store.status('test')['point_counts']['complete'] == 1
+    store.items.update_one({'_id': first['_id']}, {'$set': {'expires_at': time.time() - 1}})
+    assert store.status('test')['point_counts']['partial'] == 1
+    store.items.update_many({'run_id': job['run_id']}, {'$set': {'state': 'no_data', 'expires_at': time.time() + 600}})
+    assert store.status('test')['point_counts']['no_data'] == 1
+    store.db.points.update_one({'_id': 'p'}, {'$set': {'lon': -48}})
+    assert store.status('test')['point_counts'] == dict(complete=0, partial=0, pending=1, no_data=0)
+
+
+def test_point_counts_persist_with_bounded_freshness(store):
+    job, token = prepare(store)
+    store.status('test', cached=True)
+    summary = store.jobs.find_one({'_id': 'test'})['progress_summary']
+    assert summary['points']['pending'] == 1
+    assert summary['valid_until'] <= time.time() + 30

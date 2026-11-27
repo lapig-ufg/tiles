@@ -329,10 +329,35 @@ class OfflineCampaignStore:
                                           'state': 'processing', 'worker_token': token},
                                          update).modified_count)
 
+    def point_summary(self, job, now):
+        result = dict(complete=0, partial=0, pending=0, no_data=0)
+        if job.get('configuration_changed') or job['status'] == 'stale':
+            result['pending'] = self.db.points.count_documents({'campaign': job['_id']})
+            return result
+        valid = {'$and': [{'$in': ['$state', ['completed', 'no_data']]},
+                          {'$gt': [{'$ifNull': ['$expires_at', 0]}, now]},
+                          {'$lt': [{'$ifNull': ['$expires_at', 0]}, float('inf')]}]}
+        pipeline = [{'$match': {'run_id': job['run_id']}}, {'$group': {
+            '_id': '$point_id', 'total': {'$sum': 1},
+            'valid': {'$sum': {'$cond': [valid, 1, 0]}},
+            'images': {'$sum': {'$cond': [{'$and': [valid, {'$eq': ['$state', 'completed']}]}, 1, 0]}}
+        }}]
+        complete = {'$and': [bool(job.get('manifest_complete')), {'$eq': ['$valid', '$total']}]}
+        category = {'$cond': [complete,
+                    {'$cond': [{'$gt': ['$images', 0]}, 'complete', 'no_data']},
+                    {'$cond': [{'$gt': ['$valid', 0]}, 'partial', 'pending']}]}
+        pipeline.append({'$group': {'_id': category, 'count': {'$sum': 1}}})
+        seen = 0
+        for row in self.items.aggregate(pipeline, allowDiskUse=True, maxTimeMS=10000):
+            seen += row['count']
+            result[row['_id']] = row['count']
+        result['pending'] += max(0, job['point_count'] - seen)
+        return result
+
     def progress_summary(self, job, cached):
         now = time.time()
         previous = job.get('progress_summary', {})
-        if cached and previous.get('status') == job['status'] and previous.get('valid_until', 0) > now:
+        if cached and previous.get('status') == job['status'] and 'points' in previous and previous.get('valid_until', 0) > now:
             return previous
         counts = dict.fromkeys(STATES, 0)
         expired_condition = {'$and': [
@@ -358,7 +383,7 @@ class OfflineCampaignStore:
             expired += row['expired']
             valid_until = min(valid_until, row['earliest_expiry'])
         summary = {'counts': counts, 'expired': expired, 'status': job['status'],
-                   'as_of': now, 'valid_until': valid_until}
+                   'as_of': now, 'valid_until': valid_until, 'points': self.point_summary(job, now)}
         if cached:
             self.jobs.update_one({'_id': job['_id'], 'run_id': job['run_id'], 'status': job['status']},
                                  {'$set': {'progress_summary': summary}})
@@ -389,7 +414,7 @@ class OfflineCampaignStore:
                 item.update(state='blocked', reason='cache_expired')
         job.pop('progress_summary', None)
         return dict(job, counts=counts, total=total, errors=errors,
-                    summary_as_of=summary['as_of'],
+                    summary_as_of=summary['as_of'], point_counts=summary['points'],
                     error_total=sum(counts[state] for state in ('blocked', 'retry_wait', 'no_data')), page=page,
                     percent=round(100 * (counts['completed'] + counts['no_data']) / total, 2) if total else 0)
 
