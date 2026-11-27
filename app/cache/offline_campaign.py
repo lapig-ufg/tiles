@@ -87,7 +87,8 @@ class OfflineCampaignStore:
             token = uuid.uuid4().hex
             claimed = self.jobs.find_one_and_update(
                 {'_id': campaign_id, 'run_id': previous['run_id'], 'status': previous['status'],
-                 '$or': [{'lease_until': {'$lte': datetime.now(timezone.utc)}}, {'lease_until': {'$exists': False}}]},
+                 '$or': [{'lease_token': {'$exists': False}},
+                         {'lease_until': {'$lte': datetime.now(timezone.utc)}}, {'lease_until': {'$exists': False}}]},
                 {'$set': {'status': 'running', 'mode': mode, 'retry_request': uuid.uuid4().hex, 'retry_reset_pending': True, 'lease_token': token,
                           'lease_until': datetime.now(timezone.utc) + timedelta(seconds=LEASE_SECONDS)}},
                 return_document=ReturnDocument.AFTER)
@@ -109,7 +110,8 @@ class OfflineCampaignStore:
                                    if key in previous}
             result = self.jobs.replace_one({'_id': campaign_id, 'run_id': previous['run_id'],
                                             'status': previous['status'],
-                                            'lease_until': {'$lte': datetime.now(timezone.utc)}}, job)
+                                            '$or': [{'lease_token': {'$exists': False}},
+                                                    {'lease_until': {'$lte': datetime.now(timezone.utc)}}]}, job)
             if not result.modified_count:
                 return self.jobs.find_one({'_id': campaign_id})
         else:
@@ -123,7 +125,8 @@ class OfflineCampaignStore:
         token = uuid.uuid4().hex
         now = datetime.now(timezone.utc)
         job = self.jobs.find_one_and_update(
-            {'_id': campaign_id, 'status': {'$in': ACTIVE}, 'lease_until': {'$lte': now}},
+            {'_id': campaign_id, 'status': {'$in': ACTIVE},
+             '$or': [{'lease_token': {'$exists': False}}, {'lease_until': {'$lte': now}}]},
             {'$set': {'lease_token': token, 'lease_until': now + timedelta(seconds=LEASE_SECONDS)}},
             return_document=ReturnDocument.AFTER)
         if not job:

@@ -42,6 +42,28 @@ def test_only_one_worker_claims_campaign_and_expired_lease_recovers(store):
     assert store.jobs.find_one({'_id': 'test'})['lease_token'] == second
 
 
+def test_released_lease_is_available_despite_clock_difference(store):
+    store.start('test')
+    first = store.claim('test')
+    assert first and store.release('test', first)
+    store.jobs.update_one({'_id': 'test'}, {'$set': {
+        'lease_until': datetime.now(timezone.utc) + timedelta(seconds=10)}})
+    second = store.claim('test')
+    assert second and second != first
+    assert store.claim('test') is None
+    assert not store.release('test', first)
+
+
+@pytest.mark.parametrize('mode', ['start', 'retry_failed', 'regenerate'])
+def test_restart_accepts_released_lease_with_future_clock(store, mode):
+    job, token = prepare(store)
+    store.release('test', token)
+    store.jobs.update_one({'_id': 'test'}, {'$set': {
+        'status': 'blocked', 'lease_until': datetime.now(timezone.utc) + timedelta(seconds=10)}})
+    result = store.start('test', mode=mode)
+    assert result['status'] == ('running' if mode == 'retry_failed' else 'preparing')
+
+
 def test_manifest_is_durable_and_preparation_replay_does_not_duplicate(store):
     job, token = prepare(store)
     count = store.items.count_documents({'run_id': job['run_id']})
