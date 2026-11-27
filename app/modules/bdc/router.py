@@ -30,14 +30,20 @@ def create_router(service=None):
     app = APIRouter(route_class=BdcRoute)
     slots = threading.BoundedSemaphore(2)
 
-    def run(operation):
-        if not slots.acquire(blocking=False):
-            raise HTTPException(
-                503,
-                "Laboratório ocupado. Aguarde as leituras em andamento.",
-                headers={"Retry-After": "2"},
-            )
+    def run(operation, lookup=None):
+        acquired = False
         try:
+            if lookup is not None:
+                cached = lookup()
+                if cached is not None:
+                    return cached
+            acquired = slots.acquire(blocking=False)
+            if not acquired:
+                raise HTTPException(
+                    503,
+                    'Laboratório ocupado. Aguarde as leituras em andamento.',
+                    headers={'Retry-After': '2'},
+                )
             with admission(
                 getattr(
                     service, "root", Path(os.environ.get("BDC_CACHE_DIR", "cache/bdc"))
@@ -72,7 +78,8 @@ def create_router(service=None):
                 "Não foi possível ler este recurso do BDC. Consulte os arquivos locais de diagnóstico.",
             ) from exc
         finally:
-            slots.release()
+            if acquired:
+                slots.release()
 
     @app.get("/health")
     def health():
@@ -139,7 +146,10 @@ def create_router(service=None):
         data, stats = run(
             lambda: service.render(
                 collection, item, z, x, y, profile, format_, quality, background
-            )
+            ),
+            lookup=lambda: service.read_cached_tile(
+                collection, item, z, x, y, profile, format_, quality, background
+            ),
         )
         return Response(
             data,
@@ -148,6 +158,8 @@ def create_router(service=None):
                 "Cache-Control": "private, max-age=3600",
                 "ETag": '"' + stats["key"] + '"',
                 "X-Cache": stats["cache"],
+                "X-Shared-Cache": stats.get("shared_cache", "NOT_APPLICABLE"),
+                **({"X-Shared-Cache-Reason": stats["shared_cache_reason"]} if stats.get("shared_cache_reason") else {}),
                 "X-Render-Ms": f"{stats['ms']:.2f}",
                 "X-Range-Requests": str(stats["ranges"]),
                 "X-Origin-Bytes": str(stats["bytes"]),

@@ -133,8 +133,8 @@ def test_cache_separates_codec_and_reuses_png_parameters(tmp_path, monkeypatch):
     b, hit = service.render(*args, "jpeg", 90)
     assert a == b and first["cache"] == "MISS" and hit["cache"] == "HIT"
     service.render(*args, "jpeg", 80)
-    service.render(*args, "png", 90)
-    _, png_hit = service.render(*args, "png", 70, "black")
+    service.render(*args, "png", 90, _offline_lookup=False)
+    _, png_hit = service.render(*args, "png", 70, "black", _offline_lookup=False)
     assert png_hit["cache"] == "HIT" and len(calls) == 3
 
 
@@ -156,6 +156,9 @@ def test_failed_render_never_writes_image(tmp_path, monkeypatch):
 
 
 class FakeService:
+    def read_cached_tile(self, *args):
+        return None
+
     def catalog(self):
         return {"collections": [], "paused": False}
 

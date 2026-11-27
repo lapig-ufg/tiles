@@ -2,6 +2,7 @@ import io
 import json
 import logging
 import math
+import time
 from pathlib import Path
 
 import rasterio
@@ -62,6 +63,71 @@ def read_tile(collection, item, profile, z, x, y):
     except Exception:
         logger.warning('Cache compartilhado BDC indisponível')
         return None
+
+
+def render_interactive(service, collection, item, profile, z, x, y, quality=90, background='white', refresh=False):
+    from app.cache.errors import TileLockUnavailable
+    from .selection_jobs import OriginBusy
+
+    key = tile_key(collection, item, profile, z, x, y)
+    result = None
+    rendering = False
+    validated = False
+
+    def generate():
+        return service.render(collection, item, z, x, y, profile, 'png', quality, background,
+                              _offline_lookup=False, _refresh=refresh)
+
+    def unavailable(reason):
+        data, stats = result
+        logger.warning('Cache compartilhado BDC não publicado: %s', reason)
+        return data, dict(stats, shared_cache='UNAVAILABLE', shared_cache_reason=reason)
+
+    try:
+        with SyncTileCache() as cache:
+            with cache.tile_lock(key) as lease:
+                started = time.monotonic()
+                stored = _read(cache, key)
+                if stored is not None:
+                    data, expires_at = stored
+                    result = data, dict(cache='HIT', ms=(time.monotonic() - started) * 1000, ranges=0, bytes=0, key=key,
+                                        expires_at=expires_at, shared_cache='HIT')
+                    validated = True
+                    return result
+                rendering = True
+                result = generate()
+                data, stats = result
+                _validate_png(data)
+                validated = True
+                cache.set_png(key, data, DEFAULT_TTL, lease=lease)
+                stored = _read(cache, key)
+                lease.ensure_owned()
+                if stored is None or stored[0] != data:
+                    raise IOError('Persistência da imagem BDC não confirmada')
+                result = data, dict(stats, key=key, expires_at=stored[1], shared_cache='STORED')
+                return result
+    except InvalidTileError as exc:
+        if result is None:
+            raise
+        reason = exc.diagnostics.get('validation_code', 'invalid_content')
+        if reason not in {'transparent_image', 'white_image', 'black_image'}:
+            raise
+        logger.warning('Imagem BDC não elegível para cache compartilhado: %s', reason)
+        data, stats = result
+        return data, dict(stats, shared_cache='SKIPPED', shared_cache_reason=reason)
+    except TileLockUnavailable as exc:
+        if result is None:
+            raise OriginBusy('Coordenação de cache BDC indisponível') from exc
+        return unavailable(type(exc).__name__)
+    except Exception as exc:
+        if rendering and result is None:
+            raise
+        if result is None:
+            logger.warning('Coordenação de cache BDC indisponível: %s', type(exc).__name__)
+            raise OriginBusy('Coordenação de cache BDC indisponível') from exc
+        if not validated:
+            raise
+        return unavailable(type(exc).__name__)
 
 
 def warm_tile(service, collection, item, profile, z, x, y, force=False, ttl=DEFAULT_TTL, admission_count=2):

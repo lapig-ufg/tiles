@@ -207,3 +207,102 @@ def test_offline_admission_accepts_four_distinct_tiles_without_local_deferral(st
         results = [future.result(timeout=5) for future in futures]
     assert all(result['status'] == 'cached' for result in results)
     assert len({result['key'] for result in results}) == 4
+
+
+def test_interactive_png_is_shared_with_another_replica_without_origin(state, monkeypatch):
+    from app.modules.bdc.service import BdcService
+    data, stats = state.service.render('landsat-2', 'scene', 6, 0, 0, 'rgb', 'png')
+    assert stats['shared_cache'] == 'STORED'
+    assert state.storage.uploads == 1
+    second = BdcService(state.service.root / 'other-replica')
+    monkeypatch.setattr(second, 'detail', lambda *args: pytest.fail('Cache compartilhado não deve consultar catálogo'))
+    reused, hit = second.render('landsat-2', 'scene', 6, 0, 0, 'rgb', 'png')
+    assert reused == data
+    assert hit['cache'] == 'HIT'
+    assert hit['shared_cache'] == 'HIT'
+
+
+def test_interactive_replica_roots_share_generation_lock(state, monkeypatch):
+    from app.modules.bdc.service import BdcService
+    second = BdcService(state.service.root / 'second')
+    monkeypatch.setattr(second, 'detail', state.service.detail)
+    monkeypatch.setattr(second, 'remote', state.service.remote)
+    generated = []
+    def pixels(*args):
+        generated.append(1)
+        return state.pixels
+    monkeypatch.setattr(state.service, 'render_pixels', pixels)
+    monkeypatch.setattr(second, 'render_pixels', pixels)
+    barrier = threading.Barrier(2)
+    def render(service):
+        barrier.wait(timeout=3)
+        return service.render('landsat-2', 'scene', 6, 0, 0, 'rgb', 'png')
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(render, [state.service, second]))
+    assert len(generated) == 1
+    assert state.storage.uploads == 1
+    assert results[0][0] == results[1][0]
+    assert sorted(result[1]['cache'] for result in results) == ['HIT', 'MISS']
+
+
+def test_interactive_transparency_is_preserved_without_durable_publication(state):
+    state.pixels[:] = 0
+    data, stats = state.service.render('landsat-2', 'scene', 6, 0, 0, 'rgb', 'png')
+    assert data.startswith(b'\x89PNG')
+    assert stats['shared_cache'] == 'SKIPPED'
+    assert stats['shared_cache_reason'] == 'transparent_image'
+    assert state.storage.uploads == 0
+
+
+def test_interactive_storage_failure_preserves_valid_rendered_image(state, monkeypatch):
+    def fail(**kwargs):
+        raise IOError('Storage indisponível')
+    monkeypatch.setattr(state.storage, 'put_object', fail)
+    data, stats = state.service.render('landsat-2', 'scene', 6, 0, 0, 'rgb', 'png')
+    assert data.startswith(b'\x89PNG')
+    assert stats['shared_cache'] == 'UNAVAILABLE'
+    assert stats['shared_cache_reason'] == 'OSError'
+    assert state.offline_tiles.read_tile('landsat-2', 'scene', 'rgb', 6, 0, 0) is None
+
+
+def test_interactive_generation_failure_is_not_converted_to_cache_bypass(state, monkeypatch):
+    def fail(*args):
+        raise RuntimeError('Falha na geração')
+    monkeypatch.setattr(state.service, 'render_pixels', fail)
+    with pytest.raises(RuntimeError, match='Falha na geração'):
+        state.service.render('landsat-2', 'scene', 6, 0, 0, 'rgb', 'png')
+    assert state.storage.uploads == 0
+
+
+def test_interactive_corrupt_image_is_not_served_as_nonpersistent_tile(state, monkeypatch):
+    import app.modules.bdc.service as service_module
+    from app.cache.sync_cache import InvalidTileError
+    monkeypatch.setattr(service_module, 'encode_image', lambda *args: b'corrupt PNG')
+    with pytest.raises(InvalidTileError):
+        state.service.render('landsat-2', 'scene', 6, 0, 0, 'rgb', 'png')
+    assert state.storage.uploads == 0
+
+
+def test_interactive_lock_contention_never_starts_duplicate_generation(state, monkeypatch):
+    from app.cache.errors import TileLockUnavailable
+    from app.modules.bdc.selection_jobs import OriginBusy
+    @contextmanager
+    def busy(key):
+        raise TileLockUnavailable('Lock ocupado')
+        yield
+    monkeypatch.setattr(state.cache, 'tile_lock', busy)
+    monkeypatch.setattr(state.service, 'detail', lambda *args: pytest.fail('Geração sem lock'))
+    with pytest.raises(OriginBusy):
+        state.service.render('landsat-2', 'scene', 6, 0, 0, 'rgb', 'png')
+
+
+def test_interactive_cache_setup_failure_does_not_generate_without_global_lock(state, monkeypatch):
+    from app.modules.bdc.selection_jobs import OriginBusy
+    @contextmanager
+    def unavailable():
+        raise IOError('Cache indisponível')
+        yield
+    monkeypatch.setattr(state.offline_tiles, 'SyncTileCache', unavailable)
+    monkeypatch.setattr(state.service, 'detail', lambda *args: pytest.fail('Geração sem coordenação'))
+    with pytest.raises(OriginBusy):
+        state.service.render('landsat-2', 'scene', 6, 0, 0, 'rgb', 'png')

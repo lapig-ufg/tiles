@@ -25,6 +25,15 @@ def identifier(value):
     return value
 
 
+def validate_render_request(collection_id, item_id, profile_id, x, y, z, format_, quality, background):
+    identifier(collection_id)
+    identifier(item_id)
+    identifier(profile_id)
+    tile_region(x, y, z)
+    if format_ not in {'png', 'jpeg'} or not 50 <= quality <= 100 or background not in {'white', 'black'}:
+        raise ValueError('Configuração de imagem inválida')
+
+
 def encode_image(rgba, format_, quality=90, background="white"):
     if (
         format_ not in {"png", "jpeg"}
@@ -170,6 +179,20 @@ class BdcService:
             "profiles": profiles(collection, item),
         }
 
+    def read_cached_tile(self, collection_id, item_id, z, x, y, profile_id, format_, quality=90, background='white'):
+        validate_render_request(collection_id, item_id, profile_id, x, y, z, format_, quality, background)
+        if format_ != 'png':
+            return None
+        from .offline_tiles import read_tile, tile_key
+        started = time.monotonic()
+        stored = read_tile(collection_id, item_id, profile_id, z, x, y)
+        if stored is None:
+            return None
+        data, expires_at = stored
+        return data, dict(cache='HIT', shared_cache='HIT', ms=(time.monotonic() - started) * 1000,
+                          ranges=0, bytes=0, expires_at=expires_at,
+                          key=tile_key(collection_id, item_id, profile_id, z, x, y))
+
     def render(
         self,
         collection_id,
@@ -185,25 +208,15 @@ class BdcService:
         _offline_lookup=True,
         _refresh=False,
     ):
-        identifier(collection_id)
-        identifier(item_id)
-        identifier(profile_id)
-        tile_region(x, y, z)
-        if (
-            format_ not in {"png", "jpeg"}
-            or not 50 <= quality <= 100
-            or background not in {"white", "black"}
-        ):
-            raise ValueError("Configuração de imagem inválida")
-        if format_ == "png" and _offline_lookup:
-            from .offline_tiles import read_tile, tile_key
-            started = time.monotonic()
-            stored = read_tile(collection_id, item_id, profile_id, z, x, y)
-            if stored is not None:
-                data, expires_at = stored
-                return data, dict(cache="HIT", ms=(time.monotonic() - started) * 1000,
-                                  ranges=0, bytes=0, expires_at=expires_at,
-                                  key=tile_key(collection_id, item_id, profile_id, z, x, y))
+        if _offline_lookup:
+            cached = self.read_cached_tile(collection_id, item_id, z, x, y, profile_id, format_, quality, background)
+            if cached is not None:
+                return cached
+            if format_ == 'png':
+                from .offline_tiles import render_interactive
+                return render_interactive(self, collection_id, item_id, profile_id, z, x, y, quality, background, refresh=_refresh)
+        else:
+            validate_render_request(collection_id, item_id, profile_id, x, y, z, format_, quality, background)
         detail = self.detail(collection_id, item_id)
         profile = next((p for p in detail["profiles"] if p["id"] == profile_id), None)
         if profile is None:
