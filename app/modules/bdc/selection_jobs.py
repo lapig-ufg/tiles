@@ -16,8 +16,8 @@ from .transport import ServicePaused, digest
 ALGORITHM_VERSION = 'bdc-local-quality-v1'
 LEASE_SECONDS = 660
 ORIGIN_SLOTS = os.environ.get('BDC_ORIGIN_SLOTS', '2')
-if not re.fullmatch(r'[1-4]', ORIGIN_SLOTS):
-    raise ValueError('BDC_ORIGIN_SLOTS deve ser um inteiro entre 1 e 4')
+if not re.fullmatch(r'[1-8]', ORIGIN_SLOTS):
+    raise ValueError('BDC_ORIGIN_SLOTS deve ser um inteiro entre 1 e 8')
 ORIGIN_SLOTS = int(ORIGIN_SLOTS)
 TERMINAL = {'ready', 'no_image', 'failed'}
 
@@ -178,7 +178,9 @@ class SelectionJobStore:
         now = datetime.now(timezone.utc)
         token = uuid.uuid4().hex
         claimed = None
-        slots = max(1, ORIGIN_SLOTS - 1) if background else ORIGIN_SLOTS
+        # Um quarto da capacidade, com mínimo de uma vaga, fica reservado à inspeção.
+        reserved = max(1, ORIGIN_SLOTS // 4)
+        slots = max(1, ORIGIN_SLOTS - reserved) if background else ORIGIN_SLOTS
         for slot in range(slots):
             slot_id = f'origin:{slot}'
             try:

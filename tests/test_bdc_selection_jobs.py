@@ -692,7 +692,7 @@ def configured_selection_module(monkeypatch, value):
     return module
 
 
-@pytest.mark.parametrize('value, expected', [(None, 2), ('1', 1), ('2', 2), ('3', 3), ('4', 4)])
+@pytest.mark.parametrize('value, expected', [(None, 2), ('1', 1), ('2', 2), ('3', 3), ('4', 4), ('6', 6), ('8', 8)])
 def test_origin_slot_configuration_limits_shared_admission(monkeypatch, value, expected):
     from contextlib import ExitStack
     module = configured_selection_module(monkeypatch, value)
@@ -707,7 +707,7 @@ def test_origin_slot_configuration_limits_shared_admission(monkeypatch, value, e
         assert database.bdc_origin_leases.count_documents({'token': {'$exists': True}}) == 1
 
 
-@pytest.mark.parametrize('value', ['', '0', '5', '-1', '2.5', 'abc', ' 4 ', 'true'])
+@pytest.mark.parametrize('value', ['', '0', '9', '-1', '2.5', 'abc', ' 4 ', 'true'])
 def test_invalid_origin_slot_configuration_fails_on_module_initialization(monkeypatch, value):
     with pytest.raises(ValueError, match='BDC_ORIGIN_SLOTS'):
         configured_selection_module(monkeypatch, value)
