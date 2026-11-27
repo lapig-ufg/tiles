@@ -34,6 +34,7 @@ class OfflineCampaignStore:
         self.db = database
         self.jobs = database.offline_cache_jobs
         self.items = database.offline_cache_items
+        self._bdc_dispatches = {}
         self.items.create_index([('run_id', 1), ('state', 1), ('next_retry', 1), ('_id', 1)])
         self.items.create_index([('run_id', 1), ('state', 1), ('_id', 1)])
         self.items.create_index([('run_id', 1), ('key', 1)])
@@ -228,12 +229,23 @@ class OfflineCampaignStore:
     def next_item(self, job, token):
         if not self.owned(job, token):
             return None
-        return self.items.find_one_and_update(
-            {'run_id': job['run_id'], 'state': {'$in': ['pending', 'retry_wait']},
-             'next_retry': {'$lte': datetime.now(timezone.utc)}},
-            {'$set': {'state': 'processing', 'worker_token': token, 'started_at': datetime.now(timezone.utc)},
-             '$inc': {'attempts': 1}}, return_document=ReturnDocument.AFTER,
-            sort=[('next_retry', 1), ('_id', 1)])
+        bdc = job.get('config', {}).get('source') == 'bdc'
+        dispatch = self._bdc_dispatches.get(job['run_id'], 0)
+        states = ['retry_wait', 'pending'] if dispatch % 4 == 0 else ['pending', 'retry_wait']
+        if not bdc:
+            states = [{'$in': ['pending', 'retry_wait']}]
+        now = datetime.now(timezone.utc)
+        for state in states:
+            item = self.items.find_one_and_update(
+                {'run_id': job['run_id'], 'state': state, 'next_retry': {'$lte': now}},
+                {'$set': {'state': 'processing', 'worker_token': token, 'started_at': now},
+                 '$inc': {'attempts': 1}}, return_document=ReturnDocument.AFTER,
+                sort=[('next_retry', 1), ('_id', 1)])
+            if item is not None:
+                if bdc:
+                    self._bdc_dispatches[job['run_id']] = (dispatch + 1) % 4
+                return item
+        return None
 
     def complete_item(self, job, token, item, result):
         if not self.owned(job, token):
@@ -278,13 +290,34 @@ class OfflineCampaignStore:
                                 and isinstance(evidence.get('selection_id'), str)
                                 and len(evidence['selection_id']) == 64
                                 and evidence.get('collection') == job['config']['bdc']['collection'])
+        tile_absence = False
+        if (item['params'].get('source') == 'bdc' and result.get('status') == 'no_data'
+                and evidence.get('kind') in {'bdc_tile_no_valid_source_pixels', 'bdc_tile_outside_asset_bounds'}):
+            from app.modules.bdc.tile_validity import PROOF_TTL, absence_kind, checked_time, valid_diagnostics
+            params = item['params']
+            context = dict(collection=job['config']['bdc']['collection'], item=evidence.get('item'),
+                           profile=params['visparam'], **{key: params[key] for key in ('x', 'y', 'z')})
+            valid = valid_diagnostics(evidence, context, job['config']['renderer_revision'],
+                                      change['diagnostics'].get('content_sha256'))
+            if (valid and absence_kind(evidence) == evidence['kind']
+                    and change['diagnostics'].get('validation_code') == 'transparent_image'
+                    and type(expiry) in (int, float) and math.isfinite(expiry)
+                    and time.time() < expiry <= checked_time(evidence).timestamp() + PROOF_TTL):
+                tile_absence = bool(self.db.campaignImageSelections.find_one({
+                    '_id': evidence.get('selection_id'), 'campaignId': job['_id'],
+                    'pointId': item['point_ref'], 'revision': job['config']['bdc']['selectionRevision'],
+                    'year': params['year'], 'period': params['period'], 'state': 'ready',
+                    'params.collection': context['collection'], 'profiles': context['profile'],
+                    'result.complete': True, 'result.best_local_id': context['item'],
+                }, {'_id': 1}))
+            verified_absence = tile_absence
         if (result.get('status') == 'no_data' and verified_absence
                 and type(expiry) in (int, float) and math.isfinite(expiry) and expiry > time.time()
                 and type(evidence.get('count')) is int and evidence['count'] == 0
                 and evidence.get('collection') and evidence.get('checked_at')
                 and evidence.get('period') == item['params']['period']
                 and evidence.get('year') == item['params']['year']):
-            change.update(state='no_data', reason='bdc_no_image' if item['params'].get('source') == 'bdc' else 'empty_collection', next_retry=None,
+            change.update(state='no_data', reason=('bdc_tile_no_data' if tile_absence else 'bdc_no_image') if item['params'].get('source') == 'bdc' else 'empty_collection', next_retry=None,
                           evidence=evidence, expires_at=expiry, completed_at=datetime.now(timezone.utc))
         update = {'$set': change, '$unset': {'worker_token': ''}}
         if deferred:

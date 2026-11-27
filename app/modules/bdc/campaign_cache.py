@@ -31,9 +31,13 @@ def generate_tile(db, campaign, point, params, *, force=False, retry=False, retr
         if selected['state'] != 'ready':
             return {'status': 'failed', 'reason': 'bdc_selection_failed'}
         service = BdcService(Path(os.environ.get('BDC_CACHE_DIR', 'cache/bdc')), background=True)
-        return warm_tile(service, selected['params']['collection'], selected['result']['best_local_id'],
+        result = warm_tile(service, selected['params']['collection'], selected['result']['best_local_id'],
                          params['visparam'], params['z'], params['x'], params['y'], force=force,
                          admission_count=BDC_OFFLINE_PARALLELISM)
+        if result.get('status') == 'no_data':
+            result['evidence'] = dict(result.get('evidence') or {}, selection_id=selected['_id'],
+                                      year=params['year'], period=params['period'])
+        return result
     except (OriginBusy, HTTPException) as exc:
         if isinstance(exc, HTTPException) and exc.status_code != 503:
             raise

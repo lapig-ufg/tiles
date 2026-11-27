@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import logging
@@ -141,14 +142,30 @@ def warm_tile(service, collection, item, profile, z, x, y, force=False, ttl=DEFA
                 expires_at = cache.confirm_valid_image(key, lease)
                 if expires_at:
                     return dict(status='already_cached', expires_at=expires_at, key=key, diagnostics={})
+            from .tile_validity import PROOF_TTL, absence_kind, checked_time, valid_diagnostics
+            context = dict(collection=collection, item=item, profile=profile, z=z, x=x, y=y)
             with admission(service.root, count=admission_count):
-                data, stats = service.render(collection, item, z, x, y, profile, 'png',
-                                             _offline_lookup=False, _refresh=force)
-            try:
-                _validate_png(data)
-            except InvalidTileError as exc:
-                return dict(status='failed', reason='invalid_tile', key=key,
-                            diagnostics=exc.diagnostics)
+                for attempt in range(2):
+                    data, stats = service.render(collection, item, z, x, y, profile, 'png',
+                                                 _offline_lookup=False, _refresh=force or attempt > 0)
+                    try:
+                        _validate_png(data)
+                        break
+                    except InvalidTileError as exc:
+                        document = stats.get('tile_diagnostics')
+                        valid = valid_diagnostics(document, context, renderer_revision(), hashlib.sha256(data).hexdigest())
+                        expiry = checked_time(document).timestamp() + min(ttl, PROOF_TTL) if valid else 0
+                        fresh = valid and expiry > time.time()
+                        if exc.diagnostics.get('validation_code') == 'transparent_image':
+                            kind = absence_kind(document) if fresh else None
+                            if kind:
+                                return dict(status='no_data', reason='bdc_tile_no_data', key=key,
+                                            expires_at=expiry, diagnostics=exc.diagnostics,
+                                            evidence=dict(document, kind=kind, count=0))
+                            if attempt == 0 and stats.get('cache') == 'HIT' and not fresh:
+                                continue
+                        return dict(status='failed', reason='invalid_tile', key=key,
+                                    diagnostics=exc.diagnostics)
             cache.set_png(key, data, ttl, lease=lease)
             stored = _read(cache, key)
             lease.ensure_owned()

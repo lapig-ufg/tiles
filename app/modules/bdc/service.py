@@ -1,5 +1,7 @@
+import hashlib
 import io
 import json
+import logging
 import re
 import time
 from contextlib import ExitStack, contextmanager
@@ -238,19 +240,40 @@ class BdcService:
         )
         path = self.root / "tiles" / f"{key}.{format_}"
         started = time.monotonic()
+        from .tile_validity import make_diagnostics, valid_diagnostics
+        context = dict(collection=collection_id, item=item_id, profile=profile_id, z=z, x=x, y=y)
+        revision = renderer_revision()
+        diagnostic_path = path.with_suffix('.diagnostics.json')
         with file_lock(path.with_suffix(".lock")):
             if path.exists() and not _refresh:
-                return path.read_bytes(), dict(
-                    cache="HIT",
-                    ms=(time.monotonic() - started) * 1000,
-                    ranges=0,
-                    bytes=0,
-                    key=key,
-                )
+                data = path.read_bytes()
+                stats = dict(cache='HIT', ms=(time.monotonic() - started) * 1000,
+                             ranges=0, bytes=0, key=key)
+                if diagnostic_path.exists():
+                    try:
+                        document = json.loads(diagnostic_path.read_text())
+                    except (OSError, ValueError):
+                        document = None
+                    if valid_diagnostics(document, context, revision, hashlib.sha256(data).hexdigest()):
+                        stats['tile_diagnostics'] = document
+                return data, stats
             with self.remote() as remote:
-                rgba = self.render_pixels(remote, item, profile, x, y, z)
+                raw_diagnostics = {}
+                rgba = self.render_pixels(remote, item, profile, x, y, z, raw_diagnostics)
                 data = encode_image(rgba, format_, quality, background)
-                atomic_write(path, data)
+                document = make_diagnostics(raw_diagnostics, context, revision, data)
+                persist = True
+                try:
+                    if document is not None:
+                        atomic_write(diagnostic_path, json.dumps(document, allow_nan=False).encode('utf-8'))
+                    else:
+                        diagnostic_path.unlink(missing_ok=True)
+                except OSError:
+                    logging.getLogger(__name__).warning('BDC tile diagnostic persistence unavailable')
+                    document = None
+                    persist = False
+                if persist:
+                    atomic_write(path, data)
                 stats = dict(
                     cache="MISS",
                     ms=(time.monotonic() - started) * 1000,
@@ -262,9 +285,11 @@ class BdcService:
                     ),
                     key=key,
                 )
+                if document is not None:
+                    stats['tile_diagnostics'] = document
         return data, stats
 
-    def render_pixels(self, remote, item, profile, x, y, z):
+    def render_pixels(self, remote, item, profile, x, y, z, diagnostics=None):
         arrays, masks = [], []
         with RangeBridge(remote) as bridge, rasterio.Env(**GDAL_OPTIONS):
             try:
@@ -292,14 +317,25 @@ class BdcService:
                         arrays.extend(tile.array.data)
                         masks.extend(~np.ma.getmaskarray(tile.array))
             except TileOutsideBounds:
+                if diagnostics is not None:
+                    diagnostics.update(stage='outside_asset_bounds', outside_band=name,
+                                       bands=list(profile['bands']), width=256, height=256)
                 return np.zeros((256, 256, 4), dtype="uint8")
         expected = 2 if profile["ndvi"] else 3
         if len(arrays) != expected:
             raise ValueError("Número de bandas incompatível com a composição")
+        if any(np.shape(mask) != (256, 256) for mask in masks):
+            raise ValueError('Dimensões da máscara incompatíveis com o tile')
+        valid = np.asarray(masks, dtype=bool).all(axis=0)
+        if diagnostics is not None:
+            diagnostics.update(stage='source_masks_before_visualization', read_complete=True,
+                               bands=list(profile['bands']), width=256, height=256,
+                               raw_valid_pixels=int(np.count_nonzero(valid)),
+                               valid_pixels_by_band=[int(np.count_nonzero(mask)) for mask in masks])
         data = np.asarray(arrays, dtype=float) * profile["scale"] + profile["offset"]
         return visualize(
             data,
-            np.asarray(masks).all(axis=0),
+            valid,
             profile["min"],
             profile["max"],
             profile["gamma"],
