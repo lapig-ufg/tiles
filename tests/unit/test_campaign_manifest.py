@@ -12,7 +12,7 @@ def test_manifest_covers_periods_years_visualizations_and_allowed_zooms():
     items = list(manifest_for_point({'_id': 'p1', 'lat': 0, 'lon': 0}, campaign_config(campaign())))
     assert {i['params']['period'] for i in items} == {'WET', 'DRY'}
     assert {i['params']['year'] for i in items} == {2020, 2021}
-    assert {i['params']['z'] for i in items} == {17, 18}
+    assert {i['params']['z'] for i in items} == {17}
     assert len(items) == len({i['key'] for i in items})
     assert len(items) > 2 * 2 * 2 * 2
 

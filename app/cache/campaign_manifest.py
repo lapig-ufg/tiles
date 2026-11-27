@@ -24,15 +24,27 @@ def campaign_config(campaign, width=512, height=512):
     bdc = None
     if campaign.get('imagerySource') == 'bdc':
         bdc = bdc_config(campaign)
-    visualizations = bdc['profiles'] if bdc else campaign.get('visParams', campaign.get('visParamsEnable'))
+    if bdc:
+        visualizations = bdc['profiles']
+    elif 'visParams' in campaign:
+        visualizations = campaign['visParams']
+    elif 'visParamsEnable' in campaign:
+        visualizations = campaign['visParamsEnable']
+    else:
+        visualizations = [campaign['visParam']] if campaign.get('visParam') else None
     if not isinstance(visualizations, list) or not visualizations or len(visualizations) > 32:
         raise ValueError('Selecione os parâmetros de visualização da campanha')
     if any(not isinstance(v, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', v) for v in visualizations):
         raise ValueError('Parâmetro de visualização inválido')
+    default = bdc['defaultProfile'] if bdc else campaign.get('defaultVisParam')
+    if default is None and not bdc:
+        default = visualizations[0]
+    if not isinstance(default, str) or default not in visualizations:
+        raise ValueError('A composição padrão deve pertencer às visualizações da campanha')
     config = {'layer': layer, 'years': list(range(first, last + 1)),
-            'visualizations': sorted(set(visualizations)), 'periods': ['WET', 'DRY'],
-            'zooms': list(range(zoom, min(zoom + 6, 18) + 1)),
-            'width': width, 'height': height, 'buffer': 2, 'version': 1}
+            'visualizations': [default], 'periods': ['WET', 'DRY'],
+            'zooms': [zoom],
+            'width': width, 'height': height, 'buffer': 2, 'version': 2, 'policy': 'configured-default-v2'}
     if bdc:
         from app.modules.bdc.offline_tiles import renderer_revision
         config.update(source='bdc', bdc=bdc, renderer_revision=renderer_revision())
@@ -60,7 +72,7 @@ def bdc_config(campaign):
             or config.get('defaultProfile') not in selected):
         raise ValueError('Composições BDC inválidas')
     return {key: config[key] for key in ('schemaVersion', 'collection', 'selectionRevision',
-            'bufferRadiusM', 'periodPolicy', 'selectionStrategy')} | {'profiles': sorted(set(selected))}
+            'bufferRadiusM', 'periodPolicy', 'selectionStrategy')} | {'profiles': sorted(set(selected)), 'defaultProfile': config['defaultProfile']}
 
 
 def fingerprint(value):

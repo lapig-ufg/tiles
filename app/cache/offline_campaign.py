@@ -104,6 +104,9 @@ class OfflineCampaignStore:
                'created_at': datetime.now(timezone.utc), 'updated_at': datetime.now(timezone.utc),
                'lease_until': datetime.now(timezone.utc), 'cursor': None}
         if previous:
+            job['previous_run'] = {key: previous[key] for key in
+                                   ('run_id', 'status', 'config', 'total', 'created_at', 'updated_at')
+                                   if key in previous}
             result = self.jobs.replace_one({'_id': campaign_id, 'run_id': previous['run_id'],
                                             'status': previous['status'],
                                             'lease_until': {'$lte': datetime.now(timezone.utc)}}, job)

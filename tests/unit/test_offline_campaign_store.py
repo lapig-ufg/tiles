@@ -428,3 +428,21 @@ def test_transport_failure_consumes_attempt_without_fabricating_http_status(stor
     assert saved['transport_error'] == 'TimeoutError'
     assert saved['http_status'] is None
     assert saved.get('admission_deferrals', 0) == 0
+
+
+def test_policy_upgrade_preserves_old_items_and_rejects_late_completion(store):
+    job, token = prepare(store)
+    item = store.next_item(job, token)
+    store.jobs.update_one({'_id': 'test'}, {'$set': {'config.version': 1}})
+    old = store.jobs.find_one({'_id': 'test'})
+    store.mark_stale(old, token)
+    store.release('test', token)
+    current = store.start('test')
+    assert current['run_id'] != old['run_id']
+    assert current['config']['version'] == 2
+    assert current['previous_run']['run_id'] == old['run_id']
+    assert store.items.count_documents({'run_id': old['run_id']}) > 0
+    assert not store.owned(old, token)
+    store.complete_item(old, token, item, {'status': 'cached', 'expires_at': time.time() + 3600})
+    assert store.items.find_one({'_id': item['_id']})['state'] == 'processing'
+    assert store.start('test')['run_id'] == current['run_id']
