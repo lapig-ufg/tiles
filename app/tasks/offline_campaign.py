@@ -162,7 +162,7 @@ def run_offline_campaign(campaign_id):
             return {'status': 'busy'}
         job = store.jobs.find_one({'_id': campaign_id})
         try:
-            if store.configuration_changed(job, check_points=False):
+            if job.get('dispatch_policy') != 'point-year-v1' or store.configuration_changed(job, check_points=False):
                 store.jobs.update_one({'_id': campaign_id, 'lease_token': token}, {'$set': {'status': 'stale'}})
             elif job['status'] == 'preparing':
                 store.prepare(job, token)
@@ -177,9 +177,7 @@ def run_offline_campaign(campaign_id):
         status = store.jobs.find_one({'_id': campaign_id})
         if status['status'] in ACTIVE:
             is_bdc = status.get('config', {}).get('source') == 'bdc'
-            ready = job['status'] == 'preparing' or (is_bdc and store.items.find_one(
-                {'run_id': status['run_id'], 'state': {'$in': ['pending', 'retry_wait']},
-                 'next_retry': {'$lte': datetime.now(timezone.utc)}}, {'_id': 1}) is not None)
+            ready = job['status'] == 'preparing' or (is_bdc and store.has_ready_item(status))
             enqueue_offline_campaign(status, countdown=0 if ready else 5)
         return {'status': status['status'], 'total': status.get('total', 0)}
 

@@ -93,3 +93,22 @@ def test_worker_keeps_image_diagnostics_when_absence_check_is_deferred(store):
     assert error['attempts'] == 1
     assert error['admission_phase'] == 'absence_check'
     assert error['diagnostics']['validation_code'] == 'white_image'
+
+
+def test_legacy_dispatch_run_stops_before_generating_images(store, monkeypatch):
+    from contextlib import contextmanager
+    from app.tasks import offline_campaign
+    job, token = prepare(store)
+    store.release(job['_id'], token)
+    store.jobs.update_one({'_id': job['_id']}, {'$unset': {'dispatch_policy': ''}})
+    @contextmanager
+    def factory():
+        yield store
+    task_globals = offline_campaign.run_offline_campaign.run.__globals__
+    monkeypatch.setitem(task_globals, 'campaign_store', factory)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Legacy run dispatched images')
+    monkeypatch.setitem(task_globals, 'process_window', forbidden)
+    offline_campaign.run_offline_campaign.run(job['_id'])
+    assert store.jobs.find_one({'_id': job['_id']})['status'] == 'stale'
+    assert store.items.count_documents({'state': 'processing'}) == 0

@@ -1,4 +1,5 @@
 import math
+import re
 import hashlib
 import time
 import uuid
@@ -39,6 +40,8 @@ class OfflineCampaignStore:
         self.items.create_index([('run_id', 1), ('state', 1), ('_id', 1)])
         self.items.create_index([('run_id', 1), ('key', 1)])
         self.items.create_index([('run_id', 1), ('state', 1), ('expires_at', 1)])
+        self.items.create_index([('run_id', 1), ('state', 1), ('point_order', 1), ('point_id', 1),
+                                 ('params.year', 1), ('period_order', 1), ('_id', 1)])
         self.jobs.create_index([('status', 1), ('lease_until', 1)])
 
     def point_signature(self, campaign_id):
@@ -100,7 +103,7 @@ class OfflineCampaignStore:
                 self.release(campaign_id, token)
             return self.jobs.find_one({'_id': campaign_id})
         job = {'_id': campaign_id, 'run_id': uuid.uuid4().hex, 'status': 'preparing',
-               'config': config, 'mode': mode, 'point_count': count, 'prepared_points': 0,
+               'config': config, 'dispatch_policy': 'point-year-v1', 'mode': mode, 'point_count': count, 'prepared_points': 0,
                'points_fingerprint': points_fingerprint,
                'created_at': datetime.now(timezone.utc), 'updated_at': datetime.now(timezone.utc),
                'lease_until': datetime.now(timezone.utc), 'cursor': None}
@@ -194,7 +197,7 @@ class OfflineCampaignStore:
         query = {'campaign': job['_id']}
         if job.get('cursor') is not None:
             query['_id'] = {'$gt': job['cursor']}
-        points = list(self.db.points.find(query, {'_id': 1, 'lat': 1, 'lon': 1}).sort('_id', 1).limit(1))
+        points = list(self.db.points.find(query, {'_id': 1, 'lat': 1, 'lon': 1, 'index': 1}).sort('_id', 1).limit(1))
         if not points:
             self.seal_manifest(job, token)
             return
@@ -207,7 +210,13 @@ class OfflineCampaignStore:
         batch = list(islice(manifest_for_point(point, job['config'], start=offset), limit + 1))
         more = len(batch) > limit
         batch = batch[:limit]
-        documents = [dict(item, _id=fingerprint([job['run_id'], item['point_id'], item['key']]),
+        point_order = point.get('index')
+        if type(point_order) is not int or point_order < 0:
+            prefix = re.match(r'^([0-9]+)(?:_|$)', str(point['_id']))
+            point_order = int(prefix.group(1)) if prefix else 9223372036854775807
+        point_order = min(point_order, 9223372036854775807)
+        documents = [dict(item, point_order=point_order,
+                          period_order=0 if item['params']['period'] == 'WET' else 1, _id=fingerprint([job['run_id'], item['point_id'], item['key']]),
                           run_id=job['run_id'], state='pending', attempts=0,
                           next_retry=datetime.now(timezone.utc)) for item in batch]
         if not self.owned(job, token):
@@ -235,6 +244,8 @@ class OfflineCampaignStore:
     def next_item(self, job, token):
         if not self.owned(job, token):
             return None
+        if job.get('dispatch_policy') == 'point-year-v1':
+            return self.next_ordered_item(job, token)
         bdc = job.get('config', {}).get('source') == 'bdc'
         dispatch = self._bdc_dispatches.get(job['run_id'], 0)
         states = ['retry_wait', 'pending'] if dispatch % 4 == 0 else ['pending', 'retry_wait']
@@ -252,6 +263,33 @@ class OfflineCampaignStore:
                     self._bdc_dispatches[job['run_id']] = (dispatch + 1) % 4
                 return item
         return None
+
+    def ordered_head(self, job):
+        order = [('point_order', 1), ('point_id', 1), ('params.year', 1), ('period_order', 1), ('_id', 1)]
+        return self.items.find_one(
+            {'run_id': job['run_id'], 'state': {'$in': ['pending', 'processing', 'retry_wait']}},
+            sort=order)
+
+    def has_ready_item(self, job):
+        head = self.ordered_head(job)
+        if head is None:
+            return False
+        return self.items.find_one({'run_id': job['run_id'], 'point_id': head['point_id'],
+            'params.year': head['params']['year'], 'state': {'$in': ['pending', 'retry_wait']},
+            'next_retry': {'$lte': datetime.now(timezone.utc)}}, {'_id': 1}) is not None
+
+    def next_ordered_item(self, job, token):
+        order = [('point_order', 1), ('point_id', 1), ('params.year', 1), ('period_order', 1), ('_id', 1)]
+        head = self.ordered_head(job)
+        if head is None:
+            return None
+        now = datetime.now(timezone.utc)
+        return self.items.find_one_and_update(
+            {'run_id': job['run_id'], 'point_order': head['point_order'],
+             'point_id': head['point_id'], 'params.year': head['params']['year'],
+             'state': {'$in': ['pending', 'retry_wait']}, 'next_retry': {'$lte': now}},
+            {'$set': {'state': 'processing', 'worker_token': token, 'started_at': now},
+             '$inc': {'attempts': 1}}, sort=order, return_document=ReturnDocument.AFTER)
 
     def complete_item(self, job, token, item, result):
         if not self.owned(job, token):
